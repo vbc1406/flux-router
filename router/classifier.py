@@ -29,16 +29,35 @@ _LANG_RE = re.compile(
     r"arabic|russian|hindi|dutch|swedish|polish|turkish|vietnamese)\b",
     re.IGNORECASE,
 )
-_TRANSLATE_RE    = re.compile(r"\b(translat|in\s+(?:spanish|french|german|japanese|chinese|korean|arabic))\b", re.IGNORECASE)
-_SUMMARIZE_RE    = re.compile(r"\b(summar|tldr|tl;dr|key\s+points?|main\s+ideas?|brief\s+(?:me|summary))\b", re.IGNORECASE)
-_CLASSIFY_RE     = re.compile(r"\b(classif|categoriz|label|sentiment\s+(?:of|analysis)|is\s+this\s+(?:positive|negative))\b", re.IGNORECASE)
+_TRANSLATE_RE    = re.compile(r"\b(?:translat\w*|in\s+(?:spanish|french|german|japanese|chinese|korean|arabic))\b", re.IGNORECASE)
+_SUMMARIZE_RE    = re.compile(r"\b(?:summar\w*|tldr|tl;dr|key\s+points?|main\s+ideas?|brief\s+(?:me|summary))\b", re.IGNORECASE)
+_CLASSIFY_RE     = re.compile(r"\b(?:classif\w*|categoriz\w*|label|sentiment\s+(?:of|analysis)|is\s+this\s+(?:positive|negative))\b", re.IGNORECASE)
 _EXTRACT_RE      = re.compile(r"\b(extract|parse\s+(?:all|the)|find\s+all|list\s+(?:all|every)|pull\s+out)\b", re.IGNORECASE)
-_CODE_GEN_RE     = re.compile(r"\b(write\s+(?:a\s+)?(?:function|class|script|program|code|module)|implement|build\s+a\s+(?:function|class|api)|create\s+a\s+(?:function|class|program))\b", re.IGNORECASE)
-_LANG_NAME_RE    = re.compile(r"\b(python|javascript|typescript|java|c\+\+|c#|go|rust|ruby|swift|kotlin|php|scala|r\b|matlab|sql|bash|shell)\b", re.IGNORECASE)
+_CODE_GEN_RE     = re.compile(
+    r"\b(?:write\s+(?:a\s+)?(?:function|class|script|program|code|module)"
+    r"|implement"
+    r"|build\s+(?:a\s+)?(?:full\s+|complete\s+)?(?:function|class|api|service|tool|application|app|component|server|client|system)"
+    r"|create\s+a\s+(?:function|class|program))\b",
+    re.IGNORECASE,
+)
+_LANG_NAME_RE    = re.compile(
+    r"\b(?:python|javascript|typescript|java|c\+\+|c#|go|rust|ruby|swift|kotlin|php|scala"
+    r"|matlab|sql|bash|shell"
+    r"|react|vue|angular|fastapi|django|flask|node(?:\.js)?|express|next(?:\.js)?|nuxt"
+    r"|svelte|laravel|rails|spring)\b",
+    re.IGNORECASE,
+)
 _CODE_REVIEW_RE  = re.compile(r"\b(review\s+(?:this\s+)?(?:code|function|class)|debug|fix\s+(?:this|the|my)|what(?:'s|\s+is)\s+wrong|find\s+(?:the\s+)?bug)\b", re.IGNORECASE)
-_CREATIVE_RE     = re.compile(r"\b(write\s+a\s+(?:story|poem|essay|blog|article|letter|song|script|novel)|draft\s+a|compose\s+a)\b", re.IGNORECASE)
-_ANALYSIS_RE     = re.compile(r"\b(analyz|compar|evaluat|pros\s+and\s+cons|trade.?offs?|assess|critique)\b", re.IGNORECASE)
-_REASONING_RE    = re.compile(r"\b(why\s+(?:does|is|do|did)|explain\s+why|prove\s+(?:that)?|solve|step\s+by\s+step|derivation|theorem|proof)\b", re.IGNORECASE)
+_CREATIVE_RE     = re.compile(
+    r"\b(?:write\s+a(?:\s+[\w-]+){0,4}\s+(?:story|poem|haiku|essay|blog|article|letter|song|script|novel)"
+    r"|draft\s+a|compose\s+a)\b",
+    re.IGNORECASE,
+)
+_ANALYSIS_RE     = re.compile(
+    r"\b(?:analy[sz]\w*|compar\w*|evaluat\w*|pros\s+and\s+cons|trade.?offs?|assess|critique|explai\w+|risks?\b)\b",
+    re.IGNORECASE,
+)
+_REASONING_RE    = re.compile(r"\b(why\s+(?:does|is|do|did)|explain\s+why|prove\s+(?:that)?|solve|step\s+by\s+step|deriv\w*|theorem|proof)\b", re.IGNORECASE)
 _SIMPLE_QA_RE    = re.compile(r"^(what\s+is|what's|who\s+is|who's|define|when\s+did|where\s+is|how\s+many|which\s+is)", re.IGNORECASE)
 _STEP_BY_STEP_RE = re.compile(r"\bstep.by.step\b|\bstep\s+\d\b", re.IGNORECASE)
 _STRUCT_OUT_RE   = re.compile(r"\b(json|xml|yaml|schema|structured\s+output|in\s+(?:json|yaml|xml)\s+format)\b", re.IGNORECASE)
@@ -174,22 +193,29 @@ class RequestClassifier:
         Rough output-size estimate by task type.
         Deliberately conservative — actual model output may differ.
         """
-        match task_type:
-            case "simple_qa":        return 150
-            case "conversation":     return 150
-            case "translation":      return max(50, int(input_tokens * 0.9))
-            case "classification":   return 50
-            case "extraction":       return min(500, max(100, int(input_tokens * 0.5)))
-            case "summarization":    return max(100, int(input_tokens * 0.2))
-            case "code_generation":  return 1000
-            case "code_review":      return 600
-            case "creative_writing": return 1500
-            case "analysis":         return 800
-            case "reasoning":        return 1200
-            case "function_calling": return 400
-            case "vision":           return 400
-            case "long_document":    return max(400, int(input_tokens * 0.15))
-            case _:                  return 400
+        _output_map = {
+            "simple_qa":        150,
+            "conversation":     150,
+            "classification":   50,
+            "code_generation":  1000,
+            "code_review":      600,
+            "creative_writing": 1500,
+            "analysis":         800,
+            "reasoning":        1200,
+            "function_calling": 400,
+            "vision":           400,
+        }
+        if task_type in _output_map:
+            return _output_map[task_type]
+        if task_type == "translation":
+            return max(50, int(input_tokens * 0.9))
+        if task_type == "extraction":
+            return min(500, max(100, int(input_tokens * 0.5)))
+        if task_type == "summarization":
+            return max(100, int(input_tokens * 0.2))
+        if task_type == "long_document":
+            return max(400, int(input_tokens * 0.15))
+        return 400
 
     def _detect_task_type(self, request: RoutingRequest) -> str:
         """
@@ -213,9 +239,9 @@ class RequestClassifier:
         if "function_calling" in request.required_capabilities or meta.get("tools"):
             return "function_calling"
 
-        # Long document: very large input
+        # Long document: large input (>~2700 tokens already warrants long-doc routing)
         word_count = len(prompt.split())
-        if word_count > 7500:  # ~10K tokens
+        if word_count > 2000:
             return "long_document"
 
         # Conversation: trivially short, casual, greeting-like
@@ -225,6 +251,14 @@ class RequestClassifier:
                             "sure", "yes", "no", "great", "cool", "bye", "goodbye", "lol"}
             if any(w in stripped.lower().split() for w in casual_words) or len(stripped.split()) <= 3:
                 return "conversation"
+
+        # Unit / currency conversion → route as simple_qa (fast, deterministic answer)
+        if re.search(r"\bconvert\b", prompt, re.IGNORECASE) and re.search(r"\bto\b", prompt, re.IGNORECASE):
+            return "simple_qa"
+
+        # Architecture / system design
+        if re.search(r"\bdesign\s+(?:a|an|the)\b", prompt, re.IGNORECASE):
+            return "analysis"
 
         # Code review: code fences + review/debug keywords
         has_fences = bool(_CODE_FENCE_RE.search(prompt))
@@ -266,8 +300,9 @@ class RequestClassifier:
         if _ANALYSIS_RE.search(prompt):
             return "analysis"
 
-        # Reasoning (broader: why / explain)
-        if _REASONING_RE.search(prompt):
+        # Reasoning (broader: why / explain) — only for substantive prompts
+        # Short "why is X?" questions are simple_qa, not reasoning tasks
+        if _REASONING_RE.search(prompt) and word_count > 8:
             return "reasoning"
 
         # Simple Q&A: short, starts with question word

@@ -189,16 +189,13 @@ class RoutingAnalytics:
         if user_id:
             entries = [e for e in entries if e.get("user_id") == user_id]
         now = datetime.utcnow()
-        match period:
-            case "day":
-                entries = [e for e in entries
-                           if _parse_ts(e.get("timestamp", "")).date() == now.date()]
-            case "month":
-                entries = [e for e in entries
-                           if (ts := _parse_ts(e.get("timestamp", ""))).year == now.year
-                           and ts.month == now.month]
-            case _:
-                pass
+        if period == "day":
+            entries = [e for e in entries
+                       if _parse_ts(e.get("timestamp", "")).date() == now.date()]
+        elif period == "month":
+            entries = [e for e in entries
+                       if _parse_ts(e.get("timestamp", "")).year == now.year
+                       and _parse_ts(e.get("timestamp", "")).month == now.month]
         return entries
 
     @staticmethod

@@ -215,17 +215,14 @@ class _ResponseTooShortError(Exception):
 def _classify_error(exc: Exception) -> str:
     """Map an exception to a human-readable failure reason string."""
     status = getattr(exc, "status_code", None) or getattr(exc, "status", None)
-    match status:
-        case 429:
-            return "rate_limited"
-        case 500 | 502 | 503:
-            return "provider_error"
-        case 400:
-            return "bad_request"
-        case 401 | 403:
-            return "auth_error"
-        case _:
-            pass
+    if status == 429:
+        return "rate_limited"
+    if status in (500, 502, 503):
+        return "provider_error"
+    if status == 400:
+        return "bad_request"
+    if status in (401, 403):
+        return "auth_error"
 
     name = type(exc).__name__
     msg  = str(exc).lower()
@@ -235,4 +232,4 @@ def _classify_error(exc: Exception) -> str:
         return "empty_response"
     if "content" in msg and ("filter" in msg or "policy" in msg):
         return "content_filter"
-    return f"unknown_error:{name}"
+    return "unknown_error:{}".format(name)
