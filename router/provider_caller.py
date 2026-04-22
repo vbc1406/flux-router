@@ -156,9 +156,10 @@ def _call_google_sync(
     model_id = model.model_id.replace("-thinking", "")  # strip suffix for API
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model_id}:generateContent?key={api_key}"
+        f"{model_id}:generateContent"
     )
-    headers = {"Content-Type": "application/json"}
+    # Pass key as a header to avoid it appearing in server access logs.
+    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
     data = _post_json(url, headers, body)
     try:
         return data["candidates"][0]["content"]["parts"][0]["text"]
@@ -189,7 +190,7 @@ async def call_provider(
     Raises ProviderCallError (with .status_code) on failure.
     """
     provider = model.provider.lower()
-    loop     = asyncio.get_event_loop()
+    loop     = asyncio.get_running_loop()
 
     if provider == "anthropic":
         fn = lambda: _call_anthropic_sync(model, request, api_key)

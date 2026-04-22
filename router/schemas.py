@@ -55,8 +55,9 @@ class RoutingRequest(BaseModel):
     # "decision" → return routing decision only (default, current behaviour).
     # "proxy"    → make the actual provider API call and return the response too.
     mode: str = "decision"
-    # Provider API key required for proxy mode.  Key management wired up separately.
-    provider_api_key: str | None = None
+    # Provider API key required for proxy mode.  Excluded from serialization/repr
+    # to prevent it leaking into logs, analytics, or error messages.
+    provider_api_key: str | None = Field(default=None, repr=False, exclude=True)
 
     # ── Fix 1: Sticky model bias ─────────────────────────────────────────────
     # When provided, the router stores a per-conversation model preference so
@@ -125,11 +126,7 @@ class ModelOption(BaseModel):
 
 
 class RoutingDecision(BaseModel):
-    """
-    The complete output of one routing cycle.
-    Every field must be populated — downstream consumers (analytics, API layer)
-    crash on missing fields.
-    """
+    """The complete output of one routing cycle."""
 
     chosen_model: ModelOption | None = None
 

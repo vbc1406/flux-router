@@ -22,6 +22,7 @@ from .analytics import RoutingAnalytics
 from .config import (
     FALLBACK_DELAYS,
     FALLBACK_JITTER_MAX,
+    TIER_ORDER,
     TIMEOUT_COMPLEX_SECONDS,
     TIMEOUT_SIMPLE_SECONDS,
 )
@@ -32,9 +33,7 @@ log = structlog.get_logger(__name__)
 # HTTP status codes we should NOT retry — the issue is on our side.
 _NO_RETRY_STATUSES: frozenset[int] = frozenset({400, 401, 403})
 
-# Tier ordering used to build up/down chains.
-# Change 8: "ultra" has been merged into "premium"; 4 tiers remain.
-_TIER_ORDER: list[str] = ["free", "cheap", "mid", "premium"]
+_TIER_ORDER = TIER_ORDER  # local alias
 
 
 def build_fallback_chain(
@@ -161,9 +160,13 @@ class FallbackExecutor:
         request: RoutingRequest,
         decision: RoutingDecision,
         api_caller: Callable,
+        complexity_score: float = 1.0,
     ) -> tuple[Any, ModelOption, list[FallbackEvent]]:
         """
         Try the primary model, then walk the fallback chain on failure.
+
+        ``complexity_score`` should come from the TaskAnalysis produced during
+        routing — simple tasks (< 0.5) use a shorter timeout.
 
         Returns (response, model_used, list_of_fallback_events).
         Raises RuntimeError if ALL models in the chain fail.
@@ -174,11 +177,7 @@ class FallbackExecutor:
         models_to_try.extend(decision.fallback_chain)
 
         fallback_events: list[FallbackEvent] = []
-        timeout = (
-            TIMEOUT_SIMPLE_SECONDS
-            if hasattr(decision, "_analysis") and getattr(decision, "_analysis").complexity_score < 0.5
-            else TIMEOUT_COMPLEX_SECONDS
-        )
+        timeout = TIMEOUT_SIMPLE_SECONDS if complexity_score < 0.5 else TIMEOUT_COMPLEX_SECONDS
 
         for attempt, model in enumerate(models_to_try):
             is_fallback = attempt > 0

@@ -15,7 +15,6 @@ import re
 import threading
 import time
 from collections import OrderedDict
-from typing import TYPE_CHECKING
 
 import structlog
 
@@ -27,9 +26,6 @@ from .config import (
     NON_CACHEABLE_TASK_TYPES,
 )
 from .schemas import CachedResponse, ModelOption
-
-if TYPE_CHECKING:
-    pass
 
 log = structlog.get_logger(__name__)
 

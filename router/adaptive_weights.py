@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import threading
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -27,6 +27,7 @@ from typing import Any
 import structlog
 
 from .config import (
+    ADAPTIVE_CUSTOMER_LOG_MAX,
     ADAPTIVE_DECAY_FACTOR,
     ADAPTIVE_MIN_SAMPLES,
     ADAPTIVE_WEIGHT_FILE,
@@ -58,9 +59,11 @@ class AdaptiveWeights:
         self._state: dict[str, dict[str, Any]] = {}
         # Per-customer state: customer_id → same structure as _state
         self._customer_state: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
-        # Per-customer request log for routing profile (Change 3)
-        # customer_id → list of {model_id, task_type, cost, timestamp}
-        self._customer_log: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        # Per-customer request log for routing profile (capped to avoid unbounded growth)
+        # customer_id → deque of {model_id, task_type, cost, timestamp}
+        self._customer_log: dict[str, deque[dict[str, Any]]] = defaultdict(
+            lambda: deque(maxlen=ADAPTIVE_CUSTOMER_LOG_MAX)
+        )
         self._dirty  = 0  # updates since last flush
         self._load()
 
@@ -231,23 +234,41 @@ class AdaptiveWeights:
 
     def _load(self) -> None:
         """Load existing state from disk on startup, silently skip if absent."""
-        if self._path and self._path.exists():
-            try:
-                with self._path.open("r", encoding="utf-8") as fh:
-                    self._state = json.load(fh)
-                log.info("adaptive_weights_loaded", entries=len(self._state), path=str(self._path))
-            except (json.JSONDecodeError, OSError) as exc:
-                log.warning("adaptive_weights_load_failed", error=str(exc))
-                self._state = {}
+        if not (self._path and self._path.exists()):
+            return
+        try:
+            with self._path.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            if isinstance(data, dict) and "global" in data:
+                # New format: {"global": {...}, "customers": {...}}
+                self._state = data["global"]
+                for cid, cstate in data.get("customers", {}).items():
+                    self._customer_state[cid] = cstate
+            else:
+                # Old format (flat dict): treat as global state only
+                self._state = data
+            log.info(
+                "adaptive_weights_loaded",
+                entries=len(self._state),
+                customers=len(self._customer_state),
+                path=str(self._path),
+            )
+        except (json.JSONDecodeError, OSError) as exc:
+            log.warning("adaptive_weights_load_failed", error=str(exc))
+            self._state = {}
 
     def _flush(self) -> None:
-        """Write current state to disk.  Caller must hold self._lock."""
+        """Write global and per-customer weights to disk.  Caller must hold self._lock."""
         if not self._path:
             return
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "global":    self._state,
+                "customers": {k: dict(v) for k, v in self._customer_state.items()},
+            }
             with self._path.open("w", encoding="utf-8") as fh:
-                json.dump(self._state, fh, indent=2)
+                json.dump(data, fh, indent=2)
             self._dirty = 0
         except OSError as exc:
             log.warning("adaptive_weights_flush_failed", error=str(exc))

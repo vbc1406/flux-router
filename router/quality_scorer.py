@@ -51,7 +51,6 @@ _OVERCONFIDENT_RE = re.compile(
 )
 
 # Cut-off signals
-_CUTOFF_RE = re.compile(r"(\.\.\.|…)\s*$|\w{4,}\s*$")  # ends mid-sentence or with ellipsis
 _OPEN_FENCE_RE = re.compile(r"```[^\n]*\n(?:(?!```).)*$", re.DOTALL)  # unclosed code fence
 
 
@@ -175,11 +174,18 @@ class QualityScorer:
             return 0.6
         return 0.75
 
+    # Matches explicit JSON output instructions, not just any mention of "json".
+    _JSON_OUTPUT_RE = re.compile(
+        r"\b(output|respond|return|format|give me|provide).{0,30}json\b"
+        r"|\bjson\s+(format|output|response|schema)\b",
+        re.IGNORECASE,
+    )
+
     @staticmethod
     def _score_format(request: RoutingRequest, text: str, task_type: str) -> float:
         """Check that structured-output requests have valid structure."""
-        prompt = request.raw_prompt.lower()
-        if "json" in prompt:
+        prompt = request.raw_prompt
+        if QualityScorer._JSON_OUTPUT_RE.search(prompt):
             try:
                 # Extract first JSON-like block
                 start = text.find("{")

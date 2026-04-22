@@ -173,3 +173,20 @@ CONTEXT_PENALTY_MID_FACTOR: float   = 0.15   # (ratio - MID_RATIO) * this
 # --- Circuit Breaker (Fix 4) ---
 CIRCUIT_BREAKER_FAILURE_THRESHOLD: int   = 5    # failures before opening
 CIRCUIT_BREAKER_RECOVERY_TIMEOUT: float  = 60.0 # seconds before allowing one retry
+
+# --- Tier Ordering (canonical source of truth) ---
+# Both routing_engine and fallback_chain import this; never define it locally.
+TIER_ORDER: list[str] = ["free", "cheap", "mid", "premium"]
+
+# --- Template Detection Thresholds (classifier._is_templated) ---
+TEMPLATE_LINE_VARIATION_THRESHOLD: float = 0.20  # max fractional length deviation to count as "similar"
+TEMPLATE_SIMILARITY_RATIO: float         = 0.65  # fraction of lines that must be similar to flag as template
+
+# --- AdaptiveWeights customer log cap ---
+ADAPTIVE_CUSTOMER_LOG_MAX: int = 500  # max routing events kept per customer in memory
+
+# --- Analytics startup load limit ---
+ANALYTICS_MAX_STARTUP_ENTRIES: int = 50_000  # rows replayed into memory at startup
+
+# --- BudgetTracker ledger cap ---
+BUDGET_LEDGER_MAX_PER_USER: int = 10_000  # max spend records kept per user/customer

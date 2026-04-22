@@ -9,13 +9,13 @@ finalising its model choice so it can downgrade if needed.
 from __future__ import annotations
 
 import threading
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import date, datetime
 from typing import NamedTuple
 
 import structlog
 
-from .config import BUDGET_LIMITS
+from .config import BUDGET_LEDGER_MAX_PER_USER, BUDGET_LIMITS
 
 log = structlog.get_logger(__name__)
 
@@ -39,8 +39,10 @@ class BudgetTracker:
 
     def __init__(self) -> None:
         self._lock    = threading.Lock()
-        # user_id → list of spend records
-        self._ledger: dict[str, list[_SpendRecord]] = defaultdict(list)
+        # user_id → bounded deque of spend records (auto-evicts oldest beyond cap)
+        self._ledger: dict[str, deque[_SpendRecord]] = defaultdict(
+            lambda: deque(maxlen=BUDGET_LEDGER_MAX_PER_USER)
+        )
         # user_id → plan (cached to avoid repeated lookups)
         self._plans: dict[str, str] = {}
 
@@ -101,11 +103,26 @@ class BudgetTracker:
         Return True if adding estimated_cost would push either the daily or
         monthly spend over the plan limit.
 
-        Looks up the plan from the cached value; defaults to pro_plan if unknown.
+        All reads (plan, daily spend, monthly spend) happen under a single lock
+        acquisition to avoid TOCTOU races under concurrent routing.
         """
         with self._lock:
-            plan = self._plans.get(user_id, "pro_plan")
-        remaining = self.get_remaining_budget(user_id, plan)
+            plan   = self._plans.get(user_id, "pro_plan")
+            limits = BUDGET_LIMITS.get(plan, BUDGET_LIMITS["pro_plan"])
+            now    = datetime.utcnow()
+            today  = now.date()
+            records = self._ledger[user_id]
+            daily_spend = sum(
+                r.amount for r in records if r.timestamp.date() == today
+            )
+            monthly_spend = sum(
+                r.amount for r in records
+                if r.timestamp.year == now.year and r.timestamp.month == now.month
+            )
+            remaining = min(
+                limits["daily"]   - daily_spend,
+                limits["monthly"] - monthly_spend,
+            )
         return estimated_cost > remaining
 
     def check_daily_cap(self, customer_id: str, daily_cap: float) -> bool:
@@ -158,7 +175,9 @@ class DailyBudgetTracker:
 
     def __init__(self) -> None:
         self._lock  = threading.Lock()
-        self._ledger: dict[str, list[_SpendRecord]] = defaultdict(list)
+        self._ledger: dict[str, deque[_SpendRecord]] = defaultdict(
+            lambda: deque(maxlen=BUDGET_LEDGER_MAX_PER_USER)
+        )
 
     def record_spend(
         self,

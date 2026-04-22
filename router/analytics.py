@@ -19,6 +19,7 @@ from typing import Any
 
 import structlog
 
+from .config import ANALYTICS_MAX_STARTUP_ENTRIES
 from .schemas import RoutingDecision
 
 log = structlog.get_logger(__name__)
@@ -39,17 +40,30 @@ class RoutingAnalytics:
         self._path   = Path(log_path or _DEFAULT_LOG_PATH)
         self._lock   = threading.Lock()
         self._entries: list[dict[str, Any]] = []
+        self._index: dict[str, int] = {}  # correlation_id → index in _entries (O(1) updates)
         self._load_existing()
 
     # ── Write path ──────────────────────────────────────────────────────────
 
-    def log_decision(self, decision: RoutingDecision, **extra: Any) -> None:
+    def log_decision(
+        self,
+        decision: RoutingDecision,
+        user_id: str | None = None,
+        **extra: Any,
+    ) -> None:
         """Append a routing decision to the log."""
         entry = self._decision_to_dict(decision)
+        if user_id:
+            entry["user_id"] = user_id
         entry.update(extra)
         self._append(entry)
 
-    def log_cache_hit(self, correlation_id: str, cached: Any) -> None:
+    def log_cache_hit(
+        self,
+        correlation_id: str,
+        cached: Any,
+        user_id: str | None = None,
+    ) -> None:
         """Record a cache hit (no model was called)."""
         entry: dict[str, Any] = {
             "correlation_id": correlation_id,
@@ -58,6 +72,8 @@ class RoutingAnalytics:
             "chosen_model":   getattr(cached, "model_used", {}).model_id if hasattr(getattr(cached, "model_used", None), "model_id") else "cached",
             "estimated_cost": 0.0,
         }
+        if user_id:
+            entry["user_id"] = user_id
         self._append(entry)
 
     def update_actual(
@@ -74,20 +90,21 @@ class RoutingAnalytics:
     ) -> None:
         """
         Patch an existing log entry with actual cost / quality data that is only
-        known after the model call completes.
+        known after the model call completes.  Uses the correlation_id index for O(1) lookup.
         """
         with self._lock:
-            for entry in reversed(self._entries):
-                if entry.get("correlation_id") == correlation_id:
-                    if actual_cost    is not None: entry["actual_cost"]    = actual_cost
-                    if quality_score  is not None: entry["quality_score"]  = quality_score
-                    if latency_ms     is not None: entry["latency_ms"]     = latency_ms
-                    if input_tokens   is not None: entry["input_tokens"]   = input_tokens
-                    if output_tokens  is not None: entry["output_tokens"]  = output_tokens
-                    if fallback_models_tried:      entry["fallback_used"]  = fallback_used
-                    if fallback_models_tried:      entry["fallback_models_tried"] = fallback_models_tried
-                    if fallback_reasons:           entry["fallback_reasons"] = fallback_reasons
-                    break
+            idx = self._index.get(correlation_id)
+            if idx is None:
+                return
+            entry = self._entries[idx]
+            if actual_cost    is not None: entry["actual_cost"]    = actual_cost
+            if quality_score  is not None: entry["quality_score"]  = quality_score
+            if latency_ms     is not None: entry["latency_ms"]     = latency_ms
+            if input_tokens   is not None: entry["input_tokens"]   = input_tokens
+            if output_tokens  is not None: entry["output_tokens"]  = output_tokens
+            if fallback_used:              entry["fallback_used"]  = fallback_used
+            if fallback_models_tried:      entry["fallback_models_tried"] = fallback_models_tried
+            if fallback_reasons:           entry["fallback_reasons"] = fallback_reasons
 
     # ── Query API ────────────────────────────────────────────────────────────
 
@@ -163,7 +180,11 @@ class RoutingAnalytics:
 
     def _append(self, entry: dict[str, Any]) -> None:
         with self._lock:
+            idx = len(self._entries)
             self._entries.append(entry)
+            cid = entry.get("correlation_id")
+            if cid:
+                self._index[cid] = idx
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with self._path.open("a", encoding="utf-8") as fh:
@@ -175,11 +196,22 @@ class RoutingAnalytics:
         if not self._path.exists():
             return
         try:
+            lines: list[str] = []
             with self._path.open("r", encoding="utf-8") as fh:
                 for line in fh:
                     line = line.strip()
                     if line:
-                        self._entries.append(json.loads(line))
+                        lines.append(line)
+            # Avoid OOM on large log files: only keep the most recent entries.
+            if len(lines) > ANALYTICS_MAX_STARTUP_ENTRIES:
+                lines = lines[-ANALYTICS_MAX_STARTUP_ENTRIES:]
+            for line in lines:
+                entry = json.loads(line)
+                idx = len(self._entries)
+                self._entries.append(entry)
+                cid = entry.get("correlation_id")
+                if cid:
+                    self._index[cid] = idx
         except (OSError, json.JSONDecodeError) as exc:
             log.warning("analytics_load_failed", error=str(exc))
 

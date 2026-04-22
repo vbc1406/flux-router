@@ -10,17 +10,15 @@ from __future__ import annotations
 
 import math
 import re
-from typing import TYPE_CHECKING
 
 from .cache import ResponseCache, fingerprint, is_cache_eligible
 from .config import (
     COMPLEXITY_BASE_SCORES,
     COMPLEXITY_MODIFIERS,
+    TEMPLATE_LINE_VARIATION_THRESHOLD,
+    TEMPLATE_SIMILARITY_RATIO,
 )
 from .schemas import RoutingRequest, TaskAnalysis
-
-if TYPE_CHECKING:
-    pass
 
 # ── Compiled regexes (module-level, paid once) ──────────────────────────────
 
@@ -375,11 +373,13 @@ class RequestClassifier:
         lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
         if len(lines) < 3:
             return False
-        # If more than half the lines have the same structure (length within 20%)
         lengths = [len(ln) for ln in lines]
         avg = sum(lengths) / len(lengths)
-        similar = sum(1 for ln in lengths if abs(ln - avg) / max(avg, 1) < 0.20)
-        return similar / len(lines) > 0.65
+        similar = sum(
+            1 for ln in lengths
+            if abs(ln - avg) / max(avg, 1) < TEMPLATE_LINE_VARIATION_THRESHOLD
+        )
+        return similar / len(lines) > TEMPLATE_SIMILARITY_RATIO
 
     def _detect_sensitivity(self, request: RoutingRequest) -> str:
         """

@@ -29,8 +29,8 @@ from __future__ import annotations
 import random
 import threading
 import time
+from collections import defaultdict, deque
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 import structlog
 
@@ -65,6 +65,7 @@ from .config import (
     MIN_QUALITY_THRESHOLD,
     SCORING_WEIGHTS,
     TIER_BOUNDARIES,
+    TIER_ORDER,
     VALID_ROUTING_PRIORITIES,
 )
 from .circuit_breaker import CircuitBreaker
@@ -73,13 +74,9 @@ from .fallback_chain import build_fallback_chain, build_typed_fallback_chains
 from .model_registry import ModelRegistry
 from .schemas import ModelOption, RoutingDecision, RoutingRequest, TaskAnalysis
 
-if TYPE_CHECKING:
-    pass
-
 log = structlog.get_logger(__name__)
 
-# Change 8: "ultra" removed — 4 tiers only.
-_TIER_ORDER: list[str] = ["free", "cheap", "mid", "premium"]
+_TIER_ORDER = TIER_ORDER  # local alias kept for readability inside this module
 
 
 class ConversationStore:
@@ -178,8 +175,10 @@ class RoutingEngine:
             failure_threshold=CIRCUIT_BREAKER_FAILURE_THRESHOLD,
             recovery_timeout=CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
         )
-        # Per-user free-tier RPM counter (simple sliding count for anti-gaming)
-        self._user_free_rpm: dict[str, int] = {}
+        # Sliding-window free-tier RPM counter per user (60-second window).
+        self._user_free_rpm: dict[str, deque[float]] = defaultdict(deque)
+        # Route call counter for periodic housekeeping (conversation expiry).
+        self._route_count: int = 0
 
     # ── Public ──────────────────────────────────────────────────────────────
 
@@ -228,7 +227,7 @@ class RoutingEngine:
         if CACHE_ENABLED and analysis.cache_eligible:
             cached = self._cache.get(analysis.prompt_fingerprint)
             if cached:
-                self._analytics.log_cache_hit(cid, cached)
+                self._analytics.log_cache_hit(cid, cached, user_id=request.user_id)
                 log.info("cache_hit", cid=cid)
                 return RoutingDecision(
                     chosen_model          = cached.model_used,
@@ -668,7 +667,7 @@ class RoutingEngine:
 
     def _post_route(self, decision: RoutingDecision, request: RoutingRequest) -> None:
         """Side effects after a decision: log it, update load counters, update conversation."""
-        self._analytics.log_decision(decision)
+        self._analytics.log_decision(decision, user_id=request.user_id)
         if decision.chosen_model:
             self._registry.update_load(decision.chosen_model.model_id)
             self._inc_user_free_rpm(request.user_id, decision.chosen_model.tier)
@@ -677,6 +676,10 @@ class RoutingEngine:
                 self._conversation_store.update(
                     request.conversation_id, decision.chosen_model.model_id
                 )
+        # Periodically purge expired conversation entries to prevent memory growth.
+        self._route_count += 1
+        if self._route_count % 500 == 0:
+            self._conversation_store.expire_old()
 
     async def _proxy_execute(
         self,
@@ -743,7 +746,7 @@ class RoutingEngine:
                 # Determine error type and append the relevant fallback chain
                 if status == 429:
                     error_type = "rate_limited"
-                elif isinstance(str(exc).lower(), str) and "timeout" in str(exc).lower():
+                elif "timeout" in str(exc).lower():
                     error_type = "timeout"
                 elif status and "content" in str(exc).lower():
                     error_type = "content_filter"
@@ -777,11 +780,15 @@ class RoutingEngine:
         return decision
 
     def _get_user_free_rpm(self, user_id: str) -> int:
-        return self._user_free_rpm.get(user_id, 0)
+        now = time.monotonic()
+        window = self._user_free_rpm[user_id]
+        while window and now - window[0] >= 60.0:
+            window.popleft()
+        return len(window)
 
     def _inc_user_free_rpm(self, user_id: str, tier: str) -> None:
         if tier == "free":
-            self._user_free_rpm[user_id] = self._user_free_rpm.get(user_id, 0) + 1
+            self._user_free_rpm[user_id].append(time.monotonic())
 
 
 # ── Module-level pure helpers (no self, easy to unit-test) ──────────────────

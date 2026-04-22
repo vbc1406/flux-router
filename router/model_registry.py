@@ -15,16 +15,12 @@ from __future__ import annotations
 
 import threading
 import time
-from collections import defaultdict
-from typing import TYPE_CHECKING
+from collections import defaultdict, deque
 
 import structlog
 
 from .config import RATE_LIMIT_SAFETY_MARGIN
 from .schemas import ModelOption
-
-if TYPE_CHECKING:
-    pass
 
 log = structlog.get_logger(__name__)
 
@@ -449,8 +445,8 @@ class ModelRegistry:
     def __init__(self) -> None:
         self._models: dict[str, ModelOption] = _build_default_registry()
         self._lock = threading.Lock()
-        # Sliding-window RPM tracking: model_id → list of epoch timestamps
-        self._rpm_window: dict[str, list[float]] = defaultdict(list)
+        # Sliding-window RPM tracking: model_id → deque of monotonic timestamps
+        self._rpm_window: dict[str, deque[float]] = defaultdict(deque)
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -485,11 +481,11 @@ class ModelRegistry:
         now = time.monotonic()
         with self._lock:
             window = self._rpm_window[model_id]
-            # Keep only timestamps within the last 60 seconds
-            self._rpm_window[model_id] = [t for t in window if now - t < 60.0]
-            self._rpm_window[model_id].append(now)
+            while window and now - window[0] >= 60.0:
+                window.popleft()
+            window.append(now)
             if model_id in self._models:
-                self._models[model_id].current_load_rpm = len(self._rpm_window[model_id])
+                self._models[model_id].current_load_rpm = len(window)
 
     def is_near_rate_limit(self, model_id: str) -> bool:
         """
