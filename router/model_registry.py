@@ -377,13 +377,17 @@ def _build_default_registry() -> dict[str, ModelOption]:
             allowed_sensitivity_levels=_NO_RESTRICTED,
         ),
 
-        # ── ULTRA TIER ───────────────────────────────────────────────────────
+        # ── PREMIUM TIER (continued — formerly "ultra") ───────────────────────
+        # Change 8: ultra tier merged into premium. These models were previously
+        # tagged "ultra"; they are now premium alongside Opus 4, GPT-4.5, and
+        # Gemini 2.5 Pro (thinking).
+
         # o3: $10/M input, $40/M output (OpenAI 2025)
         ModelOption(
             provider="openai",
             model_id="o3",
             display_name="o3",
-            tier="ultra",
+            tier="premium",
             cost_per_1k_input=0.010,
             cost_per_1k_output=0.040,
             max_context_window=200_000,
@@ -400,7 +404,7 @@ def _build_default_registry() -> dict[str, ModelOption]:
             provider="openai",
             model_id="o4-mini",
             display_name="o4-mini",
-            tier="ultra",
+            tier="premium",
             cost_per_1k_input=0.0011,
             cost_per_1k_output=0.0044,
             max_context_window=200_000,
@@ -417,7 +421,7 @@ def _build_default_registry() -> dict[str, ModelOption]:
             provider="anthropic",
             model_id="claude-opus-4-20250514-extended",
             display_name="Claude Opus 4 (extended thinking)",
-            tier="ultra",
+            tier="premium",
             cost_per_1k_input=0.015,
             cost_per_1k_output=0.075,
             max_context_window=200_000,

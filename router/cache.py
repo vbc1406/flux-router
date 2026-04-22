@@ -66,6 +66,8 @@ def _normalize(text: str) -> str:
     text = _TIMESTAMP_RE.sub("", text)
     text = _FILLER_RE.sub("", text)
     text = _WHITESPACE_RE.sub(" ", text).strip()
+    # Remove spaces inserted before punctuation by earlier substitutions.
+    text = re.sub(r" +([?.!,;:])", r"\1", text)
     return text
 
 

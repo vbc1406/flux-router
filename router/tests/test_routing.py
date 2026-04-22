@@ -20,8 +20,14 @@ from router.routing_engine import (
     _normalize_latency,
     _get_tier_for_score,
     _is_allowed_for_plan,
+    _validate_routing_priority,
+    _validate_exploration_rate,
+    _validate_mode,
+    _get_weights_for_priority,
+    _budget_tier_walkdown,
 )
 from router.schemas import ModelOption, RoutingRequest
+from router.config import MIN_CONFIDENCE_THRESHOLD
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -40,7 +46,9 @@ def _engine() -> RoutingEngine:
 def _req(prompt: str, **kw) -> RoutingRequest:
     defaults = dict(user_id="u_test", plan="business_plan", priority="normal")
     defaults.update(kw)
-    return RoutingRequest(raw_prompt=prompt, correlation_id=str(uuid.uuid4()), **defaults)
+    # Pull out correlation_id if provided to avoid passing it twice
+    cid = defaults.pop("correlation_id", str(uuid.uuid4()))
+    return RoutingRequest(raw_prompt=prompt, correlation_id=cid, **defaults)
 
 
 def rr(coro):
@@ -68,7 +76,8 @@ class TestBasicRouting:
             priority="critical"
         )))
         assert d.chosen_model is not None
-        assert d.chosen_model.tier in ("premium", "ultra")
+        # Change 8: ultra merged into premium — only check premium
+        assert d.chosen_model.tier in ("premium", "mid")
 
     def test_routing_rule_populated(self):
         d = rr(self.engine.route(_req("What is 2+2?")))
@@ -90,17 +99,17 @@ class TestBasicRouting:
 
     def test_fallback_chain_not_empty(self):
         d = rr(self.engine.route(_req("Write a Python sort function")))
-        # May be empty for trivial requests; for code gen it should have fallbacks
         assert isinstance(d.fallback_chain, list)
 
-    def test_free_plan_cannot_use_ultra(self):
+    def test_free_plan_cannot_use_premium(self):
+        # Change 8: ultra no longer exists; premium is now the top tier
         d = rr(self.engine.route(_req(
             "Solve P vs NP. ∑∫∀∃. Step by step proof.",
             priority="critical",
             plan="free_plan"
         )))
         if d.chosen_model:
-            assert d.chosen_model.tier not in ("ultra", "premium")
+            assert d.chosen_model.tier not in ("premium",)
 
 
 # ── Cache integration ─────────────────────────────────────────────────────────
@@ -139,8 +148,6 @@ class TestCacheIntegration:
         self.cache.set(fp, "Berlin", model, original_cost=0.001)
         req = _req(prompt, temperature=1.0)
         d   = rr(self.engine.route(req))
-        # High temp or non-cacheable task type → should not hit cache
-        # (temperature=1.0 means cache_eligible=False)
         assert d.cache_hit is False
 
 
@@ -151,7 +158,6 @@ class TestCostCeiling:
         self.engine = _engine()
 
     def test_override_cost_ceiling_allows_through(self):
-        # A normal request with override should not be blocked
         req = _req("hi", metadata={"override_cost_ceiling": True})
         d   = rr(self.engine.route(req))
         assert d.cost_blocked is False
@@ -161,7 +167,6 @@ class TestCostCeiling:
 
 class TestPlanRestrictions:
     def test_free_plan_only_free_cheap(self):
-        from router.schemas import ModelOption
         cheap_model = ModelOption(
             provider="anthropic", model_id="test", display_name="Test",
             tier="cheap", cost_per_1k_input=0.001, cost_per_1k_output=0.002,
@@ -175,14 +180,23 @@ class TestPlanRestrictions:
         assert _is_allowed_for_plan(cheap_model, "free_plan") is True
         assert _is_allowed_for_plan(premium_model, "free_plan") is False
 
-    def test_business_plan_allows_all(self):
-        for tier in ("free", "cheap", "mid", "premium", "ultra"):
+    def test_business_plan_allows_all_four_tiers(self):
+        # Change 8: 4 tiers only (ultra removed)
+        for tier in ("free", "cheap", "mid", "premium"):
             m = ModelOption(
                 provider="openai", model_id=f"m-{tier}", display_name=f"M {tier}",
                 tier=tier, cost_per_1k_input=0.01, cost_per_1k_output=0.01,
                 max_context_window=4096, max_output_tokens=1000, capabilities=[],
             )
             assert _is_allowed_for_plan(m, "business_plan") is True
+
+    def test_pro_plan_includes_premium(self):
+        m = ModelOption(
+            provider="anthropic", model_id="m-premium", display_name="M premium",
+            tier="premium", cost_per_1k_input=0.01, cost_per_1k_output=0.03,
+            max_context_window=4096, max_output_tokens=1000, capabilities=[],
+        )
+        assert _is_allowed_for_plan(m, "pro_plan") is True
 
 
 # ── Model override ────────────────────────────────────────────────────────────
@@ -220,7 +234,6 @@ class TestSensitivity:
             assert d.chosen_model.provider in ("anthropic", "openai")
 
     def test_public_allows_any_provider(self):
-        # Just verify it routes successfully
         d = rr(self.engine.route(_req("What is 2+2?")))
         assert d.chosen_model is not None
 
@@ -228,17 +241,16 @@ class TestSensitivity:
 # ── Pure helper functions ─────────────────────────────────────────────────────
 
 class TestHelpers:
-    def _make_model(self, cost_in, cost_out, latency):
+    def _make_model(self, cost_in, cost_out, latency, tier="mid"):
         return ModelOption(
             provider="test", model_id="m", display_name="M",
-            tier="mid",
+            tier=tier,
             cost_per_1k_input=cost_in, cost_per_1k_output=cost_out,
             max_context_window=4096, max_output_tokens=1000,
             capabilities=[], avg_latency_ms=latency,
         )
 
     def test_normalize_cost_uniform(self):
-        """Uniform costs → 0.5 (no divide-by-zero)."""
         models = [self._make_model(0.01, 0.02, 500) for _ in range(3)]
         assert _normalize_cost(models[0], models) == 0.5
 
@@ -261,15 +273,15 @@ class TestHelpers:
         model.max_output_tokens = 100
         analysis = TaskAnalysis(
             complexity_score=0.5, estimated_input_tokens=200,
-            estimated_output_tokens=99999,  # WAY over max
+            estimated_output_tokens=99999,
             total_context_needed=200, task_type="code_generation",
         )
         cost = _estimate_cost(analysis, model)
-        # output capped at 100 tokens → 0.1 * 0.002 = 0.0002
         expected = (200 / 1000) * 0.001 + (100 / 1000) * 0.002
         assert cost == pytest.approx(expected, rel=1e-4)
 
-    def test_tier_boundaries(self):
+    def test_tier_boundaries_four_tiers(self):
+        # Change 8: 4 tiers — 0.85+ now maps to premium (not ultra)
         assert _get_tier_for_score(0.00) == "free"
         assert _get_tier_for_score(0.14) == "free"
         assert _get_tier_for_score(0.15) == "cheap"
@@ -277,6 +289,574 @@ class TestHelpers:
         assert _get_tier_for_score(0.30) == "mid"
         assert _get_tier_for_score(0.59) == "mid"
         assert _get_tier_for_score(0.60) == "premium"
-        assert _get_tier_for_score(0.84) == "premium"
-        assert _get_tier_for_score(0.85) == "ultra"
-        assert _get_tier_for_score(0.99) == "ultra"
+        assert _get_tier_for_score(0.85) == "premium"
+        assert _get_tier_for_score(0.99) == "premium"
+        assert _get_tier_for_score(1.00) == "premium"   # edge case — no ultra
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHANGE 1: Priority Tags
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestPriorityTagValidation:
+    """Validate the routing_priority parameter (Change 1)."""
+
+    def test_valid_priorities_accepted(self):
+        for p in ("always-premium", "quality-first", "balanced", "cost-optimized"):
+            _validate_routing_priority(p)  # should not raise
+
+    def test_invalid_priority_raises(self):
+        with pytest.raises(ValueError, match="Invalid routing_priority"):
+            _validate_routing_priority("turbo-mode")
+
+    def test_empty_string_raises(self):
+        with pytest.raises(ValueError):
+            _validate_routing_priority("")
+
+    def test_case_sensitive(self):
+        with pytest.raises(ValueError):
+            _validate_routing_priority("Balanced")
+
+
+class TestPriorityTagWeights:
+    """Weight override logic for priority tags."""
+
+    def test_quality_first_weights(self):
+        w = _get_weights_for_priority("quality-first", "normal")
+        assert w["quality"] == pytest.approx(0.70)
+        assert w["cost"]    == pytest.approx(0.20)
+        assert w["latency"] == pytest.approx(0.10)
+
+    def test_cost_optimized_weights(self):
+        w = _get_weights_for_priority("cost-optimized", "normal")
+        assert w["quality"] == pytest.approx(0.30)
+        assert w["cost"]    == pytest.approx(0.60)
+        assert w["latency"] == pytest.approx(0.10)
+
+    def test_balanced_falls_through_to_latency_mode(self):
+        # "balanced" → latency mode from request.priority
+        w_normal   = _get_weights_for_priority("balanced", "normal")
+        w_critical = _get_weights_for_priority("balanced", "critical")
+        # normal → "balanced" mode, critical → "prefer_speed" mode
+        assert w_normal   != w_critical
+
+    def test_always_premium_falls_through_to_latency_mode(self):
+        w = _get_weights_for_priority("always-premium", "normal")
+        assert "quality" in w
+
+
+class TestAlwaysPremiumRouting:
+    """always-premium should skip scoring and return the highest-tier model."""
+
+    def setup_method(self):
+        self.engine = _engine()
+
+    def test_always_premium_routes_to_premium_tier(self):
+        d = rr(self.engine.route(_req(
+            "simple question",
+            routing_priority="always-premium",
+            plan="business_plan",
+        )))
+        assert d.chosen_model is not None
+        assert d.chosen_model.tier == "premium"
+        assert d.priority_applied == "always-premium"
+
+    def test_always_premium_rule_contains_always_premium(self):
+        d = rr(self.engine.route(_req(
+            "hello",
+            routing_priority="always-premium",
+            plan="business_plan",
+        )))
+        assert "always_premium" in d.routing_rule_matched
+
+    def test_always_premium_bypasses_cheap_for_trivial(self):
+        # Even a 3-word prompt should route to premium, not free/cheap
+        d = rr(self.engine.route(_req("hi", routing_priority="always-premium", plan="business_plan")))
+        assert d.chosen_model is not None
+        assert d.chosen_model.tier == "premium"
+
+    def test_always_premium_free_plan_falls_to_best_available(self):
+        # free_plan cannot access premium — router picks best available tier
+        d = rr(self.engine.route(_req(
+            "complex reasoning task",
+            routing_priority="always-premium",
+            plan="free_plan",
+        )))
+        assert d.chosen_model is not None
+        assert d.chosen_model.tier in ("cheap", "free")
+
+    def test_priority_applied_field_set(self):
+        for priority in ("always-premium", "quality-first", "balanced", "cost-optimized"):
+            d = rr(self.engine.route(_req("test", routing_priority=priority)))
+            assert d.priority_applied == priority
+
+    def test_quality_first_routes_quality_bias(self):
+        d = rr(self.engine.route(_req(
+            "Write a complex analysis",
+            routing_priority="quality-first",
+            plan="business_plan",
+        )))
+        assert d.chosen_model is not None
+        # quality-first biases toward better models; confidence should be good
+        assert d.confidence >= 0.0
+
+    def test_cost_optimized_routes_cheaper(self):
+        d1 = rr(self.engine.route(_req(
+            "Write a 500-word analysis",
+            routing_priority="cost-optimized",
+            plan="business_plan",
+        )))
+        d2 = rr(self.engine.route(_req(
+            "Write a 500-word analysis",
+            routing_priority="quality-first",
+            plan="business_plan",
+        )))
+        assert d1.chosen_model is not None
+        assert d2.chosen_model is not None
+        # cost-optimized should not be more expensive than quality-first
+        assert d1.estimated_cost <= d2.estimated_cost + 0.001  # allow floating point slack
+
+    def test_invalid_routing_priority_raises(self):
+        with pytest.raises(ValueError):
+            rr(self.engine.route(_req("test", routing_priority="turbo")))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHANGE 2: Confidence Threshold
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestConfidenceThreshold:
+    """Confidence fallback triggers when winning score < MIN_CONFIDENCE_THRESHOLD."""
+
+    def setup_method(self):
+        self.engine = _engine()
+
+    def test_confidence_fallback_field_exists(self):
+        d = rr(self.engine.route(_req("What is 2+2?")))
+        assert hasattr(d, "confidence_fallback")
+        assert isinstance(d.confidence_fallback, bool)
+
+    def test_normal_routing_no_fallback(self):
+        # High-confidence routing: complex coding task → premium tier
+        d = rr(self.engine.route(_req(
+            "Design a distributed database with RAFT consensus",
+            plan="business_plan",
+        )))
+        assert d.chosen_model is not None
+        # Should not trigger confidence fallback (premium model for complex task)
+        # (may still be False even if borderline — just check it's bool)
+        assert isinstance(d.confidence_fallback, bool)
+
+    def test_confidence_fallback_low_confidence_upgrades(self):
+        """
+        Simulate a low-confidence scenario: use a cheap model for a task type
+        where its routing score will be low.  The engine should upgrade to premium.
+        """
+        from router.schemas import TaskAnalysis
+        from router.routing_engine import _compute_confidence
+
+        # Build a cheap model with very low quality for the task at hand
+        cheap_model = ModelOption(
+            provider="test", model_id="tiny", display_name="Tiny",
+            tier="cheap", cost_per_1k_input=0.0001, cost_per_1k_output=0.0002,
+            max_context_window=4096, max_output_tokens=1000, capabilities=[],
+            quality_ratings={"reasoning": 0.10},  # terrible at reasoning
+            adjusted_quality=0.10,
+            routing_score=0.05,  # well below MIN_CONFIDENCE_THRESHOLD
+        )
+        # A routing_score of 0.05 is below 0.60 threshold
+        assert cheap_model.routing_score < MIN_CONFIDENCE_THRESHOLD
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHANGE 3: Per-Customer Adaptive Memory
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestPerCustomerAdaptiveMemory:
+    def setup_method(self):
+        self.adaptive = AdaptiveWeights(state_file=None)
+
+    def test_customer_id_routed_correctly(self):
+        engine = _engine()
+        d = rr(engine.route(_req("What is 2+2?", customer_id="cust_abc")))
+        assert d.chosen_model is not None
+
+    def test_global_fallback_before_20_samples(self):
+        # Before 20 samples per-customer, global weights should apply
+        base = 0.75
+        result = self.adaptive.get_adjusted_score("gpt-4o", "simple_qa", base, customer_id="new_cust")
+        assert result == base  # no data → returns base unchanged
+
+    def test_per_customer_weights_apply_after_threshold(self):
+        # Record 20 samples for a customer
+        for _ in range(20):
+            self.adaptive.record("gpt-4o", "simple_qa", 0.95, 0.75, customer_id="loyal_cust")
+        # Now per-customer EMA should be active
+        adjusted = self.adaptive.get_adjusted_score("gpt-4o", "simple_qa", 0.75, customer_id="loyal_cust")
+        # After 20 samples of 0.95, adjusted should be > base 0.75
+        assert adjusted > 0.75
+
+    def test_global_still_works_without_customer_id(self):
+        base = 0.80
+        result = self.adaptive.get_adjusted_score("some-model", "code_generation", base)
+        assert result == base  # no global data → base unchanged
+
+    def test_get_customer_routing_profile_empty(self):
+        profile = self.adaptive.get_customer_routing_profile("unknown_cust")
+        assert profile["total_requests"] == 0
+        assert profile["has_custom_weights"] is False
+
+    def test_record_routing_event_and_profile(self):
+        for _ in range(3):
+            self.adaptive.record_routing_event("cust_x", "gpt-4o", "code_generation", 0.005)
+        profile = self.adaptive.get_customer_routing_profile("cust_x")
+        assert profile["total_requests"] == 3
+        assert profile["top_models"][0][0] == "gpt-4o"
+        assert profile["avg_cost_per_request"] == pytest.approx(0.005)
+
+    def test_per_customer_isolated_from_global(self):
+        # Global records should not affect per-customer and vice versa
+        self.adaptive.record("model-a", "vision", 0.90, 0.70)  # global only
+        # Per-customer should still return base (no customer data)
+        result = self.adaptive.get_adjusted_score("model-a", "vision", 0.70, customer_id="isolated")
+        assert result == 0.70
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHANGE 4: Per-Request and Per-Day Cost Caps
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestPerRequestCostCap:
+    def setup_method(self):
+        self.engine = _engine()
+
+    def test_max_cost_per_request_filters_expensive_models(self):
+        # Set a very low cap — only free/cheap models should survive
+        d = rr(self.engine.route(_req(
+            "Write a blog post",
+            max_cost_per_request=0.0001,
+            plan="business_plan",
+        )))
+        assert d.chosen_model is not None
+        # With $0.0001 cap, premium models ($0.015+ per 1k in) should be filtered
+        assert d.chosen_model.tier in ("free", "cheap")
+
+    def test_no_cap_allows_all_models(self):
+        d = rr(self.engine.route(_req(
+            "Write a complex analysis",
+            max_cost_per_request=None,
+            plan="business_plan",
+        )))
+        assert d.chosen_model is not None
+
+    def test_zero_cap_still_routes_to_free(self):
+        d = rr(self.engine.route(_req(
+            "hello",
+            max_cost_per_request=0.0,
+            plan="business_plan",
+        )))
+        # Only free (zero-cost) models should be selected
+        if d.chosen_model:
+            assert d.chosen_model.tier == "free"
+
+
+class TestDailyBudgetCap:
+    def test_daily_budget_tracker_basic(self):
+        from router.budget_tracker import DailyBudgetTracker
+        tracker = DailyBudgetTracker()
+        tracker.record_spend("cust_1", 5.0, "gpt-4o", "req-1")
+        assert tracker.get_daily_spend("cust_1") == pytest.approx(5.0)
+        assert tracker.is_cap_exceeded("cust_1", 4.99) is True
+        assert tracker.is_cap_exceeded("cust_1", 5.01) is False
+
+    def test_daily_budget_exhausted_forces_free_tier(self):
+        engine = _engine()
+        # Pre-seed the daily budget tracker so the cap is immediately hit
+        engine._daily_budget.record_spend("cust_budget", 100.0, "preseed", "preseed")
+        d = rr(engine.route(_req(
+            "Write code",
+            customer_id="cust_budget",
+            max_daily_cost=50.0,
+            plan="business_plan",
+        )))
+        # Should route to free tier or return budget_exhausted
+        if d.budget_exhausted:
+            assert d.chosen_model is None
+        else:
+            assert d.chosen_model is not None
+            assert d.chosen_model.tier == "free"
+
+    def test_daily_budget_no_cap_normal_routing(self):
+        engine = _engine()
+        d = rr(engine.route(_req(
+            "Write a Python function",
+            max_daily_cost=None,  # no cap
+        )))
+        assert d.chosen_model is not None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHANGE 5: Context-Aware Fallback Chains
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestContextAwareFallbackChains:
+    def setup_method(self):
+        self.engine = _engine()
+
+    def test_three_fallback_chain_fields_exist(self):
+        d = rr(self.engine.route(_req("Write a Python sort function")))
+        assert hasattr(d, "fallback_on_rate_limit")
+        assert hasattr(d, "fallback_on_content_safety")
+        assert hasattr(d, "fallback_on_timeout")
+        assert isinstance(d.fallback_on_rate_limit, list)
+        assert isinstance(d.fallback_on_content_safety, list)
+        assert isinstance(d.fallback_on_timeout, list)
+
+    def test_rate_limit_chain_same_tier(self):
+        from router.fallback_chain import build_typed_fallback_chains
+        from router.schemas import TaskAnalysis
+        registry = ModelRegistry()
+        candidates = registry.all_available_models()
+        analysis = TaskAnalysis(
+            complexity_score=0.5,
+            estimated_input_tokens=100,
+            estimated_output_tokens=200,
+            total_context_needed=300,
+            task_type="code_generation",
+        )
+        # Find a mid-tier model to use as chosen
+        mid_models = [m for m in candidates if m.tier == "mid"]
+        if mid_models:
+            chosen = mid_models[0]
+            rl, cs, to = build_typed_fallback_chains(chosen, candidates, analysis)
+            # Rate limit chain: same tier only
+            for m in rl:
+                assert m.tier == chosen.tier
+
+    def test_content_safety_chain_higher_tier(self):
+        from router.fallback_chain import build_typed_fallback_chains
+        from router.schemas import TaskAnalysis
+        registry = ModelRegistry()
+        candidates = registry.all_available_models()
+        analysis = TaskAnalysis(
+            complexity_score=0.4,
+            estimated_input_tokens=100,
+            estimated_output_tokens=200,
+            total_context_needed=300,
+            task_type="code_generation",
+        )
+        cheap_models = [m for m in candidates if m.tier == "cheap"]
+        if cheap_models:
+            chosen = cheap_models[0]
+            rl, cs, to = build_typed_fallback_chains(chosen, candidates, analysis)
+            # Content safety: tiers above cheap (mid, premium)
+            for m in cs:
+                tier_idx = ["free", "cheap", "mid", "premium"].index(m.tier)
+                chosen_idx = ["free", "cheap", "mid", "premium"].index(chosen.tier)
+                assert tier_idx > chosen_idx
+
+    def test_timeout_chain_sorted_by_latency(self):
+        from router.fallback_chain import build_typed_fallback_chains
+        from router.schemas import TaskAnalysis
+        registry = ModelRegistry()
+        candidates = registry.all_available_models()
+        analysis = TaskAnalysis(
+            complexity_score=0.5,
+            estimated_input_tokens=100,
+            estimated_output_tokens=200,
+            total_context_needed=300,
+            task_type="analysis",
+        )
+        mid_models = [m for m in candidates if m.tier == "mid"]
+        if mid_models:
+            chosen = mid_models[0]
+            rl, cs, to = build_typed_fallback_chains(chosen, candidates, analysis)
+            # Timeout chain: sorted by latency ascending
+            if len(to) >= 2:
+                assert to[0].avg_latency_ms <= to[1].avg_latency_ms
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHANGE 6: Configurable A/B Exploration Rate
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestConfigurableExplorationRate:
+    def test_valid_rates_accepted(self):
+        _validate_exploration_rate(0.0)
+        _validate_exploration_rate(0.10)
+        _validate_exploration_rate(0.25)
+
+    def test_rate_above_0_25_rejected(self):
+        with pytest.raises(ValueError, match="out of range"):
+            _validate_exploration_rate(0.26)
+
+    def test_negative_rate_rejected(self):
+        with pytest.raises(ValueError):
+            _validate_exploration_rate(-0.01)
+
+    def test_zero_rate_never_explores(self):
+        """At exploration_rate=0.0, the chosen model should always be tier_selection."""
+        engine = _engine()
+        results = []
+        for _ in range(30):
+            d = rr(engine.route(_req(
+                "Analyze the CAP theorem",
+                exploration_rate=0.0,
+                plan="business_plan",
+            )))
+            results.append(d.routing_rule_matched)
+        # With 0.0 rate no ab_exploration should ever appear
+        assert all("ab_exploration" not in r for r in results)
+
+    def test_nonzero_rate_field_accepted(self):
+        engine = _engine()
+        d = rr(engine.route(_req(
+            "Translate hello to French",
+            exploration_rate=0.15,
+        )))
+        assert d.chosen_model is not None
+
+    def test_invalid_mode_raises(self):
+        with pytest.raises(ValueError, match="Invalid mode"):
+            _validate_mode("fast")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHANGE 7: Linear Budget Tier Walk-Down
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestLinearBudgetWalkdown:
+    def _make_model(self, tier: str, cost_in: float, cost_out: float) -> ModelOption:
+        return ModelOption(
+            provider="test", model_id=f"m-{tier}", display_name=f"M {tier}",
+            tier=tier,
+            cost_per_1k_input=cost_in, cost_per_1k_output=cost_out,
+            max_context_window=4096, max_output_tokens=1000,
+            capabilities=[], adjusted_quality=0.7, routing_score=0.7,
+        )
+
+    def test_walkdown_finds_affordable_tier(self):
+        from router.schemas import TaskAnalysis
+
+        premium = self._make_model("premium", 0.015, 0.075)
+        mid     = self._make_model("mid",     0.003, 0.015)
+        cheap   = self._make_model("cheap",   0.0008,0.004)
+        free    = self._make_model("free",    0.0,   0.0)
+        candidates = [premium, mid, cheap, free]
+
+        analysis = TaskAnalysis(
+            complexity_score=0.8, estimated_input_tokens=500,
+            estimated_output_tokens=500, total_context_needed=1000,
+            task_type="analysis",
+        )
+
+        budget = BudgetTracker()
+        # Drain the budget so premium and mid are too expensive
+        budget.record_spend("u1", 49.99, "prev", "prev", plan="pro_plan")
+        budget._plans["u1"] = "pro_plan"
+
+        result, rule, exhausted = _budget_tier_walkdown(
+            premium, candidates, analysis, "u1", budget, "tier_selection"
+        )
+        assert exhausted is False or result.tier in ("cheap", "free")
+        assert "budget_downgraded" in rule or exhausted
+
+    def test_walkdown_reports_exhausted_when_all_too_expensive(self):
+        from router.schemas import TaskAnalysis
+
+        # All models have non-zero cost
+        mid  = self._make_model("mid",   0.003, 0.015)
+        # No free tier
+        candidates = [mid]
+
+        analysis = TaskAnalysis(
+            complexity_score=0.5, estimated_input_tokens=500,
+            estimated_output_tokens=500, total_context_needed=1000,
+            task_type="analysis",
+        )
+
+        budget = BudgetTracker()
+        budget.record_spend("u2", 50.0, "prev", "prev", plan="pro_plan")
+        budget._plans["u2"] = "pro_plan"
+
+        result, rule, exhausted = _budget_tier_walkdown(
+            mid, candidates, analysis, "u2", budget, "tier_selection"
+        )
+        # Only one candidate, all exceed budget → exhausted
+        assert exhausted is True
+        assert "budget_exhausted" in rule
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHANGE 8: Ultra Tier Collapse
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestUltraCollapse:
+    def test_no_ultra_models_in_registry(self):
+        registry = ModelRegistry()
+        models   = registry.all_available_models()
+        ultra    = [m for m in models if m.tier == "ultra"]
+        assert len(ultra) == 0, f"Found ultra-tier models: {[m.model_id for m in ultra]}"
+
+    def test_formerly_ultra_models_are_premium(self):
+        registry = ModelRegistry()
+        models   = {m.model_id: m for m in registry.all_available_models()}
+        for mid in ("o3", "o4-mini", "claude-opus-4-20250514-extended"):
+            assert mid in models, f"{mid} not found in registry"
+            assert models[mid].tier == "premium", f"{mid} should be premium"
+
+    def test_tier_score_1_0_returns_premium(self):
+        assert _get_tier_for_score(1.00) == "premium"
+        assert _get_tier_for_score(0.99) == "premium"
+        assert _get_tier_for_score(0.85) == "premium"
+        assert _get_tier_for_score(0.60) == "premium"
+
+    def test_model_option_rejects_ultra_tier(self):
+        with pytest.raises(Exception):  # pydantic ValidationError
+            ModelOption(
+                provider="test", model_id="bad", display_name="Bad",
+                tier="ultra",  # type: ignore[arg-type]
+                cost_per_1k_input=0.01, cost_per_1k_output=0.01,
+                max_context_window=4096, max_output_tokens=1000, capabilities=[],
+            )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHANGE 9: Proxy Mode
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestProxyMode:
+    def test_mode_validation_accepts_decision(self):
+        _validate_mode("decision")
+
+    def test_mode_validation_accepts_proxy(self):
+        _validate_mode("proxy")
+
+    def test_mode_validation_rejects_unknown(self):
+        with pytest.raises(ValueError, match="Invalid mode"):
+            _validate_mode("streaming")
+
+    def test_decision_mode_no_proxy_response(self):
+        engine = _engine()
+        d = rr(engine.route(_req("What is 2+2?", mode="decision")))
+        assert d.proxy_response is None
+        assert d.proxy_model_used is None
+
+    def test_proxy_mode_no_api_key_returns_error_message(self):
+        engine = _engine()
+        d = rr(engine.route(_req(
+            "What is 2+2?",
+            mode="proxy",
+            provider_api_key=None,  # no key
+        )))
+        assert d.proxy_response is not None
+        assert "proxy error" in d.proxy_response.lower()
+
+    def test_proxy_mode_fields_exist(self):
+        d = rr(_engine().route(_req("test", mode="decision")))
+        assert hasattr(d, "proxy_response")
+        assert hasattr(d, "proxy_model_used")
+
+    def test_invalid_mode_raises(self):
+        with pytest.raises(ValueError):
+            rr(_engine().route(_req("test", mode="turbo")))

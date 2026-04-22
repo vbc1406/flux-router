@@ -32,8 +32,9 @@ log = structlog.get_logger(__name__)
 # HTTP status codes we should NOT retry — the issue is on our side.
 _NO_RETRY_STATUSES: frozenset[int] = frozenset({400, 401, 403})
 
-# Tier ordering used to build up/down chains
-_TIER_ORDER: list[str] = ["free", "cheap", "mid", "premium", "ultra"]
+# Tier ordering used to build up/down chains.
+# Change 8: "ultra" has been merged into "premium"; 4 tiers remain.
+_TIER_ORDER: list[str] = ["free", "cheap", "mid", "premium"]
 
 
 def build_fallback_chain(
@@ -86,6 +87,61 @@ def build_fallback_chain(
         chain.append(remaining[0])
 
     return chain[:max_chain]
+
+
+def build_typed_fallback_chains(
+    chosen: ModelOption,
+    candidates: list[ModelOption],
+    analysis: TaskAnalysis,
+    max_chain: int = 3,
+) -> tuple[list[ModelOption], list[ModelOption], list[ModelOption]]:
+    """
+    Build three error-type-aware fallback chains from the post-Step-4 candidate set.
+
+    Returns (rate_limit_chain, content_safety_chain, timeout_chain).
+
+    Usage guide (document at the call site):
+      - fallback_on_rate_limit    → call when primary returns HTTP 429.
+            Same-tier alternatives (different provider) with highest routing score.
+      - fallback_on_content_safety → call when primary refuses on content policy.
+            One tier up — premium models have broader safety handling.
+      - fallback_on_timeout       → call when primary times out mid-stream.
+            Fastest models by avg_latency_ms regardless of tier.
+
+    Change 5: Provides richer fallback semantics than the generic fallback_chain.
+    Only models that passed Step 4 hard constraints are eligible.
+    """
+    seen = {chosen.model_id}
+
+    # ── Rate-limit chain: same tier, different provider ──────────────────────
+    rate_limit = [
+        m for m in candidates
+        if m.tier == chosen.tier and m.model_id not in seen
+    ]
+    rate_limit.sort(key=lambda m: (m.routing_score, m.adjusted_quality), reverse=True)
+    rate_limit_chain = rate_limit[:max_chain]
+
+    # ── Content-safety chain: step up one or more tiers ─────────────────────
+    content_safety_chain: list[ModelOption] = []
+    if chosen.tier in _TIER_ORDER:
+        chosen_idx = _TIER_ORDER.index(chosen.tier)
+        for up_idx in range(chosen_idx + 1, len(_TIER_ORDER)):
+            tier_up = [
+                m for m in candidates
+                if m.tier == _TIER_ORDER[up_idx] and m.model_id not in seen
+            ]
+            tier_up.sort(key=lambda m: m.adjusted_quality, reverse=True)
+            content_safety_chain.extend(tier_up)
+            if len(content_safety_chain) >= max_chain:
+                break
+    content_safety_chain = content_safety_chain[:max_chain]
+
+    # ── Timeout chain: fastest models by average latency ────────────────────
+    timeout_candidates = [m for m in candidates if m.model_id not in seen]
+    timeout_candidates.sort(key=lambda m: m.avg_latency_ms)
+    timeout_chain = timeout_candidates[:max_chain]
+
+    return rate_limit_chain, content_safety_chain, timeout_chain
 
 
 class FallbackExecutor:

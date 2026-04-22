@@ -70,7 +70,7 @@ class BudgetTracker:
 
     def get_daily_spend(self, user_id: str) -> float:
         """Sum of spend for user_id within the current UTC day."""
-        today = date.today()
+        today = datetime.utcnow().date()
         with self._lock:
             return sum(
                 r.amount for r in self._ledger[user_id]
@@ -108,6 +108,13 @@ class BudgetTracker:
         remaining = self.get_remaining_budget(user_id, plan)
         return estimated_cost > remaining
 
+    def check_daily_cap(self, customer_id: str, daily_cap: float) -> bool:
+        """
+        Return True if customer_id has already reached or exceeded daily_cap today.
+        Change 4: Used by the routing engine to enforce per-request max_daily_cost.
+        """
+        return self.get_daily_spend(customer_id) >= daily_cap
+
     def get_savings_report(self, user_id: str) -> dict:
         """
         Compare actual spend vs what it would have cost using the most expensive
@@ -130,4 +137,82 @@ class BudgetTracker:
             "breakdown_by_model":      dict(by_model),
             "breakdown_by_task_type":  dict(by_task),
             "record_count":            len(records),
+        }
+
+
+# ── Change 4: DailyBudgetTracker ─────────────────────────────────────────────
+
+class DailyBudgetTracker:
+    """
+    Lightweight in-memory tracker for per-customer daily spend caps.
+
+    Change 4: Tracks actual spend per customer_id per UTC day.  The routing
+    engine consults this when request.max_daily_cost is set; if the customer
+    has already hit their cap the engine forces routing to the free tier
+    (or returns a budget-exhausted error if the free tier is unavailable).
+
+    This is intentionally separate from BudgetTracker (which enforces plan-level
+    limits) so the two concerns stay decoupled.  Can be swapped to a persistent
+    backend (Redis, DB) without touching routing logic.
+    """
+
+    def __init__(self) -> None:
+        self._lock  = threading.Lock()
+        self._ledger: dict[str, list[_SpendRecord]] = defaultdict(list)
+
+    def record_spend(
+        self,
+        customer_id: str,
+        amount: float,
+        model_id: str,
+        correlation_id: str,
+        task_type: str = "unknown",
+    ) -> None:
+        """Record a spend event for customer_id."""
+        with self._lock:
+            self._ledger[customer_id].append(
+                _SpendRecord(
+                    amount         = amount,
+                    model_id       = model_id,
+                    task_type      = task_type,
+                    correlation_id = correlation_id,
+                    timestamp      = datetime.utcnow(),
+                )
+            )
+        log.debug(
+            "daily_budget_spend_recorded",
+            customer_id=customer_id,
+            amount=amount,
+            model_id=model_id,
+        )
+
+    def get_daily_spend(self, customer_id: str) -> float:
+        """Sum of spend for customer_id within the current UTC day."""
+        today = datetime.utcnow().date()
+        with self._lock:
+            return sum(
+                r.amount for r in self._ledger[customer_id]
+                if r.timestamp.date() == today
+            )
+
+    def is_cap_exceeded(self, customer_id: str, daily_cap: float) -> bool:
+        """
+        Return True if customer_id has already spent >= daily_cap today.
+        Called by the routing engine in Step 4 when request.max_daily_cost is set.
+        """
+        return self.get_daily_spend(customer_id) >= daily_cap
+
+    def get_report(self, customer_id: str) -> dict:
+        """Today's spend summary for a customer."""
+        today = date.today()
+        with self._lock:
+            today_records = [
+                r for r in self._ledger[customer_id]
+                if r.timestamp.date() == today
+            ]
+        return {
+            "customer_id":  customer_id,
+            "date":         today.isoformat(),
+            "total_spend":  round(sum(r.amount for r in today_records), 6),
+            "request_count": len(today_records),
         }

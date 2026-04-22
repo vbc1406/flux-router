@@ -29,6 +29,41 @@ class RoutingRequest(BaseModel):
     metadata: dict = Field(default_factory=dict)
     correlation_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
 
+    # ── Change 1: Routing priority tags ────────────────────────────────────────
+    # Controls model selection strategy:
+    #   always-premium  → skip scoring; pick highest-tier available model
+    #   quality-first   → weights quality=0.70, cost=0.20, latency=0.10
+    #   balanced        → default behavior (current logic, no change)
+    #   cost-optimized  → weights quality=0.30, cost=0.60, latency=0.10
+    routing_priority: str = "balanced"
+
+    # ── Change 3: Per-customer adaptive memory ──────────────────────────────────
+    # When provided, per-customer adaptive quality scores are used after 20+ samples.
+    customer_id: str | None = None
+
+    # ── Change 4: Per-request and per-day cost caps ─────────────────────────────
+    # max_cost_per_request: models exceeding this estimate are filtered in Step 4.
+    # max_daily_cost: if customer's daily spend >= this cap, force free tier.
+    max_cost_per_request: float | None = None
+    max_daily_cost: float | None = None
+
+    # ── Change 6: Configurable A/B exploration rate ─────────────────────────────
+    # Range [0.0, 0.25]. At 0.0, Step 10 is skipped entirely.
+    exploration_rate: float = 0.10
+
+    # ── Change 9: Decision-only vs full-proxy mode ──────────────────────────────
+    # "decision" → return routing decision only (default, current behaviour).
+    # "proxy"    → make the actual provider API call and return the response too.
+    mode: str = "decision"
+    # Provider API key required for proxy mode.  Key management wired up separately.
+    provider_api_key: str | None = None
+
+    # ── Fix 1: Sticky model bias ─────────────────────────────────────────────
+    # When provided, the router stores a per-conversation model preference so
+    # that follow-up messages stay on the same model unless scores diverge by
+    # more than the sticky bias threshold.
+    conversation_id: str | None = None
+
 
 class TaskAnalysis(BaseModel):
     """
@@ -60,12 +95,15 @@ class ModelOption(BaseModel):
     A single model entry in the registry, including all static metadata and
     two runtime fields (adjusted_quality, routing_score) that the engine populates
     on copies before scoring — never mutate registry objects directly.
+
+    Change 8: "ultra" tier has been merged into "premium".  All ultra models are
+    now premium-tier.  The Literal has been narrowed to 4 tiers.
     """
 
     provider: str
     model_id: str
     display_name: str
-    tier: Literal["free", "cheap", "mid", "premium", "ultra"]
+    tier: Literal["free", "cheap", "mid", "premium"]
     cost_per_1k_input: float
     cost_per_1k_output: float
     max_context_window: int
@@ -94,7 +132,18 @@ class RoutingDecision(BaseModel):
     """
 
     chosen_model: ModelOption | None = None
+
+    # ── Primary fallback chain (generic best-effort) ─────────────────────────
     fallback_chain: list[ModelOption] = Field(default_factory=list)
+
+    # ── Change 5: Context-aware typed fallback chains ─────────────────────────
+    # Use fallback_on_rate_limit when the primary model returns HTTP 429.
+    # Use fallback_on_content_safety when a content-policy refusal is received.
+    # Use fallback_on_timeout when the primary model times out mid-response.
+    fallback_on_rate_limit: list[ModelOption] = Field(default_factory=list)
+    fallback_on_content_safety: list[ModelOption] = Field(default_factory=list)
+    fallback_on_timeout: list[ModelOption] = Field(default_factory=list)
+
     reasoning: str = ""
     estimated_cost: float = 0.0
     estimated_savings: float = 0.0
@@ -105,6 +154,27 @@ class RoutingDecision(BaseModel):
     cost_blocked: bool = False
     correlation_id: str = ""
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    # ── Change 1: Priority applied ────────────────────────────────────────────
+    priority_applied: str = "balanced"
+
+    # ── Change 2: Confidence fallback flag ───────────────────────────────────
+    # True when the winning model's score was below MIN_CONFIDENCE_THRESHOLD and
+    # the router automatically upgraded to a premium fallback.
+    confidence_fallback: bool = False
+
+    # ── Change 4: Budget exhausted flag ──────────────────────────────────────
+    budget_exhausted: bool = False
+
+    # ── Change 9: Proxy mode response ────────────────────────────────────────
+    # Populated only when request.mode == "proxy".
+    proxy_response: str | None = None
+    proxy_model_used: ModelOption | None = None
+
+    # ── Fix 1: Sticky model bias ─────────────────────────────────────────────
+    # The model_id that was used in the PREVIOUS turn of this conversation,
+    # or None if this is the first turn (or no conversation_id was supplied).
+    last_model: str | None = None
 
 
 class QualityScore(BaseModel):
