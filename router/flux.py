@@ -76,9 +76,9 @@ class Flux:
 
     # ── Public API ──────────────────────────────────────────────────────────
 
-    async def route(self, request: RoutingRequest) -> RoutingDecision:
+    async def route(self, request: RoutingRequest, verbose: bool = False) -> RoutingDecision:
         """Delegate to the underlying RoutingEngine."""
-        return await self._engine.route(request)
+        return await self._engine.route(request, verbose=verbose)
 
     async def complete(
         self,

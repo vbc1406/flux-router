@@ -13,9 +13,11 @@ Provider sensitivity restrictions:
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from collections import defaultdict, deque
+from pathlib import Path
 
 import structlog
 
@@ -31,112 +33,112 @@ _FREE_FLASH_LITE_QUALITY: dict[str, float] = {
     "classification": 0.70, "extraction": 0.65, "summarization": 0.65,
     "code_generation": 0.50, "code_review": 0.45, "creative_writing": 0.55,
     "analysis": 0.55, "reasoning": 0.45, "function_calling": 0.50,
-    "vision": 0.60, "long_document": 0.60, "unknown": 0.60,
+    "vision": 0.60, "long_document": 0.60, "unknown": 0.60, "general": 0.60,
 }
 _LLAMA_70B_QUALITY: dict[str, float] = {
     "simple_qa": 0.80, "conversation": 0.82, "translation": 0.78,
     "classification": 0.82, "extraction": 0.78, "summarization": 0.78,
     "code_generation": 0.75, "code_review": 0.72, "creative_writing": 0.72,
     "analysis": 0.75, "reasoning": 0.72, "function_calling": 0.70,
-    "vision": 0.00, "long_document": 0.70, "unknown": 0.72,
+    "vision": 0.00, "long_document": 0.70, "unknown": 0.72, "general": 0.72,
 }
 _MISTRAL_SMALL_QUALITY: dict[str, float] = {
     "simple_qa": 0.75, "conversation": 0.78, "translation": 0.82,
     "classification": 0.78, "extraction": 0.75, "summarization": 0.73,
     "code_generation": 0.70, "code_review": 0.68, "creative_writing": 0.68,
     "analysis": 0.70, "reasoning": 0.65, "function_calling": 0.65,
-    "vision": 0.00, "long_document": 0.65, "unknown": 0.68,
+    "vision": 0.00, "long_document": 0.65, "unknown": 0.68, "general": 0.68,
 }
 _FREE_FLASH_QUALITY: dict[str, float] = {
     "simple_qa": 0.80, "conversation": 0.82, "translation": 0.80,
     "classification": 0.80, "extraction": 0.78, "summarization": 0.78,
     "code_generation": 0.72, "code_review": 0.68, "creative_writing": 0.70,
     "analysis": 0.72, "reasoning": 0.68, "function_calling": 0.70,
-    "vision": 0.80, "long_document": 0.78, "unknown": 0.72,
+    "vision": 0.80, "long_document": 0.78, "unknown": 0.72, "general": 0.72,
 }
 _HAIKU_QUALITY: dict[str, float] = {
     "simple_qa": 0.82, "conversation": 0.85, "translation": 0.83,
     "classification": 0.85, "extraction": 0.83, "summarization": 0.80,
     "code_generation": 0.75, "code_review": 0.73, "creative_writing": 0.72,
     "analysis": 0.75, "reasoning": 0.70, "function_calling": 0.78,
-    "vision": 0.75, "long_document": 0.75, "unknown": 0.76,
+    "vision": 0.75, "long_document": 0.75, "unknown": 0.76, "general": 0.76,
 }
 _GPT4O_MINI_QUALITY: dict[str, float] = {
     "simple_qa": 0.83, "conversation": 0.82, "translation": 0.82,
     "classification": 0.84, "extraction": 0.82, "summarization": 0.80,
     "code_generation": 0.78, "code_review": 0.76, "creative_writing": 0.74,
     "analysis": 0.76, "reasoning": 0.72, "function_calling": 0.80,
-    "vision": 0.78, "long_document": 0.74, "unknown": 0.76,
+    "vision": 0.78, "long_document": 0.74, "unknown": 0.76, "general": 0.76,
 }
 _FLASH_PAID_QUALITY: dict[str, float] = {
     "simple_qa": 0.82, "conversation": 0.82, "translation": 0.83,
     "classification": 0.82, "extraction": 0.80, "summarization": 0.80,
     "code_generation": 0.76, "code_review": 0.74, "creative_writing": 0.74,
     "analysis": 0.76, "reasoning": 0.72, "function_calling": 0.76,
-    "vision": 0.85, "long_document": 0.83, "unknown": 0.78,
+    "vision": 0.85, "long_document": 0.83, "unknown": 0.78, "general": 0.78,
 }
 _SONNET_QUALITY: dict[str, float] = {
     "simple_qa": 0.90, "conversation": 0.88, "translation": 0.88,
     "classification": 0.90, "extraction": 0.90, "summarization": 0.88,
     "code_generation": 0.92, "code_review": 0.90, "creative_writing": 0.87,
     "analysis": 0.90, "reasoning": 0.88, "function_calling": 0.90,
-    "vision": 0.85, "long_document": 0.88, "unknown": 0.88,
+    "vision": 0.85, "long_document": 0.88, "unknown": 0.88, "general": 0.88,
 }
 _GPT4O_QUALITY: dict[str, float] = {
     "simple_qa": 0.88, "conversation": 0.87, "translation": 0.87,
     "classification": 0.88, "extraction": 0.88, "summarization": 0.87,
     "code_generation": 0.88, "code_review": 0.87, "creative_writing": 0.85,
     "analysis": 0.88, "reasoning": 0.87, "function_calling": 0.92,
-    "vision": 0.90, "long_document": 0.86, "unknown": 0.87,
+    "vision": 0.90, "long_document": 0.86, "unknown": 0.87, "general": 0.87,
 }
 _GEMINI25_PRO_QUALITY: dict[str, float] = {
     "simple_qa": 0.87, "conversation": 0.85, "translation": 0.87,
     "classification": 0.87, "extraction": 0.87, "summarization": 0.88,
     "code_generation": 0.87, "code_review": 0.86, "creative_writing": 0.83,
     "analysis": 0.88, "reasoning": 0.90, "function_calling": 0.86,
-    "vision": 0.88, "long_document": 0.92, "unknown": 0.87,
+    "vision": 0.88, "long_document": 0.92, "unknown": 0.87, "general": 0.87,
 }
 _OPUS_QUALITY: dict[str, float] = {
     "simple_qa": 0.93, "conversation": 0.93, "translation": 0.92,
     "classification": 0.93, "extraction": 0.93, "summarization": 0.93,
     "code_generation": 0.95, "code_review": 0.95, "creative_writing": 0.92,
     "analysis": 0.95, "reasoning": 0.93, "function_calling": 0.92,
-    "vision": 0.90, "long_document": 0.93, "unknown": 0.92,
+    "vision": 0.90, "long_document": 0.93, "unknown": 0.92, "general": 0.92,
 }
 _GPT45_PREVIEW_QUALITY: dict[str, float] = {
     "simple_qa": 0.90, "conversation": 0.92, "translation": 0.90,
     "classification": 0.90, "extraction": 0.90, "summarization": 0.90,
     "code_generation": 0.91, "code_review": 0.91, "creative_writing": 0.93,
     "analysis": 0.92, "reasoning": 0.90, "function_calling": 0.93,
-    "vision": 0.91, "long_document": 0.88, "unknown": 0.90,
+    "vision": 0.91, "long_document": 0.88, "unknown": 0.90, "general": 0.90,
 }
 _GEMINI25_PRO_THINKING_QUALITY: dict[str, float] = {
     "simple_qa": 0.90, "conversation": 0.87, "translation": 0.88,
     "classification": 0.90, "extraction": 0.90, "summarization": 0.90,
     "code_generation": 0.91, "code_review": 0.91, "creative_writing": 0.85,
     "analysis": 0.93, "reasoning": 0.95, "function_calling": 0.88,
-    "vision": 0.89, "long_document": 0.94, "unknown": 0.90,
+    "vision": 0.89, "long_document": 0.94, "unknown": 0.90, "general": 0.90,
 }
 _O3_QUALITY: dict[str, float] = {
     "simple_qa": 0.88, "conversation": 0.80, "translation": 0.85,
     "classification": 0.88, "extraction": 0.87, "summarization": 0.87,
     "code_generation": 0.93, "code_review": 0.94, "creative_writing": 0.75,
     "analysis": 0.95, "reasoning": 0.98, "function_calling": 0.90,
-    "vision": 0.90, "long_document": 0.90, "unknown": 0.88,
+    "vision": 0.90, "long_document": 0.90, "unknown": 0.88, "general": 0.88,
 }
 _O4_MINI_QUALITY: dict[str, float] = {
     "simple_qa": 0.85, "conversation": 0.78, "translation": 0.83,
     "classification": 0.86, "extraction": 0.85, "summarization": 0.85,
     "code_generation": 0.90, "code_review": 0.90, "creative_writing": 0.73,
     "analysis": 0.90, "reasoning": 0.94, "function_calling": 0.88,
-    "vision": 0.85, "long_document": 0.87, "unknown": 0.85,
+    "vision": 0.85, "long_document": 0.87, "unknown": 0.85, "general": 0.85,
 }
 _OPUS_EXTENDED_QUALITY: dict[str, float] = {
     "simple_qa": 0.92, "conversation": 0.90, "translation": 0.92,
     "classification": 0.94, "extraction": 0.94, "summarization": 0.94,
     "code_generation": 0.97, "code_review": 0.97, "creative_writing": 0.93,
     "analysis": 0.97, "reasoning": 0.99, "function_calling": 0.93,
-    "vision": 0.91, "long_document": 0.95, "unknown": 0.93,
+    "vision": 0.91, "long_document": 0.95, "unknown": 0.93, "general": 0.93,
 }
 
 # Sensitivity levels allowed per provider category.
@@ -145,8 +147,26 @@ _NO_RESTRICTED     = ["public", "internal", "confidential"]
 _PUBLIC_INTERNAL   = ["public", "internal"]
 
 
-def _build_default_registry() -> dict[str, ModelOption]:
-    """Instantiate the canonical model catalog with verified 2025 pricing."""
+def _load_registry_from_json() -> dict[str, ModelOption] | None:
+    """Load model registry from models.json if present; return None on any failure."""
+    config_path = Path(__file__).parent / "models.json"
+    if not config_path.exists():
+        return None
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            data = json.load(f)
+        models = []
+        for m in data["models"]:
+            models.append(ModelOption(**m))
+        log.info("model_registry_loaded_from_json", count=len(models), path=str(config_path))
+        return {m.model_id: m for m in models}
+    except Exception as exc:
+        log.warning("model_registry_json_load_failed", error=str(exc))
+        return None
+
+
+def _build_hardcoded_registry() -> dict[str, ModelOption]:
+    """Instantiate the canonical model catalog with verified 2025 pricing (hardcoded fallback)."""
     models: list[ModelOption] = [
         # ── FREE TIER ────────────────────────────────────────────────────────
         ModelOption(
@@ -431,6 +451,15 @@ def _build_default_registry() -> dict[str, ModelOption]:
         ),
     ]
     return {m.model_id: m for m in models}
+
+
+def _build_default_registry() -> dict[str, ModelOption]:
+    """Load from JSON first; fall back to hardcoded catalog."""
+    from_json = _load_registry_from_json()
+    if from_json is not None:
+        return from_json
+    log.info("model_registry_using_hardcoded_fallback")
+    return _build_hardcoded_registry()
 
 
 class ModelRegistry:

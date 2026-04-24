@@ -72,7 +72,7 @@ from .circuit_breaker import CircuitBreaker
 from .context_compressor import ContextCompressor
 from .fallback_chain import build_fallback_chain, build_typed_fallback_chains
 from .model_registry import ModelRegistry
-from .schemas import ModelOption, RoutingDecision, RoutingRequest, TaskAnalysis
+from .schemas import ModelOption, RoutingDecision, RoutingExplanation, RoutingRequest, TaskAnalysis
 
 log = structlog.get_logger(__name__)
 
@@ -182,7 +182,7 @@ class RoutingEngine:
 
     # ── Public ──────────────────────────────────────────────────────────────
 
-    async def route(self, request: RoutingRequest) -> RoutingDecision:
+    async def route(self, request: RoutingRequest, verbose: bool = False) -> RoutingDecision:
         """
         Run the full 13-step routing algorithm and return a RoutingDecision.
 
@@ -222,6 +222,13 @@ class RoutingEngine:
         # ══ STEP 1: CLASSIFY ════════════════════════════════════════════════
         analysis = self._classifier.analyze(request)
         log.debug("classified", cid=cid, task=analysis.task_type, score=analysis.complexity_score)
+
+        # Fix 5: initialize explanation container when verbose
+        expl: RoutingExplanation | None = RoutingExplanation() if verbose else None
+        if expl:
+            _, expl.task_type_confidence = self._classifier._detect_task_type(request)
+            expl.task_type = analysis.task_type
+            expl.complexity_score = analysis.complexity_score
 
         # ══ STEP 2: CACHE CHECK ══════════════════════════════════════════════
         if CACHE_ENABLED and analysis.cache_eligible:
@@ -276,6 +283,15 @@ class RoutingEngine:
             # Fix 4: Skip models whose provider circuit is open.
             and self._circuit_breaker.is_available(m.provider)
         ]
+        if expl:
+            expl.candidates_considered = len(all_models)
+            expl.candidates_filtered = len(all_models) - len(candidates)
+            for m in all_models:
+                if m not in candidates:
+                    if not self._circuit_breaker.is_available(m.provider):
+                        expl.filter_reasons[m.model_id] = "circuit_open"
+                    elif not _passes_hard_constraints(m, request, analysis, self._registry):
+                        expl.filter_reasons[m.model_id] = "missing_cap"
 
         # Change 4: Per-request cost cap — filter out models whose estimated
         # cost exceeds max_cost_per_request before any other scoring.
@@ -342,6 +358,7 @@ class RoutingEngine:
                         fallback_on_timeout=to,
                     )
                     decision.last_model = conv_entry["last_model"] if conv_entry else None
+                    decision.explanation = expl
                     self._post_route(decision, request)
                     return decision
                 else:
@@ -393,6 +410,7 @@ class RoutingEngine:
                     fallback_on_timeout=to,
                 )
                 decision.last_model = conv_entry["last_model"] if conv_entry else None
+                decision.explanation = expl
                 self._post_route(decision, request)
                 if request.mode == "proxy":
                     decision = await self._proxy_execute(decision, request)
@@ -420,6 +438,7 @@ class RoutingEngine:
                 fallback_on_timeout=to,
             )
             decision.last_model = conv_entry["last_model"] if conv_entry else None
+            decision.explanation = expl
             self._post_route(decision, request)
             if request.mode == "proxy":
                 decision = await self._proxy_execute(decision, request)
@@ -443,6 +462,7 @@ class RoutingEngine:
                     fallback_on_timeout=to,
                 )
                 decision.last_model = conv_entry["last_model"] if conv_entry else None
+                decision.explanation = expl
                 self._post_route(decision, request)
                 if request.mode == "proxy":
                     decision = await self._proxy_execute(decision, request)
@@ -498,6 +518,7 @@ class RoutingEngine:
         # Fix 1: Sticky bias — add a bonus to the model used in the previous
         # conversation turn so it wins unless another model scores notably higher.
         # Skipped when the last model failed (avoid repeating a broken model).
+        sticky_bias_applied = False
         if conv_entry and not conv_entry.get("last_failed", False):
             prev_id   = conv_entry["last_model"]
             msg_count = conv_entry["message_count"]
@@ -509,6 +530,7 @@ class RoutingEngine:
             for m in tier_candidates:
                 if m.model_id == prev_id:
                     m.routing_score += bias
+                    sticky_bias_applied = True
                     log.debug(
                         "sticky_bias_applied",
                         cid=cid,
@@ -521,6 +543,25 @@ class RoutingEngine:
         tier_candidates.sort(key=lambda m: m.routing_score, reverse=True)
         chosen = tier_candidates[0]
         rule   = "tier_selection"
+
+        if expl:
+            expl.tier_selected = target_tier
+            expl.rules_fired.append("tier_selection")
+            for m in tier_candidates:
+                expl.scoring_breakdown.append({
+                    "model":   m.model_id,
+                    "quality": m.adjusted_quality,
+                    "cost":    1.0 - _normalize_cost(m, tier_candidates),
+                    "latency": 1.0 - _normalize_latency(m, tier_candidates),
+                    "score":   m.routing_score,
+                })
+            expl.winner = tier_candidates[0].model_id
+            if len(tier_candidates) > 1:
+                expl.runner_up = tier_candidates[1].model_id
+                expl.score_gap = round(tier_candidates[0].routing_score - tier_candidates[1].routing_score, 4)
+
+        if expl:
+            expl.sticky_bias_applied = sticky_bias_applied
 
         # ══ STEP 9b: CONFIDENCE THRESHOLD CHECK ═════════════════════════════
         # Change 2: if the winner's routing score is below MIN_CONFIDENCE_THRESHOLD,
@@ -537,6 +578,9 @@ class RoutingEngine:
                 chosen = premium_alts[0]
                 confidence_fallback = True
                 rule  += " | confidence_fallback"
+                if expl:
+                    expl.confidence_fallback_used = True
+                    expl.rules_fired.append("confidence_fallback")
                 log.info(
                     "confidence_fallback_triggered",
                     cid=cid,
@@ -595,6 +639,7 @@ class RoutingEngine:
             fallback_on_timeout=to_chain,
         )
         decision.last_model = conv_entry["last_model"] if conv_entry else None
+        decision.explanation = expl
         self._post_route(decision, request)
 
         # Change 3: record routing event for customer profile

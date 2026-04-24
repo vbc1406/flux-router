@@ -17,7 +17,9 @@ routing paths are not stalled by I/O.  Thread-safe.
 
 from __future__ import annotations
 
+import copy
 import json
+import math
 import threading
 from collections import defaultdict, deque
 from datetime import datetime
@@ -36,7 +38,12 @@ from .config import (
 
 log = structlog.get_logger(__name__)
 
-_WRITE_INTERVAL = 50   # flush to disk every N updates
+_WRITE_INTERVAL = 50        # flush to disk every N updates
+_SNAPSHOT_INTERVAL = 1000   # take a snapshot every N signals
+_MAX_SNAPSHOTS = 5
+_QUALITY_FLOOR = 0.20       # never allow adaptive quality below this
+_OUTLIER_STD_MULTIPLIER = 2.0
+_ROLLBACK_DROP_THRESHOLD = 0.90  # roll back if avg drops below 90% of snapshot avg
 
 
 class AdaptiveWeights:
@@ -64,7 +71,12 @@ class AdaptiveWeights:
         self._customer_log: dict[str, deque[dict[str, Any]]] = defaultdict(
             lambda: deque(maxlen=ADAPTIVE_CUSTOMER_LOG_MAX)
         )
-        self._dirty  = 0  # updates since last flush
+        self._dirty  = 0   # updates since last flush
+        self._total_signals = 0
+        # Outlier detection: key → {mean, variance, count}
+        self._signal_stats: dict[str, dict[str, float]] = {}
+        # Rolling snapshots of _state for corruption rollback
+        self._snapshots: list[dict[str, dict[str, Any]]] = []
         self._load()
 
     # ── Public API ──────────────────────────────────────────────────────────
@@ -79,13 +91,21 @@ class AdaptiveWeights:
     ) -> None:
         """
         Update the running average for (model_id, task_type) with a new observation.
-        The exponential decay means recent quality matters more than historical data.
-        Persists to disk every WRITE_INTERVAL calls.
+        Rejects outliers (>2σ from running mean), enforces a quality floor of 0.20,
+        and takes periodic snapshots for corruption rollback.
 
         Change 3: If customer_id is provided, also update that customer's EMA table.
         """
         key = f"{model_id}:{task_type}"
         with self._lock:
+            # Outlier guard — skip signals far from the running mean
+            if not self._should_accept_signal(key, quality_score):
+                log.debug("adaptive_signal_rejected_outlier", key=key, quality=quality_score)
+                return
+
+            # Update running stats for future outlier detection
+            self._update_signal_stats(key, quality_score)
+
             # Update global state
             self._state[key] = self._update_ema(
                 self._state.get(key, {}), quality_score, base_quality_rating
@@ -98,8 +118,12 @@ class AdaptiveWeights:
                     base_quality_rating,
                 )
             self._dirty += 1
+            self._total_signals += 1
             if self._dirty >= _WRITE_INTERVAL:
                 self._flush()
+            # Periodic snapshot + corruption check
+            self._maybe_snapshot()
+            self._check_for_corruption()
 
     def get_adjusted_score(
         self,
@@ -117,6 +141,7 @@ class AdaptiveWeights:
         PER_CUSTOMER_MIN_SAMPLES or more samples, use their per-customer EMA
         instead of the global one.
         """
+        _min_samples = 20  # raised from 10 to require more data before overriding static ratings
         key = f"{model_id}:{task_type}"
         with self._lock:
             # Check per-customer data first (Change 3)
@@ -124,13 +149,13 @@ class AdaptiveWeights:
                 c_entry = self._customer_state.get(customer_id, {}).get(key)
                 if c_entry and c_entry.get("sample_count", 0) >= PER_CUSTOMER_MIN_SAMPLES:
                     adjusted = base_score + c_entry["adjustment"]
-                    return round(max(0.0, min(1.0, adjusted)), 4)
+                    return round(max(_QUALITY_FLOOR, min(1.0, adjusted)), 4)
             # Fall back to global
             entry = self._state.get(key)
-        if not entry or entry.get("sample_count", 0) < ADAPTIVE_MIN_SAMPLES:
+        if not entry or entry.get("sample_count", 0) < _min_samples:
             return base_score
         adjusted = base_score + entry["adjustment"]
-        return round(max(0.0, min(1.0, adjusted)), 4)
+        return round(max(_QUALITY_FLOOR, min(1.0, adjusted)), 4)
 
     def record_routing_event(
         self,
@@ -227,10 +252,60 @@ class AdaptiveWeights:
             ADAPTIVE_DECAY_FACTOR * entry["avg_quality"]
             + (1.0 - ADAPTIVE_DECAY_FACTOR) * quality_score
         )
+        # Quality floor — prevents permanent blacklisting from bad data
+        entry["avg_quality"] = max(_QUALITY_FLOOR, entry["avg_quality"])
         entry["adjustment"]   = entry["avg_quality"] - base_quality_rating
         entry["sample_count"] += 1
         entry["last_updated"] = datetime.utcnow().isoformat()
         return entry
+
+    def _should_accept_signal(self, key: str, quality: float) -> bool:
+        """Reject signals that are >2σ from the running mean (caller holds lock)."""
+        stats = self._signal_stats.get(key)
+        if stats is None or stats["count"] < 10:
+            return True
+        std = math.sqrt(stats["variance"])
+        if std < 0.01:
+            return True
+        return abs(quality - stats["mean"]) <= _OUTLIER_STD_MULTIPLIER * std
+
+    def _update_signal_stats(self, key: str, quality: float) -> None:
+        """Welford online algorithm for running mean and variance (caller holds lock)."""
+        if key not in self._signal_stats:
+            self._signal_stats[key] = {"mean": quality, "variance": 0.0, "count": 1}
+            return
+        s = self._signal_stats[key]
+        s["count"] += 1
+        delta = quality - s["mean"]
+        s["mean"] += delta / s["count"]
+        delta2 = quality - s["mean"]
+        s["variance"] = (s["variance"] * (s["count"] - 2) + delta * delta2) / (s["count"] - 1) if s["count"] > 1 else 0.0
+
+    def _maybe_snapshot(self) -> None:
+        """Take a snapshot of global weights every _SNAPSHOT_INTERVAL signals (caller holds lock)."""
+        if self._total_signals > 0 and self._total_signals % _SNAPSHOT_INTERVAL == 0:
+            self._snapshots.append(copy.deepcopy(self._state))
+            self._snapshots = self._snapshots[-_MAX_SNAPSHOTS:]
+            log.info("adaptive_weights_snapshot_taken", snapshot_count=len(self._snapshots))
+
+    def _check_for_corruption(self) -> None:
+        """Roll back to last snapshot if average quality dropped >10% (caller holds lock)."""
+        if not self._snapshots or not self._state:
+            return
+
+        def _avg_quality(state: dict) -> float:
+            qualities = [v.get("avg_quality", 0.5) for v in state.values()]
+            return sum(qualities) / len(qualities) if qualities else 0.5
+
+        current_avg = _avg_quality(self._state)
+        previous_avg = _avg_quality(self._snapshots[-1])
+        if previous_avg > 0 and current_avg < previous_avg * _ROLLBACK_DROP_THRESHOLD:
+            self._state = copy.deepcopy(self._snapshots[-1])
+            log.warning(
+                "adaptive_weights_rolled_back",
+                current_avg=current_avg,
+                previous_avg=previous_avg,
+            )
 
     def _load(self) -> None:
         """Load existing state from disk on startup, silently skip if absent."""

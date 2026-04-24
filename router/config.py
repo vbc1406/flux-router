@@ -22,6 +22,7 @@ COMPLEXITY_BASE_SCORES: dict[str, float] = {
     "vision":           0.50,
     "long_document":    0.50,
     "unknown":          0.40,
+    "general":          0.40,
 }
 
 COMPLEXITY_MODIFIERS: dict[str, float] = {

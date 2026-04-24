@@ -35,7 +35,18 @@ _CODE_GEN_RE     = re.compile(
     r"\b(?:write\s+(?:a\s+)?(?:function|class|script|program|code|module)"
     r"|implement"
     r"|build\s+(?:a\s+)?(?:full\s+|complete\s+)?(?:function|class|api|service|tool|application|app|component|server|client|system)"
-    r"|create\s+a\s+(?:function|class|program))\b",
+    r"|create\s+(?:a\s+)?(?:function|class|program|app|tool|script|api|service|bot|website)"
+    r"|make\s+(?:a\s+)?(?:tool|app|script|program|function|api|service|bot|website)"
+    r"|set\s+up(?:\s+a(?:n)?)?\s+(?:server|api|service|database|pipeline|workflow)"
+    r")\b",
+    re.IGNORECASE,
+)
+_REASONING_EXTENDED_RE = re.compile(
+    r"\b(?:think\s+(?:about|through)|figure\s+out|help\s+me\s+understand|help\s+me\s+(?:figure|think))\b",
+    re.IGNORECASE,
+)
+_CREATIVE_EXTENDED_RE = re.compile(
+    r"\b(?:come\s+up\s+with|brainstorm|imagine\s+(?:a|if|that)|think\s+of\s+ideas?)\b",
     re.IGNORECASE,
 )
 _LANG_NAME_RE    = re.compile(
@@ -89,6 +100,70 @@ _SENSITIVE_INTERNAL_RE = re.compile(
 )
 
 
+# ── Keyword groups for secondary scoring pass ────────────────────────────────
+
+_KW_CODE = frozenset({
+    "python", "javascript", "api", "database", "function", "class",
+    "deploy", "server", "frontend", "backend", "typescript", "sql",
+    "react", "node", "flask", "django", "fastapi", "docker",
+})
+_KW_REASONING = frozenset({
+    "why", "how", "compare", "difference", "explain", "analyze",
+    "analyse", "pros", "cons", "tradeoff", "tradeoffs",
+})
+_KW_CREATIVE = frozenset({
+    "story", "poem", "creative", "fiction", "blog", "article",
+    "brainstorm", "imagine", "narrative", "character", "plot",
+})
+
+
+def estimate_tokens(text: str) -> int:
+    """
+    Better token estimation without external tokenizers.
+
+    Heuristics:
+    - English prose: ~4 chars per token
+    - Code: ~3 chars per token
+    - CJK: ~1.5 chars per token
+    """
+    if not text:
+        return 0
+
+    total_chars = len(text)
+
+    # Detect code blocks
+    code_indicators = text.count("```") + text.count("def ") + text.count("function ")
+    symbol_ratio = sum(
+        1 for c in text if c in "{}[]()=<>|&;:"
+    ) / max(total_chars, 1)
+
+    is_code_heavy = code_indicators > 0 or symbol_ratio > 0.05
+
+    # Detect CJK
+    cjk_count = sum(
+        1
+        for c in text
+        if (
+            "一" <= c <= "鿿"
+            or "぀" <= c <= "ヿ"
+            or "가" <= c <= "힯"
+        )
+    )
+
+    cjk_ratio = cjk_count / max(total_chars, 1)
+
+    if cjk_ratio > 0.3:
+        tokens = int(total_chars / 1.5)
+    elif is_code_heavy:
+        tokens = int(total_chars / 3.0)
+    else:
+        tokens = int(total_chars / 4.0)
+
+    word_count = len(text.split())
+
+    return max(tokens, word_count)
+
+
 class RequestClassifier:
     """
     Multi-signal classifier that converts a RoutingRequest into a TaskAnalysis.
@@ -116,7 +191,7 @@ class RequestClassifier:
 
         # 1. Token economics
         input_tokens   = self._count_tokens(prompt + " " + sys_prompt + " " + self._history_text(history))
-        task_type      = self._detect_task_type(request)
+        task_type, _   = self._detect_task_type(request)
         output_tokens  = self._estimate_output_tokens(task_type, input_tokens)
         history_tokens = self._count_tokens(self._history_text(history))
         sys_tokens     = self._count_tokens(sys_prompt)
@@ -168,8 +243,12 @@ class RequestClassifier:
 
     @staticmethod
     def _count_tokens(text: str) -> int:
-        """Fast token estimate: word count × 1.3 (GPT tokeniser approximation)."""
-        return max(1, int(len(text.split()) * 1.3))
+        """
+        Heuristic token estimator with CJK and code awareness.
+        ~4 chars/token for prose, ~3 for code, ~1.5 for CJK.
+        Falls back to word-count lower bound.
+        """
+        return estimate_tokens(text)
 
     @staticmethod
     def _history_text(history: list[dict]) -> str:
@@ -215,10 +294,11 @@ class RequestClassifier:
             return max(400, int(input_tokens * 0.15))
         return 400
 
-    def _detect_task_type(self, request: RoutingRequest) -> str:
+    def _detect_task_type(self, request: RoutingRequest) -> tuple[str, float]:
         """
         Rule-based task classification using regex + keyword patterns.
-        Ordering matters: more specific patterns come first.
+        Returns (task_type, confidence). Ordering matters: more specific patterns first.
+        Falls back to keyword scoring, then "general" when confidence < 0.5.
         """
         prompt  = request.raw_prompt
         history = request.message_history
@@ -226,21 +306,21 @@ class RequestClassifier:
 
         # Vision: images in message content
         if "vision" in request.required_capabilities:
-            return "vision"
+            return "vision", 0.9
         for msg in history + [{"role": "user", "content": prompt}]:
             content = msg.get("content", "")
             if isinstance(content, list):
                 if any(isinstance(b, dict) and b.get("type") in ("image_url", "image") for b in content):
-                    return "vision"
+                    return "vision", 0.9
 
         # Function calling: explicit in metadata or capabilities
         if "function_calling" in request.required_capabilities or meta.get("tools"):
-            return "function_calling"
+            return "function_calling", 0.9
 
         # Long document: large input (>~2700 tokens already warrants long-doc routing)
         word_count = len(prompt.split())
         if word_count > 2000:
-            return "long_document"
+            return "long_document", 0.9
 
         # Conversation: trivially short, casual, greeting-like
         stripped = prompt.strip()
@@ -248,70 +328,99 @@ class RequestClassifier:
             casual_words = {"hi", "hello", "hey", "thanks", "thank you", "ok", "okay",
                             "sure", "yes", "no", "great", "cool", "bye", "goodbye", "lol"}
             if any(w in stripped.lower().split() for w in casual_words) or len(stripped.split()) <= 3:
-                return "conversation"
+                return "conversation", 0.6
 
         # Unit / currency conversion → route as simple_qa (fast, deterministic answer)
         if re.search(r"\bconvert\b", prompt, re.IGNORECASE) and re.search(r"\bto\b", prompt, re.IGNORECASE):
-            return "simple_qa"
+            return "simple_qa", 0.7
 
         # Architecture / system design
         if re.search(r"\bdesign\s+(?:a|an|the)\b", prompt, re.IGNORECASE):
-            return "analysis"
+            return "analysis", 0.7
 
         # Code review: code fences + review/debug keywords
         has_fences = bool(_CODE_FENCE_RE.search(prompt))
         if has_fences and _CODE_REVIEW_RE.search(prompt):
-            return "code_review"
+            return "code_review", 0.8
 
-        # Code generation: explicit "write code" / language names
+        # Code generation: explicit patterns or language name + action verb
         if _CODE_GEN_RE.search(prompt) or (
             _LANG_NAME_RE.search(prompt) and re.search(r"\b(write|implement|build|create|generate)\b", prompt, re.IGNORECASE)
         ):
-            return "code_generation"
+            return "code_generation", 0.8
 
         # Reasoning: proof / step-by-step / heavy math
         if _REASONING_RE.search(prompt) or _STEP_BY_STEP_RE.search(prompt):
             if _MATH_SYM_RE.search(prompt) or re.search(r"\b(proof|theorem|derive|solve)\b", prompt, re.IGNORECASE):
-                return "reasoning"
+                return "reasoning", 0.8
+
+        # Extended reasoning patterns
+        if _REASONING_EXTENDED_RE.search(prompt):
+            return "reasoning", 0.7
 
         # Translation
         if _TRANSLATE_RE.search(prompt) and _LANG_RE.search(prompt):
-            return "translation"
+            return "translation", 0.8
 
         # Summarisation
         if _SUMMARIZE_RE.search(prompt):
-            return "summarization"
+            return "summarization", 0.8
 
         # Classification
         if _CLASSIFY_RE.search(prompt):
-            return "classification"
+            return "classification", 0.8
 
         # Extraction
         if _EXTRACT_RE.search(prompt):
-            return "extraction"
+            return "extraction", 0.8
 
-        # Creative writing
+        # Creative writing (primary patterns)
         if _CREATIVE_RE.search(prompt):
-            return "creative_writing"
+            return "creative_writing", 0.8
+
+        # Creative writing (extended patterns)
+        if _CREATIVE_EXTENDED_RE.search(prompt):
+            return "creative_writing", 0.7
 
         # Analysis / comparison
         if _ANALYSIS_RE.search(prompt):
-            return "analysis"
+            return "analysis", 0.7
 
         # Reasoning (broader: why / explain) — only for substantive prompts
-        # Short "why is X?" questions are simple_qa, not reasoning tasks
         if _REASONING_RE.search(prompt) and word_count > 8:
-            return "reasoning"
+            return "reasoning", 0.7
 
         # Simple Q&A: short, starts with question word
         if _SIMPLE_QA_RE.match(prompt.strip()) or (len(prompt.strip()) < 120 and prompt.strip().endswith("?")):
-            return "simple_qa"
+            return "simple_qa", 0.6
 
         # Code review without explicit review keyword (just code fences)
         if has_fences:
-            return "code_review"
+            return "code_review", 0.7
 
-        return "unknown"
+        # ── Secondary keyword scoring pass (tiebreaker / fallback) ────────────
+        words = set(prompt.lower().split())
+        # Multi-word phrase detection
+        prompt_lower = prompt.lower()
+        code_hits = len(words & _KW_CODE)
+        reasoning_hits = len(words & _KW_REASONING)
+        if "pros and cons" in prompt_lower:
+            reasoning_hits += 1
+        creative_hits = len(words & _KW_CREATIVE)
+        if "write me" in prompt_lower:
+            creative_hits += 1
+
+        best_hits = max(code_hits, reasoning_hits, creative_hits)
+        # Need at least 2 keyword hits for confidence to reach 0.5
+        if best_hits >= 2:
+            kw_confidence = min(0.5 + (best_hits - 2) * 0.05, 0.70)
+            if code_hits >= reasoning_hits and code_hits >= creative_hits:
+                return "code_generation", kw_confidence
+            if reasoning_hits >= creative_hits:
+                return "reasoning", kw_confidence
+            return "creative_writing", kw_confidence
+
+        return "general", 0.4
 
     def _extract_signals(
         self,

@@ -6,10 +6,68 @@ Using Pydantic v2 throughout; these are the contracts between every module.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+
+@dataclass
+class RoutingExplanation:
+    """Human-readable breakdown of a routing decision. Populated when verbose=True."""
+
+    task_type: str = ""
+    task_type_confidence: float = 0.0
+    complexity_score: float = 0.0
+    complexity_modifiers: list[str] = field(default_factory=list)
+    tier_selected: str = ""
+    candidates_considered: int = 0
+    candidates_filtered: int = 0
+    filter_reasons: dict[str, str] = field(default_factory=dict)
+    scoring_breakdown: list[dict] = field(default_factory=list)
+    winner: str = ""
+    runner_up: str = ""
+    score_gap: float = 0.0
+    sticky_bias_applied: bool = False
+    confidence_fallback_used: bool = False
+    rules_fired: list[str] = field(default_factory=list)
+
+    def explain(self) -> str:
+        """Return a human-readable summary of the routing decision."""
+        lines: list[str] = [
+            f"Task: {self.task_type} (confidence: {self.task_type_confidence:.2f})",
+            f"Complexity: {self.complexity_score:.2f}"
+            + (f" [{', '.join(self.complexity_modifiers)}]" if self.complexity_modifiers else ""),
+            f"Tier: {self.tier_selected}",
+            f"Candidates: {self.candidates_considered} considered, {self.candidates_filtered} filtered",
+        ]
+        if self.filter_reasons:
+            reason_summary: dict[str, int] = {}
+            for reason in self.filter_reasons.values():
+                reason_summary[reason] = reason_summary.get(reason, 0) + 1
+            parts = ", ".join(f"{r}={c}" for r, c in reason_summary.items())
+            lines[-1] += f" ({parts})"
+        lines.append("")
+        lines.append("Scoring:")
+        for entry in self.scoring_breakdown:
+            marker = " ← WINNER" if entry.get("model") == self.winner else ""
+            lines.append(f"  {entry['model']}:")
+            lines.append(f"    quality={entry.get('quality', 0):.2f}")
+            lines.append(f"    cost={entry.get('cost', 0):.2f}")
+            lines.append(f"    latency={entry.get('latency', 0):.2f}")
+            lines.append(f"    → {entry.get('score', 0):.3f}{marker}")
+        lines.append("")
+        lines.append(f"Winner: {self.winner}")
+        if self.runner_up:
+            lines.append(f"Beat runner-up by {self.score_gap:.3f}")
+        if self.sticky_bias_applied:
+            lines.append("Sticky bias applied (same-conversation model preference)")
+        if self.confidence_fallback_used:
+            lines.append("Confidence fallback triggered (upgraded to premium)")
+        if self.rules_fired:
+            lines.append(f"Rules: {', '.join(self.rules_fired)}")
+        return "\n".join(lines)
 
 
 class RoutingRequest(BaseModel):
@@ -172,6 +230,16 @@ class RoutingDecision(BaseModel):
     # The model_id that was used in the PREVIOUS turn of this conversation,
     # or None if this is the first turn (or no conversation_id was supplied).
     last_model: str | None = None
+
+    # ── Fix 5: Decision explainability ───────────────────────────────────────
+    # Populated only when verbose=True is passed to flux.route() or engine.route().
+    explanation: RoutingExplanation | None = None
+
+    def explain(self) -> str:
+        """Return human-readable routing explanation, or a placeholder if not populated."""
+        if self.explanation is None:
+            return "No explanation available (pass verbose=True to populate)"
+        return self.explanation.explain()
 
 
 class QualityScore(BaseModel):

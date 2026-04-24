@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from router.cache import ResponseCache
-from router.classifier import RequestClassifier, _compute_complexity
+from router.classifier import RequestClassifier, _compute_complexity, estimate_tokens
 from router.schemas import RoutingRequest
 
 
@@ -247,3 +247,81 @@ class TestSensitivityDetection:
     def test_restricted_keyword(self):
         a = self.clf.analyze(_req("My SSN is 123-45-6789 and bank account 9876"))
         assert a.sensitivity_level == "restricted"
+
+
+# ── Token estimation (Fix 1) ──────────────────────────────────────────────────
+
+class TestTokenEstimation2:
+    def test_token_estimate_english(self):
+        text = "The quick brown fox jumps over the lazy dog " * 10
+        result = estimate_tokens(text)
+        word_count = len(text.split())
+        # Prose: ~4 chars/token. Must be >= word count.
+        assert result >= word_count
+        assert result < word_count * 2
+
+    def test_token_estimate_code(self):
+        code = "def hello():\n    return {'key': [1, 2, 3]}\n" * 10
+        result = estimate_tokens(code)
+        # Code is symbol-heavy → ~3 chars/token → more tokens than prose estimate
+        assert result > 0
+        chars = len(code)
+        assert result >= chars // 4  # at minimum as good as prose
+
+    def test_token_estimate_cjk(self):
+        # Japanese text — each char ~1.5 chars/token
+        text = "日本語のテスト文章です。" * 10
+        result = estimate_tokens(text)
+        chars = len(text)
+        # CJK: chars / 1.5 tokens, so tokens ~ chars * 0.67
+        assert result > 0
+        assert result <= chars  # CJK should never be > 1 token per char
+
+    def test_token_estimate_empty(self):
+        assert estimate_tokens("") == 0
+
+    def test_token_estimate_mixed(self):
+        # Mix of English prose and code
+        text = "Here is some Python code:\n```python\ndef add(a, b):\n    return a + b\n```\n"
+        result = estimate_tokens(text)
+        assert result > 0
+        assert result >= len(text.split())
+
+
+# ── Classifier fallback safety (Fix 2) ───────────────────────────────────────
+
+class TestClassifierFallback:
+    def setup_method(self):
+        self.clf = _clf()
+
+    def test_classify_ambiguous_prompt(self):
+        # "build something like chatgpt but simple" — should be code_generation not unknown
+        a = self.clf.analyze(_req("build something like chatgpt but simple"))
+        assert a.task_type in ("code_generation", "general")
+
+    def test_classify_general_fallback(self):
+        # Completely unrecognisable prompt → "general"
+        a = self.clf.analyze(_req("zzz qqq mmm xxx"))
+        assert a.task_type == "general"
+
+    def test_classify_mixed_signals(self):
+        # Code keywords present but ambiguous
+        a = self.clf.analyze(_req("python database backend api server deployment"))
+        assert a.task_type in ("code_generation", "general")
+
+    def test_classify_short_prompt(self):
+        # Very short, non-greeting → should not crash, return valid type
+        a = self.clf.analyze(_req("fix it"))
+        assert a.task_type in ("code_review", "general", "simple_qa", "conversation")
+
+    def test_classify_multilingual(self):
+        # Non-English prompt — should not return unknown
+        a = self.clf.analyze(_req("日本語で説明してください"))
+        assert a.task_type != "unknown"
+
+    def test_general_complexity_is_mid(self):
+        # general type should map to mid tier (base score 0.40 → mid range 0.30-0.60)
+        # Use a longer prompt (≥15 words) to avoid the expected_short_response modifier.
+        a = self.clf.analyze(_req("zorro quux frobble wibble bloop snorkel frob nork zing plonk baz qux quux grault garply"))
+        assert a.task_type == "general"
+        assert 0.25 <= a.complexity_score <= 0.65
