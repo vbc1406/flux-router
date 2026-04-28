@@ -1,4 +1,24 @@
-"""Tests for response cache and prompt fingerprinting."""
+"""
+File: router/tests/test_cache.py
+
+Purpose:
+Tests for ResponseCache (TTL-based response memoisation), the prompt fingerprint
+function, and the is_cache_eligible predicate.
+
+How to run:
+  pytest -v router/tests/test_cache.py
+  pytest -v router/tests/test_cache.py::TestResponseCache
+
+How to add a test:
+  1. Find the class for the area you are testing.
+  2. Instantiate cache with ResponseCache(ttl_seconds=...) for time-sensitive cases.
+  3. Use _model() to build a throwaway ModelOption fixture.
+
+Test classes:
+  TestFingerprint        — determinism, sensitivity to prompt/system changes
+  TestCacheEligibility   — which request types are skipped (non-deterministic, etc.)
+  TestResponseCache      — get/set, TTL expiry, hit-rate counters, disabled mode
+"""
 from __future__ import annotations
 
 import time

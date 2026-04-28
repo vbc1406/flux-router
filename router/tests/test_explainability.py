@@ -1,4 +1,23 @@
-"""Tests for decision explainability (Fix 5)."""
+"""
+File: router/tests/test_explainability.py
+
+Purpose:
+Tests for the RoutingExplanation field on RoutingDecision — verifies that
+every routed request produces a human-readable explanation with the expected
+fields populated.
+
+How to run:
+  pytest -v router/tests/test_explainability.py
+
+How to add a test:
+  1. Use _engine() for a fresh RoutingEngine, _req(prompt, **kw) for a request.
+  2. Call rr(engine.route(req)) and inspect d.explanation.
+  3. Assert on specific fields: chosen_reason, rejected_models, cost_reasoning, etc.
+
+Test classes:
+  TestExplanationFields   — all explanation fields present and non-empty after routing
+  TestExplainString       — explanation.explain() produces readable human string
+"""
 from __future__ import annotations
 
 import asyncio

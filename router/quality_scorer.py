@@ -24,6 +24,11 @@ if TYPE_CHECKING:
 log = structlog.get_logger(__name__)
 
 # ── Quality dimension weights (must sum to 1.0) ────────────────────────────
+# 🔧 EXTENSION POINT: Add new quality dimensions here.
+# Steps: (1) add a new key + weight (adjust others so they still sum to 1.0),
+#        (2) add a scorer method _score_<name>() below,
+#        (3) call it in score_response() and include it in the weighted sum,
+#        (4) add the field to QualityScore in schemas.py.
 _WEIGHTS = {
     "length":      0.20,
     "format":      0.20,

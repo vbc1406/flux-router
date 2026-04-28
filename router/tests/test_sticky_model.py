@@ -1,5 +1,24 @@
 """
-Tests for Fix 1: Sticky model bias (conversation_id).
+File: router/tests/test_sticky_model.py
+
+Purpose:
+Tests for sticky-model bias — the routing engine prefers the model used in
+previous turns of the same conversation, with configurable strength and
+expiry.
+
+How to run:
+  pytest -v router/tests/test_sticky_model.py
+  pytest -v router/tests/test_sticky_model.py::TestStickyModel
+
+How to add a test:
+  1. Use _engine() for a fresh engine, _req(prompt, conversation_id=..., **kw).
+  2. Route two turns with the same conversation_id and assert the second turn
+     picks the same model (or a higher-tier model if routing_priority overrides).
+  3. For expiry tests, patch time.time() to advance the clock past TTL.
+
+Test classes:
+  TestConversationStore — conversation store CRUD: set, get, expiry, TTL reset
+  TestStickyModel       — routing: bias applied, overridden, expired, last_failed
 
 Covers:
   - same conversation_id prefers the same model on follow-up turns

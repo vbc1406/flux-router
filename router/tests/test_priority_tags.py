@@ -1,16 +1,33 @@
 """
-500 test cases for the priority tags feature (Change 1).
+File: router/tests/test_priority_tags.py
 
-Distribution:
-  100  always-premium
-  100  quality-first
-  100  balanced   (baseline — verifies default behaviour unchanged)
-  100  cost-optimized
-  100  mixed edge cases (plan restrictions, invalid values, interaction with
-       other parameters, proxy mode, confidence threshold, etc.)
+Purpose:
+500 end-to-end tests for the routing_priority tag feature (Change 1).
+All tests run against the full routing stack with no mocking.
 
-All tests run against the full routing stack with no mocking — this exercises
-the end-to-end pipeline on real prompt patterns.
+How to run:
+  pytest -v router/tests/test_priority_tags.py
+  pytest -v router/tests/test_priority_tags.py::TestAlwaysPremium
+
+How to add a test:
+  1. Use _engine() for a fresh engine, _req(prompt, routing_priority=..., **kw).
+  2. Call rr(engine.route(req)) and assert on d.chosen_model.tier or d.cost.
+  3. Add to the class that matches the priority tag being tested.
+
+Test distribution:
+  100  always-premium   (TestAlwaysPremium)
+  100  quality-first    (TestQualityFirst)
+  100  balanced         (TestBalancedBaseline — baseline, default behaviour)
+  100  cost-optimized   (TestCostOptimized)
+  100  edge cases       (TestPriorityEdgeCases — plan limits, invalid values,
+                         proxy mode, confidence threshold interactions)
+
+Test classes:
+  TestAlwaysPremium     — always-premium forces premium tier regardless of complexity
+  TestQualityFirst      — quality-first prefers higher tier with cost tolerance
+  TestBalancedBaseline  — balanced matches default routing (no priority set)
+  TestCostOptimized     — cost-optimized prefers cheapest viable model
+  TestPriorityEdgeCases — plan restrictions, invalid tags, cross-feature interactions
 """
 
 from __future__ import annotations

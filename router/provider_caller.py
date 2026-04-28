@@ -192,6 +192,11 @@ async def call_provider(
     provider = model.provider.lower()
     loop     = asyncio.get_running_loop()
 
+    # 🔧 EXTENSION POINT: Add a new provider here.
+    # Steps: (1) add the provider name to this if/elif chain,
+    #        (2) implement _call_<provider>_sync() below following the existing pattern,
+    #        (3) add the provider's base URL to _OPENAI_COMPAT_BASES if it's OpenAI-compatible,
+    #        (4) add models for that provider to router/models.json.
     if provider == "anthropic":
         fn = lambda: _call_anthropic_sync(model, request, api_key)
     elif provider in _OPENAI_COMPAT_BASES:

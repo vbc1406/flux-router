@@ -1,5 +1,24 @@
 """
-Tests for Fix 4: CircuitBreaker per provider.
+File: router/tests/test_circuit_breaker.py
+
+Purpose:
+Tests for the per-provider CircuitBreaker — state transitions (closed →
+open → half-open → closed), integration with model filtering in the routing
+engine, and recovery-timeout behaviour.
+
+How to run:
+  pytest -v router/tests/test_circuit_breaker.py
+  pytest -v router/tests/test_circuit_breaker.py::TestCircuitBreakerUnit
+
+How to add a test:
+  1. Use CircuitBreaker(failure_threshold=N, recovery_timeout=T) directly for
+     unit tests, or _engine() + _req() for integration tests.
+  2. Call cb.record_failure(provider) / cb.record_success(provider) to drive
+     state, then assert cb.is_open(provider).
+
+Test classes:
+  TestCircuitBreakerUnit          — state machine: open/close/half-open transitions
+  TestCircuitBreakerFiltersModels — routing engine excludes models from open providers
 
 Covers:
   - Circuit starts closed (provider available)

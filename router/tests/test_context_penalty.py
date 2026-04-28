@@ -1,5 +1,24 @@
 """
-Tests for Fix 2: Context length penalty and hard cutoff filter.
+File: router/tests/test_context_penalty.py
+
+Purpose:
+Tests for context-length penalty (Step 9 score adjustment) and the hard
+cutoff filter (Step 4) that drops models whose context window would be
+≥ 90% full.
+
+How to run:
+  pytest -v router/tests/test_context_penalty.py
+  pytest -v router/tests/test_context_penalty.py::TestContextPenaltyFormula
+
+How to add a test:
+  1. Use _engine() + _req(prompt, **kw) for end-to-end routing tests.
+  2. To test the penalty formula directly, import _context_fill_ratio and
+     _context_penalty from routing_engine and call them with synthetic values.
+
+Test classes:
+  TestContextHardCutoff      — models at ≥ 90% fill are excluded from candidates
+  TestContextPenaltyRouting  — long prompts steer routing away from small-window models
+  TestContextPenaltyFormula  — penalty is proportional: mid fill < high fill penalty
 
 Covers:
   - Short prompts route normally (no penalty distortion)

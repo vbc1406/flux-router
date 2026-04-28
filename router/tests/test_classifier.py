@@ -1,4 +1,29 @@
-"""Tests for the request complexity classifier."""
+"""
+File: router/tests/test_classifier.py
+
+Purpose:
+Tests for RequestClassifier — task-type detection, complexity scoring, modifier
+accumulation, token estimation, and sensitivity/fingerprint helpers.
+
+How to run:
+  pytest -v router/tests/test_classifier.py
+  pytest -v router/tests/test_classifier.py::TestComplexityScoring
+
+How to add a test:
+  1. Use _clf() for a fresh classifier, _req(prompt, **kw) for a RoutingRequest.
+  2. Call clf.classify(req) and assert on .task_type or .complexity_score.
+  3. For low-level scoring, call _compute_complexity(req) directly.
+
+Test classes:
+  TestTaskTypeDetection   — keyword → task_type mapping for all 16 types
+  TestComplexityScoring   — base score + modifier stacking
+  TestCacheEligibility    — cache-skip rules (non-deterministic, no_cache flag, etc.)
+  TestFingerprint         — prompt fingerprint stability and sensitivity
+  TestTokenEstimation     — estimate_tokens heuristic accuracy
+  TestSensitivityDetection— sensitivity level detection from prompt content
+  TestTokenEstimation2    — edge cases: empty, unicode, code blocks
+  TestClassifierFallback  — graceful degradation when signals are ambiguous
+"""
 from __future__ import annotations
 
 import pytest

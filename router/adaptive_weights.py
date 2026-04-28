@@ -103,6 +103,12 @@ class AdaptiveWeights:
         self._load()
 
     # ── Public API ──────────────────────────────────────────────────────────
+    # 🔧 EXTENSION POINT: Add new learning signals here.
+    # To track a new quality dimension (e.g., factual accuracy, code correctness):
+    # (1) Add a scorer in quality_scorer.py and include it in _WEIGHTS,
+    # (2) Pass the composite score into record() — no changes needed here unless
+    #     you want separate EMA tracks per dimension (then add a new method following
+    #     the record() pattern and a parallel _state key like "model:task:dimension").
 
     def record(
         self,

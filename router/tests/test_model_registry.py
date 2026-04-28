@@ -1,4 +1,21 @@
-"""Tests for model registry JSON loading (Fix 4)."""
+"""
+File: router/tests/test_model_registry.py
+
+Purpose:
+Tests for ModelRegistry — JSON file loading, hardcoded fallback registry,
+model filtering by tier/capability/provider, and load-tracking helpers.
+
+How to run:
+  pytest -v router/tests/test_model_registry.py
+
+How to add a test:
+  1. Use ModelRegistry() for the default (JSON-backed) registry.
+  2. Use _load_registry_from_json(path) to test custom JSON shapes.
+  3. Assert on registry.all_available_models() or registry.models_for_tier(tier).
+
+Test classes:
+  TestRegistryLoadsFromJson — JSON file loading, field parsing, hardcoded fallback
+"""
 from __future__ import annotations
 
 import json

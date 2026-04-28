@@ -1,19 +1,32 @@
 """
-Tests for Fix 3: Smart retry with typed errors (Flux.complete).
+File: router/tests/test_smart_retry.py
 
-All tests mock _call_model — no real HTTP requests are made.
+Purpose:
+Tests for Flux.complete() smart retry — typed error classification, per-error
+fallback chain selection, retry caps, and response metadata on fallback.
+All tests mock _call_model; no real HTTP requests are made.
 
-Covers:
-  - Successful first call returns FluxResponse with fallback_used=False
-  - RateLimitError triggers rate-limit fallback chain, fallback succeeds
-  - TimeoutError triggers timeout fallback chain
-  - ContentFilterError triggers content-safety fallback chain
-  - ProviderDownError uses rate-limit chain (same-tier alternatives)
-  - AuthenticationError raises immediately (no retry)
-  - max_retries caps the number of attempts
-  - When all models fail, FluxAPIError is raised
-  - fallback_used=True and fallback_reason set on fallback response
-  - Same model is never tried twice (deduplication)
+How to run:
+  pytest -v router/tests/test_smart_retry.py
+  pytest -v router/tests/test_smart_retry.py::TestRetryOnRateLimit
+
+How to add a test:
+  1. Use _flux() for a fresh Flux instance, _req(prompt, **kw) for a request.
+  2. Patch router.flux._call_model with AsyncMock, configure side_effect to
+     raise typed errors (RateLimitError, TimeoutError, etc.) then succeed.
+  3. Assert on response.fallback_used, response.fallback_reason, response.model.
+
+Test classes:
+  TestSuccessPath           — first call succeeds, fallback_used=False
+  TestRetryOnRateLimit      — RateLimitError triggers rate-limit fallback chain
+  TestRetryOnTimeout        — TimeoutError triggers timeout fallback chain
+  TestRetryOnContentFilter  — ContentFilterError triggers content-safety chain
+  TestRetryOnProviderDown   — ProviderDownError uses same-tier alternatives
+  TestNoRetryOnAuthError    — AuthenticationError raises immediately (no retry)
+  TestMaxRetriesRespected   — max_retries caps total attempts
+  TestAllFailRaisesError    — FluxAPIError raised when all models fail
+  TestFallbackMarkedOnResponse — fallback_used=True and fallback_reason populated
+  TestModelDeduplication    — same model never tried twice across retries
 """
 
 from __future__ import annotations
