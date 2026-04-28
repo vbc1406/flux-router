@@ -112,9 +112,11 @@ AB_BLOCKED_SENSITIVITY_LEVELS: set[str] = {"confidential", "restricted"}
 # --- Adaptive Learning ---
 ADAPTIVE_LEARNING_ENABLED: bool  = True
 ADAPTIVE_DECAY_FACTOR: float     = 0.95
-ADAPTIVE_MIN_SAMPLES: int        = 10
+ADAPTIVE_MIN_SAMPLES: int        = 20
 # Change 3: per-customer weights only kick in once we have this many samples.
-PER_CUSTOMER_MIN_SAMPLES: int    = 20
+# Lowered from 20 → 10: per-customer quality varies enough from the global baseline
+# that faster adaptation outweighs the small increase in variance at 10 samples.
+PER_CUSTOMER_MIN_SAMPLES: int    = 10
 ADAPTIVE_WEIGHT_FILE: str        = "router/adaptive_state.json"
 
 # --- Latency Preferences ---

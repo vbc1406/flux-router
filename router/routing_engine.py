@@ -595,6 +595,7 @@ class RoutingEngine:
         exploration_rate = request.exploration_rate
         ab_allowed = (
             exploration_rate > 0.0
+            and not confidence_fallback
             and request.priority in AB_ALLOWED_PRIORITIES
             and analysis.complexity_score < AB_MAX_COMPLEXITY_SCORE
             and analysis.sensitivity_level not in AB_BLOCKED_SENSITIVITY_LEVELS

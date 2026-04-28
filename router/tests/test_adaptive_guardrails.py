@@ -1,9 +1,19 @@
 """Tests for adaptive learning guardrails (Fix 3)."""
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from router.adaptive_weights import AdaptiveWeights, _QUALITY_FLOOR
+import router.adaptive_weights as aw_mod
+from router.adaptive_weights import (
+    AdaptiveWeights,
+    _FORMAT_VERSION,
+    _QUALITY_FLOOR,
+    _ROLLBACK_DROP_THRESHOLD,
+    _WRITE_INTERVAL,
+)
+from router.config import ADAPTIVE_CUSTOMER_LOG_MAX, PER_CUSTOMER_MIN_SAMPLES
 
 
 def _aw() -> AdaptiveWeights:
@@ -102,3 +112,274 @@ class TestSnapshotRollback:
         # Should have rolled back to snapshot with higher avg_quality
         post_rollback_avg = avg_q(aw._state)
         assert post_rollback_avg > 0.10
+
+    def test_rollback_restores_signal_stats(self):
+        aw = _aw()
+        base = 0.80
+        key = "gpt-4o:reasoning"
+        # Seed 1000 signals to trigger a snapshot
+        for _ in range(1000):
+            aw.record("gpt-4o", "reasoning", 0.90, base)
+
+        assert len(aw._snapshots) >= 1
+        # Snapshot must include signal_stats
+        assert "signal_stats" in aw._snapshots[-1]
+        snap_stats = aw._snapshots[-1]["signal_stats"].get(key)
+        assert snap_stats is not None
+
+        # Record the pre-corruption stats mean
+        original_mean = snap_stats["mean"]
+
+        # Poison signal_stats directly (simulates a bad burst corrupting outlier detection)
+        aw._signal_stats[key]["mean"] = 0.01
+        aw._signal_stats[key]["variance"] = 999.0
+
+        # Also corrupt state to trigger rollback threshold
+        for k in list(aw._state.keys()):
+            aw._state[k]["avg_quality"] = 0.10
+
+        aw._check_for_corruption()
+
+        # signal_stats must be restored — mean should be back near original
+        restored_mean = aw._signal_stats[key]["mean"]
+        assert abs(restored_mean - original_mean) < 0.05, (
+            f"signal_stats not restored: got mean={restored_mean}, expected ~{original_mean}"
+        )
+        # Variance must not be the poisoned value
+        assert aw._signal_stats[key]["variance"] < 10.0
+
+
+# ── Issue #1: Slow drift detection ──────────────────────────────────────────
+
+class TestDriftDetection:
+    def test_gradual_drift_triggers_rollback_between_snapshots(self):
+        """Quality that degrades slowly (below snapshot_avg × 0.9) must roll back
+        on any record() call, not only when a new snapshot is taken."""
+        aw = _aw()
+        for _ in range(1000):
+            aw.record("gpt-4o", "code_review", 0.90, 0.80)
+
+        baseline = aw._last_snapshot_avg
+        assert baseline is not None and baseline > 0.70
+
+        # Degrade state to just below the rollback threshold — simulate slow drift
+        # across many signals rather than an instant collapse
+        degraded = baseline * _ROLLBACK_DROP_THRESHOLD - 0.01
+        for k in aw._state:
+            aw._state[k]["avg_quality"] = degraded
+
+        # Must fire on the very next check, not wait for the next 1000-signal snapshot
+        aw._check_for_corruption()
+
+        restored_avg = AdaptiveWeights._avg_quality(aw._state)
+        assert restored_avg > degraded, "rollback did not restore state above degraded level"
+
+    def test_last_snapshot_avg_reset_after_rollback(self):
+        """After a rollback _last_snapshot_avg must equal the snapshot's avg_quality
+        so subsequent signals are compared against the clean baseline."""
+        aw = _aw()
+        for _ in range(1000):
+            aw.record("gpt-4o", "code_review", 0.90, 0.80)
+
+        snap_avg = aw._snapshots[-1]["avg_quality"]
+
+        for k in aw._state:
+            aw._state[k]["avg_quality"] = 0.10
+        aw._check_for_corruption()
+
+        assert aw._last_snapshot_avg == snap_avg
+
+    def test_no_rollback_before_first_snapshot(self):
+        """_check_for_corruption must be a no-op until at least one snapshot exists."""
+        aw = _aw()
+        aw.record("gpt-4o", "code_review", 0.90)
+        # Corrupt state before any snapshot
+        aw._state["gpt-4o:code_review"]["avg_quality"] = 0.01
+        aw._check_for_corruption()
+        # State should remain corrupted — no snapshot to roll back to
+        assert aw._state["gpt-4o:code_review"]["avg_quality"] == 0.01
+
+
+# ── Issue #2: Configurable decay factor ─────────────────────────────────────
+
+class TestCustomDecayFactor:
+    def test_faster_decay_converges_quicker(self):
+        """A key with decay=0.50 should reach a new quality target faster than
+        the default decay=0.95 after the same number of fresh signals."""
+        base = 0.50
+
+        # Warm up both instances to quality ~0.50
+        aw_fast = _aw()
+        aw_slow = _aw()
+        for _ in range(30):
+            aw_fast.record("m", "t", 0.50, base)
+            aw_slow.record("m", "t", 0.50, base)
+
+        # Override decay only on the fast instance
+        aw_fast.set_decay_factor("m", "t", 0.50)
+
+        # Inject high-quality signals — fast decay should embrace them sooner
+        for _ in range(10):
+            aw_fast.record("m", "t", 0.90, base)
+            aw_slow.record("m", "t", 0.90, base)
+
+        fast_avg = aw_fast._state["m:t"]["avg_quality"]
+        slow_avg = aw_slow._state["m:t"]["avg_quality"]
+        assert fast_avg > slow_avg, (
+            f"fast decay ({fast_avg:.4f}) should exceed slow decay ({slow_avg:.4f})"
+        )
+
+    def test_set_decay_factor_stored_per_key(self):
+        aw = _aw()
+        aw.set_decay_factor("model-a", "vision", 0.70)
+        aw.set_decay_factor("model-b", "vision", 0.80)
+        assert aw._decay_overrides["model-a:vision"] == 0.70
+        assert aw._decay_overrides["model-b:vision"] == 0.80
+        # Unrelated key is absent — will fall back to ADAPTIVE_DECAY_FACTOR
+        assert "model-a:reasoning" not in aw._decay_overrides
+
+    def test_set_decay_factor_rejects_invalid_range(self):
+        aw = _aw()
+        for bad in (0.0, 1.0, -0.1, 1.5):
+            with pytest.raises(ValueError):
+                aw.set_decay_factor("m", "t", bad)
+
+    def test_decay_override_used_in_record(self):
+        """Verify the override is actually picked up by record(), not just stored."""
+        aw = _aw()
+        aw.set_decay_factor("m", "t", 0.10)  # extreme: almost no history weight
+        aw.record("m", "t", 0.90, 0.50)
+        # With decay=0.10 starting from base 0.50: avg ≈ 0.10*0.50 + 0.90*0.90 = 0.86
+        assert aw._state["m:t"]["avg_quality"] > 0.80
+
+
+# ── Issue #3: Quality score validation ──────────────────────────────────────
+
+class TestQualityScoreClamping:
+    def test_score_above_1_is_clamped_and_accepted(self):
+        """Scores > 1.0 must be clamped to 1.0 and recorded, not silently dropped."""
+        aw = _aw()
+        aw.record("gpt-4o", "summarization", 1.5)
+        assert "gpt-4o:summarization" in aw._state
+        assert aw._state["gpt-4o:summarization"]["avg_quality"] <= 1.0
+
+    def test_score_below_0_is_clamped_and_accepted(self):
+        aw = _aw()
+        aw.record("gpt-4o", "summarization", -0.3)
+        assert "gpt-4o:summarization" in aw._state
+        assert aw._state["gpt-4o:summarization"]["avg_quality"] >= _QUALITY_FLOOR
+
+    def test_boundary_scores_accepted_without_clamping(self):
+        """Exactly 0.0 and 1.0 are valid — must not be clamped or rejected."""
+        aw = _aw()
+        aw.record("m", "t", 0.0)
+        aw.record("m", "t", 1.0)
+        assert aw._state["m:t"]["sample_count"] == 2
+
+    def test_clamped_score_emits_debug_log(self, monkeypatch):
+        debug_events: list[str] = []
+        monkeypatch.setattr(aw_mod.log, "debug", lambda ev, **_: debug_events.append(ev))
+        aw = AdaptiveWeights(state_file=None)
+        aw.record("m", "t", 2.0)
+        assert "adaptive_quality_clamped" in debug_events
+
+
+# ── Issue #4: Per-customer threshold ────────────────────────────────────────
+
+class TestPerCustomerThreshold:
+    def test_threshold_is_10(self):
+        assert PER_CUSTOMER_MIN_SAMPLES == 10
+
+    def test_custom_weights_activate_at_10_samples(self):
+        """Per-customer EMA must activate exactly at 10 samples, not before."""
+        aw = _aw()
+        base, cid = 0.70, "cust-alpha"
+        for _ in range(9):
+            aw.record("gpt-4o-mini", "classification", 0.92, base, customer_id=cid)
+
+        # 9 samples — per-customer path skipped; global also has 9 < ADAPTIVE_MIN_SAMPLES
+        score = aw.get_adjusted_score("gpt-4o-mini", "classification", base, customer_id=cid)
+        assert score == base
+
+        # 10th sample → per-customer path activates
+        aw.record("gpt-4o-mini", "classification", 0.92, base, customer_id=cid)
+        score = aw.get_adjusted_score("gpt-4o-mini", "classification", base, customer_id=cid)
+        assert score > base
+
+
+# ── Issue #5: Customer log wrap detection ───────────────────────────────────
+
+class TestCustomerLogWrap:
+    def test_log_length_capped_at_maxlen(self):
+        aw = _aw()
+        cid = "cust-fill"
+        for i in range(ADAPTIVE_CUSTOMER_LOG_MAX + 10):
+            aw.record_routing_event(cid, "gpt-4o", "summarization", 0.01 * i)
+        assert len(aw._customer_log[cid]) == ADAPTIVE_CUSTOMER_LOG_MAX
+
+    def test_wrap_emits_debug_log(self, monkeypatch):
+        debug_events: list[str] = []
+        monkeypatch.setattr(aw_mod.log, "debug", lambda ev, **_: debug_events.append(ev))
+        aw = AdaptiveWeights(state_file=None)
+        cid = "cust-wrap"
+        # Fill exactly to capacity, then one more to trigger the wrap path
+        for _ in range(ADAPTIVE_CUSTOMER_LOG_MAX):
+            aw.record_routing_event(cid, "gpt-4o", "reasoning", 0.01)
+        aw.record_routing_event(cid, "gpt-4o", "reasoning", 0.01)
+        assert "adaptive_customer_log_wrapped" in debug_events
+
+    def test_no_wrap_log_below_capacity(self, monkeypatch):
+        debug_events: list[str] = []
+        monkeypatch.setattr(aw_mod.log, "debug", lambda ev, **_: debug_events.append(ev))
+        aw = AdaptiveWeights(state_file=None)
+        cid = "cust-partial"
+        for _ in range(ADAPTIVE_CUSTOMER_LOG_MAX - 1):
+            aw.record_routing_event(cid, "gpt-4o", "reasoning", 0.01)
+        assert "adaptive_customer_log_wrapped" not in debug_events
+
+
+# ── Issue #6: Data migration ─────────────────────────────────────────────────
+
+class TestDataMigration:
+    def test_v0_flat_format_migrated(self, tmp_path):
+        """v0 flat-dict format must be loaded and flagged for immediate flush."""
+        state_file = tmp_path / "state.json"
+        state_file.write_text(json.dumps({"gpt-4o:reasoning": {
+            "avg_quality": 0.80, "adjustment": 0.30, "sample_count": 25,
+        }}))
+        aw = AdaptiveWeights(state_file=str(state_file))
+        assert "gpt-4o:reasoning" in aw._state
+        # Migration must schedule an immediate flush
+        assert aw._dirty >= _WRITE_INTERVAL
+
+    def test_v1_format_migrated(self, tmp_path):
+        """v1 format (global/customers present, no 'version' key) must trigger migration."""
+        state_file = tmp_path / "state.json"
+        state_file.write_text(json.dumps({
+            "global": {"gpt-4o:reasoning": {"avg_quality": 0.80, "sample_count": 5}},
+            "customers": {},
+        }))
+        aw = AdaptiveWeights(state_file=str(state_file))
+        assert "gpt-4o:reasoning" in aw._state
+        assert aw._dirty >= _WRITE_INTERVAL
+
+    def test_v2_format_no_migration(self, tmp_path):
+        """Current v2 format must load cleanly without triggering a migration flush."""
+        state_file = tmp_path / "state.json"
+        state_file.write_text(json.dumps({
+            "version": _FORMAT_VERSION,
+            "global": {"gpt-4o:reasoning": {"avg_quality": 0.80, "sample_count": 5}},
+            "customers": {},
+        }))
+        aw = AdaptiveWeights(state_file=str(state_file))
+        assert "gpt-4o:reasoning" in aw._state
+        assert aw._dirty == 0  # no migration needed — file is already current format
+
+    def test_flush_writes_version_marker(self, tmp_path):
+        """_flush must embed the version key so future loads know the format."""
+        state_file = tmp_path / "state.json"
+        aw = AdaptiveWeights(state_file=str(state_file))
+        aw.record("gpt-4o", "reasoning", 0.80)
+        aw.flush()
+        data = json.loads(state_file.read_text())
+        assert data.get("version") == _FORMAT_VERSION
