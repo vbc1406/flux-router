@@ -467,6 +467,38 @@ class TestConfidenceThreshold:
         # A routing_score of 0.05 is below 0.60 threshold
         assert cheap_model.routing_score < MIN_CONFIDENCE_THRESHOLD
 
+    def test_ab_blocked_when_confidence_fallback(self, monkeypatch):
+        """A/B exploration must never fire after a confidence fallback upgrade.
+
+        Safety invariant: confidence_fallback upgrades to premium precisely because
+        the winner scored too low to be trusted.  Allowing A/B to then downgrade
+        that decision defeats the safety mechanism entirely.
+        """
+        import router.routing_engine as re_mod
+
+        # Raise the threshold to 0.99 so every request triggers confidence_fallback
+        monkeypatch.setattr(re_mod, "MIN_CONFIDENCE_THRESHOLD", 0.99)
+        # Force random() → 0.0 so A/B would fire on every eligible request
+        monkeypatch.setattr(re_mod.random, "random", lambda: 0.0)
+
+        # Use a complex coding prompt — avoids the trivial_request early-exit path
+        # which only fires for short conversations and hardcodes confidence_fallback=False.
+        prompt = (
+            "Implement a thread-safe LRU cache in Python with O(1) get and put. "
+            "Include full type annotations, unit tests, and explain the concurrency strategy."
+        )
+        engine = _engine()
+        for _ in range(20):
+            d = rr(engine.route(_req(prompt, exploration_rate=0.25, plan="business_plan")))
+            # Every request must have triggered confidence_fallback (threshold=0.99)
+            assert d.confidence_fallback, (
+                f"expected confidence_fallback with threshold=0.99, got rule={d.routing_rule_matched!r}"
+            )
+            # A/B must be suppressed — safety overrides experimentation
+            assert "ab_exploration" not in d.routing_rule_matched, (
+                f"A/B exploration fired after confidence fallback: rule={d.routing_rule_matched!r}"
+            )
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CHANGE 3: Per-Customer Adaptive Memory
