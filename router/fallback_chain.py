@@ -1,12 +1,33 @@
 """
-Fallback + retry logic with exponential backoff and jitter.
+File: router/fallback_chain.py
 
-When the primary model fails (rate limit, timeout, provider error), the
-FallbackExecutor walks the pre-built fallback chain from the RoutingDecision,
-introducing per-attempt delays so we don't hammer a recovering provider.
+Purpose:
+Build ordered fallback chains for routing decisions, and execute API calls
+with automatic fallback and exponential backoff when the primary model fails.
 
-The build_fallback_chain() helper is also used by the routing engine to
-populate RoutingDecision.fallback_chain before any call is made.
+Main Classes:
+  FallbackExecutor    — execute_with_fallback(); walks the chain on failure
+
+Key Functions:
+  build_fallback_chain()         — generic 3-step fallback chain (same tier → tier up → best)
+  build_typed_fallback_chains()  — three error-specific chains:
+      rate_limit_chain     → same-tier alternatives (HTTP 429)
+      content_safety_chain → higher-tier alternatives (content policy refusal)
+      timeout_chain        → fastest models by latency
+
+Config Dependencies (all in config.py):
+  FALLBACK_DELAYS       — wait times between attempts [1s, 2s, 5s]
+  FALLBACK_JITTER_MAX   — random jitter added to each delay
+  TIMEOUT_SIMPLE_SECONDS, TIMEOUT_COMPLEX_SECONDS — per-attempt timeouts
+  TIER_ORDER            — tier ordering used for tier-up chain construction
+
+🔧 EXTENSION POINT: to add a new error-type-specific chain (e.g., context_overflow),
+  add a new list inside build_typed_fallback_chains() and add a corresponding field
+  to RoutingDecision in schemas.py.
+
+Things NOT to change without discussion:
+  - The no-retry status codes (400, 401, 403) — these are caller errors, not retriable.
+  - The deduplication logic (seen set) — prevents the same model from being tried twice.
 """
 
 from __future__ import annotations

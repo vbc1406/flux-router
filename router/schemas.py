@@ -1,6 +1,29 @@
 """
-All data models for the routing layer.
-Using Pydantic v2 throughout; these are the contracts between every module.
+File: router/schemas.py
+
+Purpose:
+Pydantic data models that define the contracts between every module in the
+routing layer.  Every public API boundary uses these types — do not pass raw
+dicts between modules.
+
+Main Models:
+  RoutingRequest    — input to RoutingEngine.route(); describes a single LLM request
+  TaskAnalysis      — output of RequestClassifier.analyze(); drives all routing decisions
+  ModelOption       — a single model entry (static metadata + runtime scoring fields)
+  RoutingDecision   — output of RoutingEngine.route(); the complete routing result
+  RoutingExplanation — verbose breakdown of a routing decision (populated when verbose=True)
+  QualityScore      — heuristic quality assessment of a model response
+  CachedResponse    — what the ResponseCache stores per fingerprint
+  FallbackEvent     — audit record of a single fallback attempt
+
+Key Design Rules:
+  - ModelOption has two RUNTIME fields (adjusted_quality, routing_score) that the
+    routing engine sets on .model_copy() instances.  NEVER mutate the registry's
+    ModelOption objects directly — always work on copies.
+  - All new fields on RoutingRequest and RoutingDecision MUST have default values
+    so existing callers that don't set them continue to work.
+  - The "ultra" tier has been removed (Change 8).  The valid tiers are:
+    "free", "cheap", "mid", "premium".  Do not re-add "ultra".
 """
 
 from __future__ import annotations

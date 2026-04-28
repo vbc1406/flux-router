@@ -1,9 +1,33 @@
 """
-Per-user spend tracking with daily and monthly budget enforcement.
+File: router/budget_tracker.py
 
-Keeps everything in memory (fast) and optionally writes through to SQLite
-for persistence across restarts.  The routing engine consults this before
-finalising its model choice so it can downgrade if needed.
+Purpose:
+In-memory per-user spend ledger with daily and monthly budget enforcement.
+The routing engine consults BudgetTracker in Step 12 to determine whether
+the chosen model would exceed the user's plan budget, and if so walks down
+to a cheaper tier.  DailyBudgetTracker handles per-request daily caps
+(request.max_daily_cost) set directly by callers.
+
+Main Classes:
+  BudgetTracker       — plan-level daily/monthly limits (used in routing Step 12)
+  DailyBudgetTracker  — per-customer daily caps (used in routing Step 4b)
+
+Config Dependencies (all in config.py):
+  BUDGET_LIMITS           — daily/monthly limits per plan
+  BUDGET_LEDGER_MAX_PER_USER — max spend records per user (bounded deque)
+
+Key Methods:
+  BudgetTracker.would_exceed_budget(user_id, cost) — call before committing to a model
+  BudgetTracker.record_spend(user_id, amount, ...)  — call after a successful response
+  DailyBudgetTracker.is_cap_exceeded(customer_id, daily_cap) — check daily cap
+
+🔧 EXTENSION POINT: swap DailyBudgetTracker._ledger for a Redis client to share
+  daily spend state across multiple service instances.  The public interface stays
+  the same; only the storage backend changes.
+
+Things NOT to change without discussion:
+  - The TOCTOU-safe lock pattern in would_exceed_budget() (reads plan, daily, monthly
+    under a single lock acquisition to prevent race conditions)
 """
 
 from __future__ import annotations

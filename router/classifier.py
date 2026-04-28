@@ -1,9 +1,34 @@
 """
-Request complexity classifier — pure heuristic, zero external ML.
-Target: < 5 ms per call, including fingerprinting.
+File: router/classifier.py
 
-The classifier's job is to turn a raw RoutingRequest into a TaskAnalysis that
-the routing engine can act on without ever touching the actual model APIs.
+Purpose:
+Convert a raw RoutingRequest into a TaskAnalysis (task_type + complexity_score +
+token estimates + signals).  Pure heuristic — no ML models, no API calls.
+Target latency: < 5 ms per call.
+
+Main Classes:
+  RequestClassifier   — entry point: call analyze(request) to get a TaskAnalysis
+
+Config Dependencies (all in config.py):
+  COMPLEXITY_BASE_SCORES      — base complexity score per task type
+  COMPLEXITY_MODIFIERS        — per-signal additive adjustments
+  TEMPLATE_LINE_VARIATION_THRESHOLD, TEMPLATE_SIMILARITY_RATIO — template detection
+
+Key Methods to Modify:
+  _detect_task_type()   — add new task types here (regex patterns, ordered most-specific first)
+  _extract_signals()    — add new boolean complexity signals here
+  _estimate_output_tokens() — add output token estimates for new task types here
+
+🔧 EXTENSION POINT: to add a new task type, follow these steps:
+  1. Add its base score to COMPLEXITY_BASE_SCORES in config.py
+  2. Add a regex pattern in _detect_task_type() — MORE SPECIFIC patterns must come FIRST
+  3. Add an output token estimate in _estimate_output_tokens()
+  4. Add a test in test_classifier.py
+
+Things NOT to change without discussion:
+  - The ordering of patterns in _detect_task_type() (more specific must precede more general)
+  - The sigmoid normalisation in _compute_complexity() (changing it re-scales all scores)
+  - The priority hard-clamps in _compute_complexity() ("critical" ≥ 0.70, "low" ≤ 0.40)
 """
 
 from __future__ import annotations

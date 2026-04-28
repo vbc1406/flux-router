@@ -1,11 +1,34 @@
 """
-Response cache with prompt fingerprinting.
+File: router/cache.py
 
-Fingerprinting normalises a request to a stable hash so that semantically
-identical prompts (modulo whitespace / filler words / dates) hit the same
-cache entry.  Temperature is included in the hash because high-temperature
-requests expect varied outputs and must NOT share cache entries with
-deterministic (low-temperature) calls.
+Purpose:
+In-memory LRU response cache with prompt fingerprinting.  Fingerprinting
+normalises a request to a stable SHA-256 hash so that semantically identical
+prompts (modulo whitespace, filler words, dates) hit the same cache entry.
+
+Main Classes:
+  ResponseCache   — LRU cache keyed by prompt fingerprint
+
+Key Functions:
+  fingerprint(prompt, system_prompt, history, temperature) — produce a cache key
+  is_cache_eligible(task_type, temperature)               — decide if a request can be cached
+
+Config Dependencies (all in config.py):
+  CACHE_TTL_SECONDS     — entry TTL
+  CACHE_MAX_ENTRIES     — max entries before LRU eviction
+  CACHE_ENABLED         — master switch
+  CACHEABLE_TASK_TYPES  — task types eligible for caching
+  NON_CACHEABLE_TASK_TYPES — task types that must never be cached
+
+🔧 EXTENSION POINT: to add cache normalisation for a new text pattern (e.g., user names),
+  add a compiled regex and substitution call in _normalize().  The fingerprint function
+  uses _normalize() on all text components.
+
+Things NOT to change without discussion:
+  - Temperature is always included in the fingerprint hash — removing it would cause
+    creative (high-temp) requests to return cached deterministic responses.
+  - Only the last 2 history turns are included in the fingerprint — including the full
+    history would cause too many cache misses on long conversations.
 """
 
 from __future__ import annotations

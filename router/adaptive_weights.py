@@ -1,18 +1,34 @@
 """
-Learning loop — model quality adjustments evolve from post-response quality data.
+File: router/adaptive_weights.py
 
-Each (model_id, task_type) pair accumulates an exponentially-decayed running
-average of observed quality scores.  Once enough samples have been collected
-(ADAPTIVE_MIN_SAMPLES), the routing engine uses the adjusted score instead of
-the static registry rating.
+Purpose:
+Track per-(model_id, task_type) response quality using an exponential moving
+average (EMA).  After ADAPTIVE_MIN_SAMPLES observations, the routing engine uses
+the learned adjustment instead of the static registry quality rating.  Supports
+per-customer weights, corruption rollback, configurable decay, and on-disk
+persistence with automatic format migration.
 
-Change 3: Added per-customer adaptive weights.  When a customer_id is supplied,
-the engine looks up that customer's EMA table first (min 20 samples); if not
-enough data exist, it falls back to the global table.  A
-get_customer_routing_profile() helper returns a usage summary.
+Main Classes:
+  AdaptiveWeights
 
-Storage: JSON file on disk.  Writes are debounced (every 50 updates) so hot
-routing paths are not stalled by I/O.  Thread-safe.
+Config Dependencies (all in config.py):
+  ADAPTIVE_MIN_SAMPLES      — minimum signals before adaptive score activates
+  ADAPTIVE_DECAY_FACTOR     — EMA decay; higher = longer memory
+  ADAPTIVE_WEIGHT_FILE      — path to the on-disk JSON state file
+  PER_CUSTOMER_MIN_SAMPLES  — signals before per-customer EMA overrides global
+  ADAPTIVE_CUSTOMER_LOG_MAX — max routing events kept per customer in memory
+
+Key Methods (most likely to be modified):
+  record()                  — feed a quality signal back after a response
+  get_adjusted_score()      — called by the routing engine in Step 8
+  set_decay_factor()        — override decay per (model, task) for hot retraining
+  _check_for_corruption()   — rolls back to last snapshot on quality degradation
+
+Things NOT to change without discussion:
+  - The threading model (_lock guards all state mutations)
+  - The snapshot format (version-controlled; bump _FORMAT_VERSION on change)
+  - The rollback logic (_check_for_corruption + _maybe_snapshot)
+  - The Welford online stats algorithm in _update_signal_stats()
 """
 
 from __future__ import annotations

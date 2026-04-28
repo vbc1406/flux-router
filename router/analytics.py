@@ -1,9 +1,31 @@
 """
-Decision logging with correlation IDs.
+File: router/analytics.py
 
-Every routing decision is appended as a single JSON line to a JSONL file.
-All aggregation queries work over the in-memory list so they're fast;
-the file is the durable audit trail.
+Purpose:
+Append-only JSONL decision log with an in-memory query API.  Every routing
+decision is written as a single JSON line to routing_analytics.jsonl.  Aggregation
+queries (savings, model usage, task distribution, cache/fallback rates) run over
+the in-memory copy for speed; the file is the durable audit trail.
+
+Main Classes:
+  RoutingAnalytics
+
+Config Dependencies (all in config.py):
+  ANALYTICS_MAX_STARTUP_ENTRIES — max JSONL lines replayed into memory on startup
+
+Key Methods to Modify:
+  _decision_to_dict()   — add new fields here when you want to log them
+  update_actual()       — patch a decision entry with post-call actuals (cost, quality, latency)
+  get_savings_summary() — savings report for a user
+
+🔧 EXTENSION POINT: to add a new analytics field:
+  1. Add it to _decision_to_dict() with a sensible default
+  2. Update any query methods that read it to use .get("field", default)
+  3. No migration needed for existing log entries
+
+Things NOT to change without discussion:
+  - The append-only write model (the JSONL file must not be mutated, only appended)
+  - The correlation_id index (_index) — it enables O(1) update_actual() lookups
 """
 
 from __future__ import annotations

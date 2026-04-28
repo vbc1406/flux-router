@@ -1,4 +1,53 @@
-"""Tests for the end-to-end routing engine."""
+"""
+File: router/tests/test_routing.py
+
+Purpose:
+End-to-end tests for the 13-step routing algorithm in RoutingEngine.route().
+Organised by the 9 major change areas (Changes 1–9) plus basic routing helpers.
+
+How to run:
+  pytest -v router/tests/test_routing.py
+  pytest -v router/tests/test_routing.py::TestConfidenceThreshold
+
+How to add a test:
+  1. Find the test class for the feature area you are testing (or create one).
+  2. Copy the pattern of an existing test in that class.
+  3. Use _engine() for a fresh engine, _req(prompt, **kw) for a request,
+     and rr(coro) to run async route() calls synchronously.
+  4. Assert on the fields of the returned RoutingDecision.
+
+Example:
+  def test_my_new_behaviour():
+      # Arrange
+      engine = _engine()
+      req = _req("some prompt", routing_priority="quality-first")
+      # Act
+      d = rr(engine.route(req))
+      # Assert
+      assert d.chosen_model is not None
+      assert d.chosen_model.tier == "premium"
+
+Test classes:
+  TestBasicRouting               — sanity checks: model chosen, rule populated, cost ≥ 0
+  TestCacheIntegration           — cache hit/miss behaviour
+  TestCostCeiling                — MAX_COST_PER_REQUEST enforcement
+  TestPlanRestrictions           — tier access by subscription plan
+  TestModelOverride              — explicit metadata.model override
+  TestSensitivity                — sensitivity level → provider filtering
+  TestHelpers                    — pure helper functions (normalize_cost, tier_for_score, …)
+  TestPriorityTagValidation      — Change 1: routing_priority validation
+  TestPriorityTagWeights         — Change 1: weight presets per priority
+  TestAlwaysPremiumRouting       — Change 1: always-premium bypass
+  TestConfidenceThreshold        — Change 2: low-confidence upgrade + A/B block invariant
+  TestPerCustomerAdaptiveMemory  — Change 3: per-customer EMA
+  TestPerRequestCostCap          — Change 4: max_cost_per_request filter
+  TestDailyBudgetCap             — Change 4: max_daily_cost enforcement
+  TestContextAwareFallbackChains — Change 5: typed fallback chains
+  TestConfigurableExplorationRate— Change 6: A/B exploration rate
+  TestLinearBudgetWalkdown       — Change 7: tier walk-down on budget exhaustion
+  TestUltraCollapse              — Change 8: ultra → premium migration
+  TestProxyMode                  — Change 9: proxy mode validation and response
+"""
 from __future__ import annotations
 
 import asyncio

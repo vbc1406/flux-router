@@ -1,27 +1,51 @@
 """
-Core routing decision engine — the brain of the system.
+File: router/routing_engine.py
 
-Takes a RoutingRequest, runs it through 13 ordered steps, and returns a fully
-populated RoutingDecision with a chosen model, fallback chain, cost estimate,
-and reasoning string.
+Purpose:
+The brain of the routing system.  Takes a RoutingRequest, runs it through 13
+ordered steps, and returns a fully populated RoutingDecision with the chosen
+model, fallback chains, cost estimate, and reasoning string.
 
-All dependencies are injected so the engine is fully testable without hitting
-any real APIs.
+Main Classes:
+  RoutingEngine   — the 13-step decision algorithm
+  ConversationStore — per-conversation model preference (sticky bias)
 
-Changes in this version:
-  Change 1  — routing_priority parameter (always-premium / quality-first /
-               balanced / cost-optimized).  always-premium bypasses Steps 8-10.
-  Change 2  — MIN_CONFIDENCE_THRESHOLD: low-confidence decisions are upgraded
-               to premium automatically.
-  Change 3  — Per-customer adaptive quality memory (customer_id).
-  Change 4  — Per-request and per-day cost caps (max_cost_per_request,
-               max_daily_cost, DailyBudgetTracker).
-  Change 5  — Context-aware typed fallback chains (rate_limit / content_safety
-               / timeout).
-  Change 6  — Configurable A/B exploration rate (exploration_rate per request).
-  Change 7  — Linear tier walk-down replaces weighted budget reselection.
-  Change 8  — "ultra" tier removed; ultra models are now "premium".
-  Change 9  — "proxy" mode: after decision, actually call the provider API.
+Config Dependencies (all in config.py):
+  TIER_BOUNDARIES, TIER_ORDER         — complexity score → model tier mapping
+  SCORING_WEIGHTS                     — quality/cost/latency weights per priority
+  MIN_CONFIDENCE_THRESHOLD            — below this score, upgrade to premium (Step 9b)
+  AB_ALLOWED_PRIORITIES, AB_MAX_*     — A/B exploration guards (Step 10)
+  BUDGET_LIMITS                       — plan spend limits (Step 12)
+  CONVERSATION_STICKY_BIAS_*          — sticky model bonus (Step 9)
+  CONTEXT_PENALTY_*                   — context window fill penalties (Step 9)
+  CIRCUIT_BREAKER_*                   — per-provider failure protection (Step 4)
+
+Key Entry Points:
+  RoutingEngine.route(request)        — call this to get a routing decision
+  RoutingEngine.__init__(...)         — inject all collaborators here
+
+The 13 Steps (in execution order):
+  1  Classify         → RequestClassifier.analyze()
+  2  Cache check      → ResponseCache.get()
+  3  Cost ceiling     → block ruinously expensive requests early
+  4  Hard constraints → filter to viable candidate set
+  4b Daily budget cap → force free tier if daily cap exceeded
+  5  Context compress → shrink prompt if needed
+  6  Model override   → honour explicit caller preference
+  7  Special rules    → trivial requests, anti-gaming, always-premium
+  8  Adaptive quality → AdaptiveWeights.get_adjusted_score()
+  9  Tier + scoring   → pick tier, score by quality/cost/latency, apply sticky bias
+  9b Confidence check → upgrade to premium if winner score < MIN_CONFIDENCE_THRESHOLD
+  10 A/B exploration  → route a fraction to cheaper tier (blocked by confidence_fallback)
+  11 Fallback chains  → build generic + typed chains
+  12 Budget check     → linear tier walk-down if over budget
+  13 Log + return     → analytics, conversation store, daily budget record
+
+Things NOT to change without discussion:
+  - The step ordering (steps have deliberate dependencies)
+  - The confidence_fallback → blocks A/B invariant (Step 9b before Step 10)
+  - The threading model (route() itself is stateless; state lives in collaborators)
+  - The _finalise() method signature (many early-exit paths call it)
 """
 
 from __future__ import annotations
@@ -421,6 +445,9 @@ class RoutingEngine:
         # it overrides the trivial-request and anti-gaming short-circuits below.
         # (The spec says bypass Steps 8-10; we also bypass the trivial shortcut
         # since the caller explicitly asked for premium quality.)
+        # 🔧 EXTENSION POINT: add new routing override rules here (e.g., "always-free",
+        # "latency-first", model cooldown, VIP customer routing).  Follow the
+        # always-premium pattern: check condition, build chain, call _finalise(), return.
 
         if request.routing_priority == "always-premium":
             chosen, rule = _route_always_premium(candidates, analysis)
@@ -476,6 +503,8 @@ class RoutingEngine:
 
         # ══ STEP 8: ADAPTIVE QUALITY ADJUSTMENT ═════════════════════════════
         # Change 3: use customer_id for per-customer EMA when available.
+        # 🔧 EXTENSION POINT: add new quality signals here (e.g., latency-based
+        # quality adjustments, A/B test quality overrides).
         for m in candidates:
             m.adjusted_quality = self._adaptive.get_adjusted_score(
                 model_id    = m.model_id,
@@ -489,6 +518,9 @@ class RoutingEngine:
             candidates = quality_filtered
 
         # ══ STEP 9: TIER SELECTION + SCORING ════════════════════════════════
+        # 🔧 EXTENSION POINT: add new scoring dimensions here (e.g., provider
+        # preference, model cooldown penalty, geographic latency).  Add the new
+        # weight to SCORING_WEIGHTS in config.py and apply it to m.routing_score.
         target_tier     = _get_tier_for_score(analysis.complexity_score)
         tier_candidates = [m for m in candidates if m.tier == target_tier]
         if not tier_candidates:

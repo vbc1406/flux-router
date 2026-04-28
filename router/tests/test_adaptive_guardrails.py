@@ -1,4 +1,43 @@
-"""Tests for adaptive learning guardrails (Fix 3)."""
+"""
+File: router/tests/test_adaptive_guardrails.py
+
+Purpose:
+Tests for the six guardrail improvements made to AdaptiveWeights.  Each test
+class maps to one issue area.
+
+How to run:
+  pytest -v router/tests/test_adaptive_guardrails.py
+  pytest -v router/tests/test_adaptive_guardrails.py::TestDriftDetection
+
+How to add a test:
+  1. Identify the issue area (drift, decay, clamping, threshold, log wrap, migration).
+  2. Add to the corresponding class, or create a new class for a new guardrail.
+  3. Follow the Arrange / Act / Assert pattern (see examples below).
+
+Example:
+  def test_my_guardrail_behaviour():
+      # Arrange
+      aw = _aw()
+      for _ in range(1000):
+          aw.record("model", "task", 0.90, 0.80)
+      # Act
+      aw._state["model:task"]["avg_quality"] = 0.01  # inject corruption
+      aw._check_for_corruption()
+      # Assert
+      assert aw._state["model:task"]["avg_quality"] > 0.01
+
+Test classes:
+  TestOutlierFiltering      — outlier signals (>2σ) are rejected
+  TestMinimumSampleThreshold — adaptive score inactive until ADAPTIVE_MIN_SAMPLES
+  TestQualityFloor          — avg_quality never falls below _QUALITY_FLOOR
+  TestSnapshotRollback      — corruption rollback restores state + signal_stats
+  TestDriftDetection        — Issue 1: gradual drift triggers rollback between snapshots
+  TestCustomDecayFactor     — Issue 2: set_decay_factor() overrides per-key EMA decay
+  TestQualityScoreClamping  — Issue 3: out-of-range scores are clamped, not dropped
+  TestPerCustomerThreshold  — Issue 4: PER_CUSTOMER_MIN_SAMPLES = 10
+  TestCustomerLogWrap       — Issue 5: customer log cap + debug log on wrap
+  TestDataMigration         — Issue 6: v0/v1/v2 on-disk format migration
+"""
 from __future__ import annotations
 
 import json
