@@ -41,3 +41,6 @@ routing_analytics.jsonl
 
 # Packaging
 MANIFEST.in
+
+# Internal docs (not for public repo)
+INTERNAL_README.md

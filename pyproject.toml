@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flux-router"
+version = "1.0.0"
+description = "Intelligent LLM routing engine. Save 30-50% on AI costs automatically."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = {text = "AGPL-3.0-or-later"}
+authors = [{name = "Flux"}]
+keywords = ["llm", "routing", "ai", "cost-optimization", "openai", "anthropic"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "pydantic>=2.0,<3.0",
+    "structlog>=24.0,<25.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0,<9.0",
+    "pytest-cov>=4.0,<6.0",
+    "pytest-timeout>=2.0,<3.0",
+    "mypy>=1.0,<2.0",
+    "ruff>=0.1.0,<1.0",
+    "bandit>=1.7,<2.0",
+    "safety>=3.0,<4.0",
+    "pip-audit>=2.0,<3.0",
+    "hypothesis>=6.0,<7.0",
+]
+
+[project.urls]
+Homepage = "https://flux.dev"
+Documentation = "https://flux.dev/docs"
+Repository = "https://github.com/YOUR_USERNAME/flux"
+Issues = "https://github.com/YOUR_USERNAME/flux/issues"
+
+[tool.setuptools.packages.find]
+include = ["router*"]
+exclude = ["testing*", "tests*"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "B", "S", "C4", "SIM"]
+ignore = ["S101", "S603"]
+
+[tool.ruff.lint.per-file-ignores]
+"router/tests/*" = ["S101", "S105", "S106"]
+
+[tool.pytest.ini_options]
+testpaths = ["router/tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-v --strict-markers --timeout=30"
+markers = [
+    "slow: marks tests as slow",
+    "integration: marks tests requiring external services",
+]
+
+[tool.bandit]
+exclude_dirs = ["router/tests", "testing"]
+skips = ["B101"]
