@@ -43,7 +43,7 @@ from typing import Any
 import structlog
 
 from ._io_utils import safe_resolve
-from .config import ANALYTICS_MAX_STARTUP_ENTRIES
+from .config import ANALYTICS_MAX_STARTUP_ENTRIES, MAX_STATE_FILE_BYTES
 from .schemas import RoutingDecision
 
 log = structlog.get_logger(__name__)
@@ -219,11 +219,34 @@ class RoutingAnalytics:
                 fh.write(json.dumps(entry, default=str) + "\n")
                 fh.flush()
                 os.fsync(fh.fileno())
+            # Restrict to owner read/write — analytics may contain user PII.
+            # Best-effort: chmod can fail on Windows or unusual filesystems.
+            try:
+                os.chmod(self._path, 0o600)
+            except OSError as chmod_exc:
+                log.debug(
+                    "analytics_chmod_failed",
+                    path=str(self._path),
+                    error=str(chmod_exc),
+                )
         except OSError as exc:
             log.warning("analytics_write_failed", error=str(exc))
 
     def _load_existing(self) -> None:
         if not self._path.exists():
+            return
+        try:
+            size = self._path.stat().st_size
+        except OSError as exc:
+            log.warning("analytics_stat_failed", error=str(exc))
+            return
+        if size > MAX_STATE_FILE_BYTES:
+            log.error(
+                "state_file_too_large",
+                path=str(self._path),
+                size=size,
+                limit=MAX_STATE_FILE_BYTES,
+            )
             return
         try:
             lines: list[str] = []

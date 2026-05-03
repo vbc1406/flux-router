@@ -50,6 +50,7 @@ Things NOT to change without discussion:
 
 from __future__ import annotations
 
+import asyncio
 import random
 import threading
 import time
@@ -796,7 +797,7 @@ class RoutingEngine:
 
         for attempt, model in enumerate(models_to_try):
             try:
-                response = await call_provider(model, request, request.provider_api_key)
+                response = await call_provider(model, request, request.provider_api_key.get_secret_value())
                 log.info(
                     "proxy_call_success",
                     cid=request.correlation_id,
@@ -842,8 +843,14 @@ class RoutingEngine:
                         models_to_try.append(m)
                         seen_ids.add(m.model_id)
 
+            except asyncio.CancelledError:
+                # Cancellation must propagate so the event loop can shut down cleanly.
+                raise
             except Exception as exc:
-                log.error(
+                # Last-resort catch: anything not already a ProviderCallError is a
+                # bug or transport-level surprise. Capture the traceback rather
+                # than swallowing it silently, then bail out of the proxy loop.
+                log.exception(
                     "proxy_call_unexpected_error",
                     cid=request.correlation_id,
                     model=model.model_id,

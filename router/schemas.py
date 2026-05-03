@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
 _SAFE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_\-:.]+$")
 _MAX_METADATA_BYTES = 10_000
@@ -145,7 +145,10 @@ class RoutingRequest(BaseModel):
     mode: str = "decision"
     # Provider API key required for proxy mode.  Excluded from serialization/repr
     # to prevent it leaking into logs, analytics, or error messages.
-    provider_api_key: str | None = Field(default=None, repr=False, exclude=True)
+    # SecretStr prevents the key from appearing in repr/str/JSON serialization
+    # (pydantic emits "**********" instead). repr=False/exclude=True kept as defense
+    # in depth. Use .get_secret_value() to extract the raw key for HTTP calls.
+    provider_api_key: SecretStr | None = Field(default=None, repr=False, exclude=True)
 
     # ── Fix 1: Sticky model bias ─────────────────────────────────────────────
     # When provided, the router stores a per-conversation model preference so

@@ -235,9 +235,17 @@ class FallbackExecutor:
                 )
                 return response, model, fallback_events
 
+            except asyncio.CancelledError:
+                # Cancellation must propagate so callers can shut down cleanly.
+                raise
             except Exception as exc:
+                # Provider api_callers raise arbitrary types (HTTP errors, custom
+                # exceptions, asyncio.TimeoutError from wait_for); the fallback
+                # loop is the contract that handles all of them. log.exception
+                # captures the traceback so root causes aren't lost.
                 elapsed   = int(time.monotonic() * 1000) - start_ms
                 reason    = _classify_error(exc)
+                log.exception("api_call_failed", model=model.model_id, reason=reason)
                 status    = getattr(exc, "status_code", None) or getattr(exc, "status", None)
 
                 # 400/401/403 → our fault or auth issue, do not try fallback

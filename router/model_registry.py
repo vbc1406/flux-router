@@ -160,8 +160,15 @@ def _load_registry_from_json() -> dict[str, ModelOption] | None:
             models.append(ModelOption(**m))
         log.info("model_registry_loaded_from_json", count=len(models), path=str(config_path))
         return {m.model_id: m for m in models}
-    except Exception as exc:
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        # OSError: file unreadable. JSONDecodeError: malformed JSON.
+        # KeyError: missing "models" key. TypeError/ValueError: ModelOption(**m)
+        # failure (pydantic ValidationError subclasses ValueError).
         log.warning("model_registry_json_load_failed", error=str(exc))
+        return None
+    except Exception as exc:
+        # Unexpected — capture traceback so unknown failure modes don't vanish.
+        log.exception("model_registry_json_load_unexpected", error=str(exc))
         return None
 
 

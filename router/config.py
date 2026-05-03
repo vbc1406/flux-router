@@ -208,6 +208,23 @@ TIMEOUT_SIMPLE_SECONDS: int = 30
 #   long code generation); lower to fail fast and trigger fallback sooner.
 TIMEOUT_COMPLEX_SECONDS: int = 120
 
+# Per-HTTP-call timeout for provider_caller (urllib.request.urlopen). This bounds
+# a single outbound call to a provider.
+# Why 30s: Anthropic and OpenAI typically respond in 1–30s. A longer timeout means
+# hung threads in the executor pool block other requests; the previous 120s value
+# was effectively unbounded for healthy traffic and starved the pool under failure.
+# Fallback retries handle transient slowness — the per-call timeout should be tight.
+PROVIDER_CALL_TIMEOUT_SECONDS: int = 30
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LOGGING KILL SWITCH
+# ══════════════════════════════════════════════════════════════════════════════
+
+# DEFAULT FALSE. Setting True makes you responsible for downstream PII handling.
+# Only enable for development debugging. When False, no log call in the routing
+# layer should emit prompt content; gate any such call with `if LOG_PROMPTS:`.
+LOG_PROMPTS: bool = os.getenv("FLUX_LOG_PROMPTS", "false").lower() == "true"
+
 # ══════════════════════════════════════════════════════════════════════════════
 # RATE LIMIT PRE-EMPTION
 # ══════════════════════════════════════════════════════════════════════════════
@@ -302,6 +319,14 @@ MAX_CUSTOMERS: int                  = 100_000   # _customer_state size cap
 MAX_ADAPTIVE_KEYS: int              = 50_000    # _state and _signal_stats size cap
 MAX_DECAY_OVERRIDES: int            = 1_000     # _decay_overrides size cap
 RECORD_RATE_PER_CUSTOMER_PER_S: int = 100       # adaptive record() rate-limit budget
+
+# Hard cap on persisted state-file size at load time. A malformed, corrupted, or
+# adversarially-large state/log file would otherwise be slurped into memory and
+# OOM the process during startup. 100 MB is far above any legitimate steady-state
+# footprint (analytics JSONL is bounded by ANALYTICS_MAX_STARTUP_ENTRIES, adaptive
+# JSON by the per-customer/key caps above). When the cap is exceeded, the loader
+# logs an error and starts with empty state rather than crashing.
+MAX_STATE_FILE_BYTES: int = 100_000_000
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LATENCY PREFERENCES

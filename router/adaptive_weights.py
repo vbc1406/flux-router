@@ -37,6 +37,7 @@ import copy
 import json
 import math
 import threading
+import time
 from collections import defaultdict, deque
 from datetime import datetime
 from pathlib import Path
@@ -53,7 +54,9 @@ from .config import (
     MAX_ADAPTIVE_KEYS,
     MAX_CUSTOMERS,
     MAX_DECAY_OVERRIDES,
+    MAX_STATE_FILE_BYTES,
     PER_CUSTOMER_MIN_SAMPLES,
+    RECORD_RATE_PER_CUSTOMER_PER_S,
 )
 
 log = structlog.get_logger(__name__)
@@ -108,6 +111,10 @@ class AdaptiveWeights:
         # Per-(model_id, task_type) EMA decay overrides for hot-deployment retraining.
         # Set via set_decay_factor(); persisted in memory only (re-apply after restart).
         self._decay_overrides: dict[str, float] = {}
+        # Sliding-window timestamps for record() rate-limiting, keyed by
+        # customer_id (or "_global" when no customer is supplied). Guarded by
+        # self._lock alongside the rest of the state.
+        self._record_rate_limit: dict[str, list[float]] = defaultdict(list)
         self._load()
 
     # ── Public API ──────────────────────────────────────────────────────────
@@ -145,6 +152,24 @@ class AdaptiveWeights:
 
         key = f"{model_id}:{task_type}"
         with self._lock:
+            # Per-customer flood protection. Global signals (customer_id=None)
+            # are not rate-limited because the C5 resource caps already protect
+            # global state size; this guard exists so a single customer can't
+            # burn CPU by flooding record() with high-frequency signals.
+            if customer_id is not None:
+                now = time.monotonic()
+                window = self._record_rate_limit[customer_id]
+                window[:] = [t for t in window if now - t < 1.0]
+                if len(window) >= RECORD_RATE_PER_CUSTOMER_PER_S:
+                    log.warning(
+                        "adaptive_record_rate_limited",
+                        customer_id=customer_id,
+                        rate=len(window),
+                        limit=RECORD_RATE_PER_CUSTOMER_PER_S,
+                    )
+                    return
+                window.append(now)
+
             # Resource-exhaustion guard: a flood of unseen customer_ids would
             # grow _customer_state without bound. Once the cap is hit, new
             # customers are still served — they just don't get a per-customer
@@ -473,6 +498,21 @@ class AdaptiveWeights:
         file is upgraded before the next crash window.
         """
         if not (self._path and self._path.exists()):
+            return
+        try:
+            size = self._path.stat().st_size
+        except OSError as exc:
+            log.warning("adaptive_weights_stat_failed", error=str(exc))
+            self._state = {}
+            return
+        if size > MAX_STATE_FILE_BYTES:
+            log.error(
+                "state_file_too_large",
+                path=str(self._path),
+                size=size,
+                limit=MAX_STATE_FILE_BYTES,
+            )
+            self._state = {}
             return
         try:
             with self._path.open("r", encoding="utf-8") as fh:

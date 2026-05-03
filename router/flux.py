@@ -35,6 +35,8 @@ from .classifier import RequestClassifier
 from .context_compressor import ContextCompressor
 from .model_registry import ModelRegistry
 from .routing_engine import RoutingEngine
+from pydantic import SecretStr
+
 from .schemas import ModelOption, RoutingDecision, RoutingRequest
 
 log = structlog.get_logger(__name__)
@@ -70,9 +72,18 @@ class Flux:
                   complete(); not required for route()-only usage.
     """
 
-    def __init__(self, engine: RoutingEngine, api_key: str | None = None) -> None:
-        self._engine  = engine
-        self._api_key = api_key
+    def __init__(
+        self,
+        engine: RoutingEngine,
+        api_key: SecretStr | str | None = None,
+    ) -> None:
+        self._engine = engine
+        if api_key is None or isinstance(api_key, str):
+            self._api_key: SecretStr | None = (
+                SecretStr(api_key) if isinstance(api_key, str) else None
+            )
+        else:
+            self._api_key = api_key
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -196,7 +207,8 @@ class Flux:
         """
         from .provider_caller import ProviderCallError, call_provider
 
-        api_key = self._api_key or request.provider_api_key or ""
+        secret = self._api_key or request.provider_api_key
+        api_key = secret.get_secret_value() if secret is not None else ""
         try:
             return await call_provider(model, request, api_key)
         except ProviderCallError as exc:
@@ -218,7 +230,7 @@ class Flux:
 
 # ── Factory helper ───────────────────────────────────────────────────────────
 
-def make_flux(api_key: str | None = None, **engine_kwargs) -> Flux:
+def make_flux(api_key: SecretStr | str | None = None, **engine_kwargs) -> Flux:
     """
     Convenience factory that wires up a full RoutingEngine with sane defaults
     and returns a ready-to-use Flux instance.

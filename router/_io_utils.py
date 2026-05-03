@@ -14,6 +14,10 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+import structlog
+
+log = structlog.get_logger(__name__)
+
 DEFAULT_BASE_DIR = Path.home() / ".flux"
 
 
@@ -58,6 +62,12 @@ def atomic_write_json(path: Path, data: Any, *, indent: int | None = 2) -> None:
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp_path, path)
+        # Restrict to owner read/write — state files may contain user routing
+        # history. Best-effort: chmod can fail on Windows or unusual filesystems.
+        try:
+            os.chmod(path, 0o600)
+        except OSError as chmod_exc:
+            log.debug("state_file_chmod_failed", path=str(path), error=str(chmod_exc))
     except Exception:
         try:
             os.unlink(tmp_path)

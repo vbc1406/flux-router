@@ -27,6 +27,7 @@ from typing import Any
 
 import structlog
 
+from .config import PROVIDER_CALL_TIMEOUT_SECONDS
 from .schemas import ModelOption, RoutingRequest
 
 log = structlog.get_logger(__name__)
@@ -70,13 +71,15 @@ def _post_json(
     data = json.dumps(body).encode("utf-8")
     req  = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=PROVIDER_CALL_TIMEOUT_SECONDS) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body_text = ""
         try:
             body_text = exc.read().decode("utf-8", errors="replace")
-        except Exception:
+        except (OSError, AttributeError):
+            # OSError: socket already closed by the time we read.
+            # AttributeError: HTTPError without a readable body.
             pass
         log.debug(
             "provider_error_body",
