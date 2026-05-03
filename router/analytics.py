@@ -33,6 +33,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import threading
 from collections import defaultdict
 from datetime import datetime
@@ -41,12 +42,13 @@ from typing import Any
 
 import structlog
 
+from ._io_utils import safe_resolve
 from .config import ANALYTICS_MAX_STARTUP_ENTRIES
 from .schemas import RoutingDecision
 
 log = structlog.get_logger(__name__)
 
-_DEFAULT_LOG_PATH = "router/routing_analytics.jsonl"
+_DEFAULT_LOG_PATH = "routing_analytics.jsonl"
 
 
 class RoutingAnalytics:
@@ -58,8 +60,12 @@ class RoutingAnalytics:
     restore the in-memory list.
     """
 
-    def __init__(self, log_path: str | None = None) -> None:
-        self._path   = Path(log_path or _DEFAULT_LOG_PATH)
+    def __init__(
+        self,
+        log_path: str | None = None,
+        base_dir: str | Path | None = None,
+    ) -> None:
+        self._path   = safe_resolve(log_path or _DEFAULT_LOG_PATH, base_dir)
         self._lock   = threading.Lock()
         self._entries: list[dict[str, Any]] = []
         self._index: dict[str, int] = {}  # correlation_id → index in _entries (O(1) updates)
@@ -211,6 +217,8 @@ class RoutingAnalytics:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with self._path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(entry, default=str) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
         except OSError as exc:
             log.warning("analytics_write_failed", error=str(exc))
 

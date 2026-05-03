@@ -44,11 +44,15 @@ from typing import Any
 
 import structlog
 
+from ._io_utils import atomic_write_json, safe_resolve
 from .config import (
     ADAPTIVE_CUSTOMER_LOG_MAX,
     ADAPTIVE_DECAY_FACTOR,
     ADAPTIVE_MIN_SAMPLES,
     ADAPTIVE_WEIGHT_FILE,
+    MAX_ADAPTIVE_KEYS,
+    MAX_CUSTOMERS,
+    MAX_DECAY_OVERRIDES,
     PER_CUSTOMER_MIN_SAMPLES,
 )
 
@@ -76,8 +80,12 @@ class AdaptiveWeights:
     before that threshold the global weights apply.
     """
 
-    def __init__(self, state_file: str | None = None) -> None:
-        self._path   = Path(state_file or ADAPTIVE_WEIGHT_FILE) if state_file else None
+    def __init__(
+        self,
+        state_file: str | None = None,
+        base_dir: str | Path | None = None,
+    ) -> None:
+        self._path = safe_resolve(state_file, base_dir) if state_file else None
         self._lock   = threading.Lock()
         # Global state: key → {adjustment, sample_count, avg_quality, last_updated}
         self._state: dict[str, dict[str, Any]] = {}
@@ -137,6 +145,34 @@ class AdaptiveWeights:
 
         key = f"{model_id}:{task_type}"
         with self._lock:
+            # Resource-exhaustion guard: a flood of unseen customer_ids would
+            # grow _customer_state without bound. Once the cap is hit, new
+            # customers are still served — they just don't get a per-customer
+            # EMA track until existing customers age out.
+            if (
+                customer_id
+                and customer_id not in self._customer_state
+                and len(self._customer_state) >= MAX_CUSTOMERS
+            ):
+                log.warning(
+                    "adaptive_max_customers_reached",
+                    limit=MAX_CUSTOMERS,
+                    customer_id=customer_id,
+                )
+                customer_id = None
+
+            # Resource-exhaustion guard: drop signals for unseen (model, task)
+            # keys once the global state hits its cap. Existing keys continue
+            # to update normally, so the cap doesn't degrade established
+            # adaptive tracks.
+            if key not in self._state and len(self._state) >= MAX_ADAPTIVE_KEYS:
+                log.warning(
+                    "adaptive_max_keys_reached",
+                    limit=MAX_ADAPTIVE_KEYS,
+                    key=key,
+                )
+                return
+
             # Outlier guard — skip signals far from the running mean
             if not self._should_accept_signal(key, quality_score):
                 log.debug("adaptive_signal_rejected_outlier", key=key, quality=quality_score)
@@ -301,6 +337,16 @@ class AdaptiveWeights:
             raise ValueError(f"decay must be in (0.0, 1.0), got {decay!r}")
         key = f"{model_id}:{task_type}"
         with self._lock:
+            if (
+                key not in self._decay_overrides
+                and len(self._decay_overrides) >= MAX_DECAY_OVERRIDES
+            ):
+                log.warning(
+                    "adaptive_max_decay_overrides_reached",
+                    limit=MAX_DECAY_OVERRIDES,
+                    key=key,
+                )
+                return
             self._decay_overrides[key] = decay
         log.info("adaptive_decay_override_set", key=key, decay=decay)
 
@@ -355,6 +401,13 @@ class AdaptiveWeights:
     def _update_signal_stats(self, key: str, quality: float) -> None:
         """Welford online algorithm for running mean and variance (caller holds lock)."""
         if key not in self._signal_stats:
+            if len(self._signal_stats) >= MAX_ADAPTIVE_KEYS:
+                log.warning(
+                    "adaptive_signal_stats_full",
+                    limit=MAX_ADAPTIVE_KEYS,
+                    key=key,
+                )
+                return
             self._signal_stats[key] = {"mean": quality, "variance": 0.0, "count": 1}
             return
         s = self._signal_stats[key]
@@ -461,14 +514,12 @@ class AdaptiveWeights:
         if not self._path:
             return
         try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
             data = {
                 "version":   _FORMAT_VERSION,
                 "global":    self._state,
                 "customers": {k: dict(v) for k, v in self._customer_state.items()},
             }
-            with self._path.open("w", encoding="utf-8") as fh:
-                json.dump(data, fh, indent=2)
+            atomic_write_json(self._path, data)
             self._dirty = 0
         except OSError as exc:
             log.warning("adaptive_weights_flush_failed", error=str(exc))

@@ -386,7 +386,7 @@ class TestDataMigration:
         state_file.write_text(json.dumps({"gpt-4o:reasoning": {
             "avg_quality": 0.80, "adjustment": 0.30, "sample_count": 25,
         }}))
-        aw = AdaptiveWeights(state_file=str(state_file))
+        aw = AdaptiveWeights(state_file=str(state_file), base_dir=tmp_path)
         assert "gpt-4o:reasoning" in aw._state
         # Migration must schedule an immediate flush
         assert aw._dirty >= _WRITE_INTERVAL
@@ -398,7 +398,7 @@ class TestDataMigration:
             "global": {"gpt-4o:reasoning": {"avg_quality": 0.80, "sample_count": 5}},
             "customers": {},
         }))
-        aw = AdaptiveWeights(state_file=str(state_file))
+        aw = AdaptiveWeights(state_file=str(state_file), base_dir=tmp_path)
         assert "gpt-4o:reasoning" in aw._state
         assert aw._dirty >= _WRITE_INTERVAL
 
@@ -410,14 +410,14 @@ class TestDataMigration:
             "global": {"gpt-4o:reasoning": {"avg_quality": 0.80, "sample_count": 5}},
             "customers": {},
         }))
-        aw = AdaptiveWeights(state_file=str(state_file))
+        aw = AdaptiveWeights(state_file=str(state_file), base_dir=tmp_path)
         assert "gpt-4o:reasoning" in aw._state
         assert aw._dirty == 0  # no migration needed — file is already current format
 
     def test_flush_writes_version_marker(self, tmp_path):
         """_flush must embed the version key so future loads know the format."""
         state_file = tmp_path / "state.json"
-        aw = AdaptiveWeights(state_file=str(state_file))
+        aw = AdaptiveWeights(state_file=str(state_file), base_dir=tmp_path)
         aw.record("gpt-4o", "reasoning", 0.80)
         aw.flush()
         data = json.loads(state_file.read_text())

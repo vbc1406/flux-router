@@ -55,8 +55,18 @@ class ProviderCallError(Exception):
 
 # ── Low-level urllib helper ──────────────────────────────────────────────────
 
-def _post_json(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
-    """Synchronous POST; raises ProviderCallError on HTTP errors."""
+def _post_json(
+    url: str,
+    headers: dict[str, str],
+    body: dict[str, Any],
+    provider_name: str,
+) -> dict[str, Any]:
+    """Synchronous POST; raises ProviderCallError on HTTP errors.
+
+    Error messages intentionally exclude the URL and response body to avoid
+    leaking prompt fragments, partial keys, emails, or org IDs into logs and
+    exception strings. Response bodies are emitted at DEBUG level only.
+    """
     data = json.dumps(body).encode("utf-8")
     req  = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
@@ -68,12 +78,18 @@ def _post_json(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[
             body_text = exc.read().decode("utf-8", errors="replace")
         except Exception:
             pass
+        log.debug(
+            "provider_error_body",
+            provider=provider_name,
+            status=exc.code,
+            body=body_text[:200],
+        )
         raise ProviderCallError(
-            f"HTTP {exc.code} from {url}: {body_text[:200]}",
+            f"HTTP {exc.code} from {provider_name}",
             http_status=exc.code,
         ) from exc
     except urllib.error.URLError as exc:
-        raise ProviderCallError(f"Network error calling {url}: {exc.reason}") from exc
+        raise ProviderCallError(f"Network error calling {provider_name}") from exc
 
 
 # ── Provider-specific callers (synchronous) ──────────────────────────────────
@@ -99,7 +115,9 @@ def _call_anthropic_sync(
         "anthropic-version": "2023-06-01",
         "content-type":      "application/json",
     }
-    data = _post_json("https://api.anthropic.com/v1/messages", headers, body)
+    data = _post_json(
+        "https://api.anthropic.com/v1/messages", headers, body, provider_name="anthropic"
+    )
     try:
         return data["content"][0]["text"]
     except (KeyError, IndexError) as exc:
@@ -111,6 +129,7 @@ def _call_openai_compat_sync(
     request: RoutingRequest,
     api_key: str,
     base_url: str,
+    provider_name: str,
 ) -> str:
     """Shared caller for OpenAI, Groq, and Mistral (all use the same message format)."""
     messages = _build_messages(request)
@@ -129,7 +148,9 @@ def _call_openai_compat_sync(
         "Authorization": f"Bearer {api_key}",
         "Content-Type":  "application/json",
     }
-    data = _post_json(f"{base_url}/chat/completions", headers, body)
+    data = _post_json(
+        f"{base_url}/chat/completions", headers, body, provider_name=provider_name
+    )
     try:
         return data["choices"][0]["message"]["content"]
     except (KeyError, IndexError) as exc:
@@ -160,7 +181,7 @@ def _call_google_sync(
     )
     # Pass key as a header to avoid it appearing in server access logs.
     headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
-    data = _post_json(url, headers, body)
+    data = _post_json(url, headers, body, provider_name="google")
     try:
         return data["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError) as exc:
@@ -201,7 +222,7 @@ async def call_provider(
         fn = lambda: _call_anthropic_sync(model, request, api_key)
     elif provider in _OPENAI_COMPAT_BASES:
         base = _OPENAI_COMPAT_BASES[provider]
-        fn   = lambda: _call_openai_compat_sync(model, request, api_key, base)
+        fn   = lambda: _call_openai_compat_sync(model, request, api_key, base, provider)
     elif provider == "google":
         fn = lambda: _call_google_sync(model, request, api_key)
     else:

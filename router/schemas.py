@@ -28,12 +28,17 @@ Key Design Rules:
 
 from __future__ import annotations
 
+import json
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+_SAFE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_\-:.]+$")
+_MAX_METADATA_BYTES = 10_000
 
 
 @dataclass
@@ -96,19 +101,19 @@ class RoutingExplanation:
 class RoutingRequest(BaseModel):
     """A single request arriving at the router for a model-selection decision."""
 
-    raw_prompt: str
-    message_history: list[dict] = Field(default_factory=list)
-    system_prompt: str | None = None
+    raw_prompt: str = Field(..., max_length=1_000_000)
+    message_history: list[dict] = Field(default_factory=list, max_length=200)
+    system_prompt: str | None = Field(default=None, max_length=100_000)
     max_tokens_requested: int | None = None
-    user_id: str
-    team_id: str | None = None
+    user_id: str = Field(..., min_length=1, max_length=256)
+    team_id: str | None = Field(default=None, max_length=256)
     plan: Literal["free_plan", "pro_plan", "business_plan"] = "pro_plan"
     priority: Literal["low", "normal", "high", "critical"] = "normal"
     required_capabilities: list[str] = Field(default_factory=list)
     prefer_streaming: bool = False
     temperature: float | None = None
     metadata: dict = Field(default_factory=dict)
-    correlation_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    correlation_id: str = Field(default_factory=lambda: str(uuid.uuid4()), max_length=256)
 
     # ── Change 1: Routing priority tags ────────────────────────────────────────
     # Controls model selection strategy:
@@ -116,11 +121,13 @@ class RoutingRequest(BaseModel):
     #   quality-first   → weights quality=0.70, cost=0.20, latency=0.10
     #   balanced        → default behavior (current logic, no change)
     #   cost-optimized  → weights quality=0.30, cost=0.60, latency=0.10
-    routing_priority: str = "balanced"
+    routing_priority: Literal[
+        "always-premium", "quality-first", "balanced", "cost-optimized"
+    ] = "balanced"
 
     # ── Change 3: Per-customer adaptive memory ──────────────────────────────────
     # When provided, per-customer adaptive quality scores are used after 20+ samples.
-    customer_id: str | None = None
+    customer_id: str | None = Field(default=None, max_length=256)
 
     # ── Change 4: Per-request and per-day cost caps ─────────────────────────────
     # max_cost_per_request: models exceeding this estimate are filtered in Step 4.
@@ -144,7 +151,21 @@ class RoutingRequest(BaseModel):
     # When provided, the router stores a per-conversation model preference so
     # that follow-up messages stay on the same model unless scores diverge by
     # more than the sticky bias threshold.
-    conversation_id: str | None = None
+    conversation_id: str | None = Field(default=None, max_length=256)
+
+    @field_validator("user_id", "team_id", "customer_id", "conversation_id")
+    @classmethod
+    def _safe_id(cls, v: str | None) -> str | None:
+        if v is not None and not _SAFE_ID_PATTERN.match(v):
+            raise ValueError("ID contains unsafe characters")
+        return v
+
+    @field_validator("metadata")
+    @classmethod
+    def _metadata_size_limit(cls, v: dict) -> dict:
+        if len(json.dumps(v, default=str)) > _MAX_METADATA_BYTES:
+            raise ValueError(f"metadata too large (max {_MAX_METADATA_BYTES} bytes)")
+        return v
 
 
 class TaskAnalysis(BaseModel):

@@ -290,6 +290,20 @@ PER_CUSTOMER_MIN_SAMPLES: int = 10
 ADAPTIVE_WEIGHT_FILE: str = "router/adaptive_state.json"
 
 # ══════════════════════════════════════════════════════════════════════════════
+# RESOURCE LIMITS (DoS protection)
+# ══════════════════════════════════════════════════════════════════════════════
+# Hard caps on adaptive-state cardinality. A malicious or buggy caller passing
+# fresh (model_id, task_type, customer_id) tuples on every request would
+# otherwise grow these dicts without bound until OOM. When a cap is reached,
+# new keys are rejected with a structured warning; existing keys continue to
+# update normally.
+
+MAX_CUSTOMERS: int                  = 100_000   # _customer_state size cap
+MAX_ADAPTIVE_KEYS: int              = 50_000    # _state and _signal_stats size cap
+MAX_DECAY_OVERRIDES: int            = 1_000     # _decay_overrides size cap
+RECORD_RATE_PER_CUSTOMER_PER_S: int = 100       # adaptive record() rate-limit budget
+
+# ══════════════════════════════════════════════════════════════════════════════
 # LATENCY PREFERENCES
 # ══════════════════════════════════════════════════════════════════════════════
 
