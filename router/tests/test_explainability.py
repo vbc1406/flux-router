@@ -18,12 +18,11 @@ Test classes:
   TestExplanationFields   — all explanation fields present and non-empty after routing
   TestExplainString       — explanation.explain() produces readable human string
 """
+
 from __future__ import annotations
 
 import asyncio
 import uuid
-
-import pytest
 
 from router.adaptive_weights import AdaptiveWeights
 from router.analytics import RoutingAnalytics
@@ -33,15 +32,15 @@ from router.classifier import RequestClassifier
 from router.context_compressor import ContextCompressor
 from router.model_registry import ModelRegistry
 from router.routing_engine import RoutingEngine
-from router.schemas import RoutingDecision, RoutingExplanation, RoutingRequest
+from router.schemas import RoutingDecision, RoutingRequest
 
 
 def _engine() -> RoutingEngine:
-    registry   = ModelRegistry()
-    cache      = ResponseCache(enabled=False)
-    adaptive   = AdaptiveWeights(state_file=None)
-    analytics  = RoutingAnalytics(log_path=None)
-    budget     = BudgetTracker()
+    registry = ModelRegistry()
+    cache = ResponseCache(enabled=False)
+    adaptive = AdaptiveWeights(state_file=None)
+    analytics = RoutingAnalytics(log_path=None)
+    budget = BudgetTracker()
     compressor = ContextCompressor()
     classifier = RequestClassifier(cache)
     return RoutingEngine(registry, classifier, cache, budget, adaptive, compressor, analytics)
@@ -86,7 +85,7 @@ class TestExplanationFields:
     def test_verbose_flag(self):
         prompt = "Please explain how neural networks work and what backpropagation does"
         d_verbose = _route(prompt, verbose=True)
-        d_quiet   = _route(prompt, verbose=False)
+        d_quiet = _route(prompt, verbose=False)
         assert d_verbose.explanation is not None
         assert d_quiet.explanation is None
 

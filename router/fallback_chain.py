@@ -76,10 +76,7 @@ def build_fallback_chain(
     seen: set[str] = {chosen.model_id}
 
     # 1. Same-tier alternative (prefer highest routing_score)
-    same_tier = [
-        m for m in candidates
-        if m.tier == chosen.tier and m.model_id not in seen
-    ]
+    same_tier = [m for m in candidates if m.tier == chosen.tier and m.model_id not in seen]
     if same_tier:
         # Sort by routing_score then adjusted_quality (both may be 0 for non-scored models)
         same_tier.sort(key=lambda m: (m.routing_score, m.adjusted_quality), reverse=True)
@@ -100,8 +97,10 @@ def build_fallback_chain(
     remaining = [m for m in candidates if m.model_id not in seen]
     if remaining:
         remaining.sort(
-            key=lambda m: (_TIER_ORDER.index(m.tier) if m.tier in _TIER_ORDER else 0,
-                           m.adjusted_quality),
+            key=lambda m: (
+                _TIER_ORDER.index(m.tier) if m.tier in _TIER_ORDER else 0,
+                m.adjusted_quality,
+            ),
             reverse=True,
         )
         chain.append(remaining[0])
@@ -134,10 +133,7 @@ def build_typed_fallback_chains(
     seen = {chosen.model_id}
 
     # ── Rate-limit chain: same tier, different provider ──────────────────────
-    rate_limit = [
-        m for m in candidates
-        if m.tier == chosen.tier and m.model_id not in seen
-    ]
+    rate_limit = [m for m in candidates if m.tier == chosen.tier and m.model_id not in seen]
     rate_limit.sort(key=lambda m: (m.routing_score, m.adjusted_quality), reverse=True)
     rate_limit_chain = rate_limit[:max_chain]
 
@@ -147,8 +143,7 @@ def build_typed_fallback_chains(
         chosen_idx = _TIER_ORDER.index(chosen.tier)
         for up_idx in range(chosen_idx + 1, len(_TIER_ORDER)):
             tier_up = [
-                m for m in candidates
-                if m.tier == _TIER_ORDER[up_idx] and m.model_id not in seen
+                m for m in candidates if m.tier == _TIER_ORDER[up_idx] and m.model_id not in seen
             ]
             tier_up.sort(key=lambda m: m.adjusted_quality, reverse=True)
             content_safety_chain.extend(tier_up)
@@ -204,8 +199,8 @@ class FallbackExecutor:
             is_fallback = attempt > 0
 
             if is_fallback:
-                delay_base  = FALLBACK_DELAYS[min(attempt - 1, len(FALLBACK_DELAYS) - 1)]
-                jitter      = random.uniform(0, FALLBACK_JITTER_MAX)
+                delay_base = FALLBACK_DELAYS[min(attempt - 1, len(FALLBACK_DELAYS) - 1)]
+                jitter = random.uniform(0, FALLBACK_JITTER_MAX)
                 total_delay = delay_base + jitter
                 log.info(
                     "fallback_waiting",
@@ -221,7 +216,7 @@ class FallbackExecutor:
                     api_caller(request, model),
                     timeout=float(timeout),
                 )
-                elapsed  = int(time.monotonic() * 1000) - start_ms
+                elapsed = int(time.monotonic() * 1000) - start_ms
 
                 # Treat empty/broken response as a failure for non-trivial tasks
                 if isinstance(response, str) and len(response) < 5:
@@ -243,10 +238,10 @@ class FallbackExecutor:
                 # exceptions, asyncio.TimeoutError from wait_for); the fallback
                 # loop is the contract that handles all of them. log.exception
                 # captures the traceback so root causes aren't lost.
-                elapsed   = int(time.monotonic() * 1000) - start_ms
-                reason    = _classify_error(exc)
+                elapsed = int(time.monotonic() * 1000) - start_ms
+                reason = _classify_error(exc)
                 log.exception("api_call_failed", model=model.model_id, reason=reason)
-                status    = getattr(exc, "status_code", None) or getattr(exc, "status", None)
+                status = getattr(exc, "status_code", None) or getattr(exc, "status", None)
 
                 # 400/401/403 → our fault or auth issue, do not try fallback
                 if status in _NO_RETRY_STATUSES:
@@ -258,23 +253,27 @@ class FallbackExecutor:
                     )
                     raise
 
-                next_model_id = models_to_try[attempt + 1].model_id if attempt + 1 < len(models_to_try) else None
+                next_model_id = (
+                    models_to_try[attempt + 1].model_id
+                    if attempt + 1 < len(models_to_try)
+                    else None
+                )
                 event = FallbackEvent(
-                    correlation_id  = request.correlation_id,
-                    failed_model    = model.model_id,
-                    reason          = reason,
-                    http_status     = status,
-                    latency_ms      = elapsed,
-                    next_model      = next_model_id,
-                    attempt_number  = attempt,
+                    correlation_id=request.correlation_id,
+                    failed_model=model.model_id,
+                    reason=reason,
+                    http_status=status,
+                    latency_ms=elapsed,
+                    next_model=next_model_id,
+                    attempt_number=attempt,
                 )
                 fallback_events.append(event)
 
                 self._analytics.update_actual(
-                    correlation_id       = request.correlation_id,
-                    fallback_used        = True,
-                    fallback_models_tried= [e.failed_model for e in fallback_events],
-                    fallback_reasons     = [e.reason for e in fallback_events],
+                    correlation_id=request.correlation_id,
+                    fallback_used=True,
+                    fallback_models_tried=[e.failed_model for e in fallback_events],
+                    fallback_reasons=[e.reason for e in fallback_events],
                 )
 
                 log.warning(
@@ -291,6 +290,7 @@ class FallbackExecutor:
 
 
 # ── Error helpers ────────────────────────────────────────────────────────────
+
 
 class _ResponseTooShortError(Exception):
     pass
@@ -309,7 +309,7 @@ def _classify_error(exc: Exception) -> str:
         return "auth_error"
 
     name = type(exc).__name__
-    msg  = str(exc).lower()
+    msg = str(exc).lower()
     if "timeout" in name.lower() or "timeout" in msg:
         return "timeout"
     if isinstance(exc, _ResponseTooShortError):

@@ -22,9 +22,10 @@ Example:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import structlog
+from pydantic import SecretStr
 
 from . import errors as err
 from .adaptive_weights import AdaptiveWeights
@@ -35,8 +36,6 @@ from .classifier import RequestClassifier
 from .context_compressor import ContextCompressor
 from .model_registry import ModelRegistry
 from .routing_engine import RoutingEngine
-from pydantic import SecretStr
-
 from .schemas import ModelOption, RoutingDecision, RoutingRequest
 
 log = structlog.get_logger(__name__)
@@ -55,10 +54,10 @@ class FluxResponse:
         fallback_reason — The error category that triggered fallback, or None.
     """
 
-    text:           str
-    model:          ModelOption
-    decision:       RoutingDecision
-    fallback_used:  bool        = False
+    text: str
+    model: ModelOption
+    decision: RoutingDecision
+    fallback_used: bool = False
     fallback_reason: str | None = None
 
 
@@ -93,7 +92,7 @@ class Flux:
 
     async def complete(
         self,
-        prompt:      str,
+        prompt: str,
         max_retries: int = 2,
         **request_kwargs,
     ) -> FluxResponse:
@@ -108,16 +107,16 @@ class Flux:
             AuthenticationError — immediately, never retried.
             FluxAPIError        — after all retries are exhausted.
         """
-        request  = self._build_request(prompt, **request_kwargs)
+        request = self._build_request(prompt, **request_kwargs)
         decision = await self._engine.route(request)
 
         models_to_try: list[ModelOption] = []
         if decision.chosen_model:
             models_to_try.append(decision.chosen_model)
 
-        seen_ids:   set[str] = {m.model_id for m in models_to_try}
+        seen_ids: set[str] = {m.model_id for m in models_to_try}
         last_error: str | None = None
-        attempts:   int = 0
+        attempts: int = 0
 
         for model in models_to_try:
             if attempts > max_retries:
@@ -132,11 +131,11 @@ class Flux:
                     fallback=attempts > 0,
                 )
                 return FluxResponse(
-                    text           = text,
-                    model          = model,
-                    decision       = decision,
-                    fallback_used  = attempts > 0,
-                    fallback_reason= last_error,
+                    text=text,
+                    model=model,
+                    decision=decision,
+                    fallback_used=attempts > 0,
+                    fallback_reason=last_error,
                 )
 
             except err.AuthenticationError:
@@ -213,7 +212,7 @@ class Flux:
             return await call_provider(model, request, api_key)
         except ProviderCallError as exc:
             status = exc.status_code
-            msg    = str(exc).lower()
+            msg = str(exc).lower()
 
             if status in (401, 403):
                 raise err.AuthenticationError(str(exc)) from exc
@@ -230,6 +229,7 @@ class Flux:
 
 # ── Factory helper ───────────────────────────────────────────────────────────
 
+
 def make_flux(api_key: SecretStr | str | None = None, **engine_kwargs) -> Flux:
     """
     Convenience factory that wires up a full RoutingEngine with sane defaults
@@ -240,24 +240,20 @@ def make_flux(api_key: SecretStr | str | None = None, **engine_kwargs) -> Flux:
         analytics_log_path  — path for analytics JSONL (default: None = disabled).
         cache_enabled       — bool, default True.
     """
-    registry   = ModelRegistry()
-    cache      = ResponseCache(enabled=engine_kwargs.pop("cache_enabled", True))
-    adaptive   = AdaptiveWeights(
-        state_file=engine_kwargs.pop("adaptive_state_file", None)
-    )
-    analytics  = RoutingAnalytics(
-        log_path=engine_kwargs.pop("analytics_log_path", None)
-    )
-    budget     = BudgetTracker()
+    registry = ModelRegistry()
+    cache = ResponseCache(enabled=engine_kwargs.pop("cache_enabled", True))
+    adaptive = AdaptiveWeights(state_file=engine_kwargs.pop("adaptive_state_file", None))
+    analytics = RoutingAnalytics(log_path=engine_kwargs.pop("analytics_log_path", None))
+    budget = BudgetTracker()
     compressor = ContextCompressor()
     classifier = RequestClassifier(cache)
-    engine     = RoutingEngine(
-        model_registry     = registry,
-        classifier         = classifier,
-        cache              = cache,
-        budget_tracker     = budget,
-        adaptive_weights   = adaptive,
-        context_compressor = compressor,
-        analytics          = analytics,
+    engine = RoutingEngine(
+        model_registry=registry,
+        classifier=classifier,
+        cache=cache,
+        budget_tracker=budget,
+        adaptive_weights=adaptive,
+        context_compressor=compressor,
+        analytics=analytics,
     )
     return Flux(engine, api_key=api_key)

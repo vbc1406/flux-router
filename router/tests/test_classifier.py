@@ -24,9 +24,8 @@ Test classes:
   TestTokenEstimation2    — edge cases: empty, unicode, code blocks
   TestClassifierFallback  — graceful degradation when signals are ambiguous
 """
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from router.cache import ResponseCache
 from router.classifier import RequestClassifier, _compute_complexity, estimate_tokens
@@ -48,6 +47,7 @@ def _req(prompt: str, **kw) -> RoutingRequest:
 
 
 # ── Task-type detection ──────────────────────────────────────────────────────
+
 
 class TestTaskTypeDetection:
     def setup_method(self):
@@ -122,6 +122,7 @@ class TestTaskTypeDetection:
 
 # ── Complexity scoring ───────────────────────────────────────────────────────
 
+
 class TestComplexityScoring:
     def setup_method(self):
         self.clf = _clf()
@@ -134,13 +135,15 @@ class TestComplexityScoring:
         assert score < 0.30
 
     def test_code_gen_mid(self):
-        score = self.clf.analyze(_req("Write a Python function to reverse a linked list")).complexity_score
+        score = self.clf.analyze(
+            _req("Write a Python function to reverse a linked list")
+        ).complexity_score
         assert 0.25 < score < 0.80
 
     def test_math_reasoning_high(self):
-        score = self.clf.analyze(_req(
-            "Prove ∑(1/n²) = π²/6 using Fourier analysis. Show all derivation steps."
-        )).complexity_score
+        score = self.clf.analyze(
+            _req("Prove ∑(1/n²) = π²/6 using Fourier analysis. Show all derivation steps.")
+        ).complexity_score
         assert score >= 0.55
 
     def test_priority_critical_floor(self):
@@ -148,10 +151,12 @@ class TestComplexityScoring:
         assert score >= 0.70
 
     def test_priority_low_ceiling(self):
-        score = self.clf.analyze(_req(
-            "Implement a complete compiler from scratch with optimisation passes",
-            priority="low"
-        )).complexity_score
+        score = self.clf.analyze(
+            _req(
+                "Implement a complete compiler from scratch with optimisation passes",
+                priority="low",
+            )
+        ).complexity_score
         assert score <= 0.40
 
     def test_score_bounded(self):
@@ -173,6 +178,7 @@ class TestComplexityScoring:
 
 
 # ── Cache eligibility ────────────────────────────────────────────────────────
+
 
 class TestCacheEligibility:
     def setup_method(self):
@@ -209,6 +215,7 @@ class TestCacheEligibility:
 
 # ── Fingerprint stability ────────────────────────────────────────────────────
 
+
 class TestFingerprint:
     def setup_method(self):
         self.clf = _clf()
@@ -235,6 +242,7 @@ class TestFingerprint:
 
 # ── Token estimation ─────────────────────────────────────────────────────────
 
+
 class TestTokenEstimation:
     def setup_method(self):
         self.clf = _clf()
@@ -253,6 +261,7 @@ class TestTokenEstimation:
 
 
 # ── Sensitivity detection ─────────────────────────────────────────────────────
+
 
 class TestSensitivityDetection:
     def setup_method(self):
@@ -275,6 +284,7 @@ class TestSensitivityDetection:
 
 
 # ── Token estimation (Fix 1) ──────────────────────────────────────────────────
+
 
 class TestTokenEstimation2:
     def test_token_estimate_english(self):
@@ -315,6 +325,7 @@ class TestTokenEstimation2:
 
 # ── Classifier fallback safety (Fix 2) ───────────────────────────────────────
 
+
 class TestClassifierFallback:
     def setup_method(self):
         self.clf = _clf()
@@ -347,6 +358,10 @@ class TestClassifierFallback:
     def test_general_complexity_is_mid(self):
         # general type should map to mid tier (base score 0.40 → mid range 0.30-0.60)
         # Use a longer prompt (≥15 words) to avoid the expected_short_response modifier.
-        a = self.clf.analyze(_req("zorro quux frobble wibble bloop snorkel frob nork zing plonk baz qux quux grault garply"))
+        a = self.clf.analyze(
+            _req(
+                "zorro quux frobble wibble bloop snorkel frob nork zing plonk baz qux quux grault garply"
+            )
+        )
         assert a.task_type == "general"
         assert 0.25 <= a.complexity_score <= 0.65

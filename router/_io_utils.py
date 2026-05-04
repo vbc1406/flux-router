@@ -37,9 +37,7 @@ def safe_resolve(path_input: str | Path, base: Path | str | None = None) -> Path
     try:
         resolved.relative_to(base_resolved)
     except ValueError as exc:
-        raise ValueError(
-            f"Path {resolved} is outside allowed base {base_resolved}"
-        ) from exc
+        raise ValueError(f"Path {resolved} is outside allowed base {base_resolved}") from exc
     return resolved
 
 

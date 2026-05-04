@@ -53,20 +53,20 @@ from .schemas import CachedResponse, ModelOption
 log = structlog.get_logger(__name__)
 
 # Regex patterns compiled once at import time for < 1 ms fingerprinting.
-_WHITESPACE_RE   = re.compile(r"\s+")
+_WHITESPACE_RE = re.compile(r"\s+")
 _TIME_VARIANT_RE = re.compile(
     r"\b(today|now|currently|yesterday|tomorrow|tonight|this\s+\w+)\b",
     re.IGNORECASE,
 )
-_DATE_ISO_RE     = re.compile(r"\b\d{4}[-/]\d{2}[-/]\d{2}\b")
-_DATE_HUMAN_RE   = re.compile(
+_DATE_ISO_RE = re.compile(r"\b\d{4}[-/]\d{2}[-/]\d{2}\b")
+_DATE_HUMAN_RE = re.compile(
     r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
     r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|"
     r"dec(?:ember)?)\s+\d{1,2},?\s+\d{4}\b",
     re.IGNORECASE,
 )
-_TIMESTAMP_RE    = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?\b", re.IGNORECASE)
-_FILLER_RE       = re.compile(
+_TIMESTAMP_RE = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?\b", re.IGNORECASE)
+_FILLER_RE = re.compile(
     r"\b(please|can you|could you|i want you to|i need you to|hey|hi there|"
     r"kindly|would you|will you)\b",
     re.IGNORECASE,
@@ -112,7 +112,7 @@ def fingerprint(
         parts.append("SYS:" + _normalize(system_prompt))
 
     for msg in history[-2:]:
-        role    = msg.get("role", "")
+        role = msg.get("role", "")
         content = msg.get("content", "")
         if isinstance(content, str):
             parts.append(f"{role}:{_normalize(content)}")
@@ -155,7 +155,7 @@ class _CacheEntry:
     __slots__ = ("response", "expires_at")
 
     def __init__(self, response: CachedResponse, ttl: int) -> None:
-        self.response   = response
+        self.response = response
         self.expires_at = time.monotonic() + ttl
 
 
@@ -173,14 +173,14 @@ class ResponseCache:
         self,
         max_entries: int = CACHE_MAX_ENTRIES,
         ttl_seconds: int = CACHE_TTL_SECONDS,
-        enabled: bool    = CACHE_ENABLED,
+        enabled: bool = CACHE_ENABLED,
     ) -> None:
         self._store: OrderedDict[str, _CacheEntry] = OrderedDict()
-        self._max   = max_entries
-        self._ttl   = ttl_seconds
+        self._max = max_entries
+        self._ttl = ttl_seconds
         self._enabled = enabled
-        self._lock  = threading.Lock()
-        self._hits  = 0
+        self._lock = threading.Lock()
+        self._hits = 0
         self._misses = 0
 
     # ── Public API ──────────────────────────────────────────────────────────
@@ -223,6 +223,7 @@ class ResponseCache:
             return
         effective_ttl = ttl if ttl is not None else self._ttl
         from .schemas import CachedResponse  # local import to avoid circular at module level
+
         cached = CachedResponse(
             fingerprint=fp,
             response_text=response_text,
@@ -248,8 +249,8 @@ class ResponseCache:
         with self._lock:
             total = self._hits + self._misses
             return {
-                "hit_rate":      self._hits / total if total > 0 else 0.0,
-                "total_hits":    self._hits,
-                "total_misses":  self._misses,
+                "hit_rate": self._hits / total if total > 0 else 0.0,
+                "total_hits": self._hits,
+                "total_misses": self._misses,
                 "entries_count": len(self._store),
             }

@@ -65,8 +65,8 @@ class RoutingAnalytics:
         log_path: str | None = None,
         base_dir: str | Path | None = None,
     ) -> None:
-        self._path   = safe_resolve(log_path or _DEFAULT_LOG_PATH, base_dir)
-        self._lock   = threading.Lock()
+        self._path = safe_resolve(log_path or _DEFAULT_LOG_PATH, base_dir)
+        self._lock = threading.Lock()
         self._entries: list[dict[str, Any]] = []
         self._index: dict[str, int] = {}  # correlation_id → index in _entries (O(1) updates)
         self._load_existing()
@@ -95,9 +95,11 @@ class RoutingAnalytics:
         """Record a cache hit (no model was called)."""
         entry: dict[str, Any] = {
             "correlation_id": correlation_id,
-            "timestamp":      datetime.utcnow().isoformat(),
-            "cache_hit":      True,
-            "chosen_model":   getattr(cached, "model_used", {}).model_id if hasattr(getattr(cached, "model_used", None), "model_id") else "cached",
+            "timestamp": datetime.utcnow().isoformat(),
+            "cache_hit": True,
+            "chosen_model": getattr(cached, "model_used", {}).model_id
+            if hasattr(getattr(cached, "model_used", None), "model_id")
+            else "cached",
             "estimated_cost": 0.0,
         }
         if user_id:
@@ -125,28 +127,36 @@ class RoutingAnalytics:
             if idx is None:
                 return
             entry = self._entries[idx]
-            if actual_cost    is not None: entry["actual_cost"]    = actual_cost
-            if quality_score  is not None: entry["quality_score"]  = quality_score
-            if latency_ms     is not None: entry["latency_ms"]     = latency_ms
-            if input_tokens   is not None: entry["input_tokens"]   = input_tokens
-            if output_tokens  is not None: entry["output_tokens"]  = output_tokens
-            if fallback_used:              entry["fallback_used"]  = fallback_used
-            if fallback_models_tried:      entry["fallback_models_tried"] = fallback_models_tried
-            if fallback_reasons:           entry["fallback_reasons"] = fallback_reasons
+            if actual_cost is not None:
+                entry["actual_cost"] = actual_cost
+            if quality_score is not None:
+                entry["quality_score"] = quality_score
+            if latency_ms is not None:
+                entry["latency_ms"] = latency_ms
+            if input_tokens is not None:
+                entry["input_tokens"] = input_tokens
+            if output_tokens is not None:
+                entry["output_tokens"] = output_tokens
+            if fallback_used:
+                entry["fallback_used"] = fallback_used
+            if fallback_models_tried:
+                entry["fallback_models_tried"] = fallback_models_tried
+            if fallback_reasons:
+                entry["fallback_reasons"] = fallback_reasons
 
     # ── Query API ────────────────────────────────────────────────────────────
 
     def get_savings_summary(self, user_id: str, period: str = "all") -> dict[str, float]:
         """Total spend, premium-equivalent cost, savings amount and percentage."""
         entries = self._filter(user_id=user_id, period=period)
-        spent    = sum(e.get("estimated_cost", 0.0) for e in entries)
-        premium  = sum(e.get("premium_equivalent_cost", 0.0) for e in entries)
-        saved    = max(0.0, premium - spent)
-        pct      = (saved / premium * 100) if premium > 0 else 0.0
+        spent = sum(e.get("estimated_cost", 0.0) for e in entries)
+        premium = sum(e.get("premium_equivalent_cost", 0.0) for e in entries)
+        saved = max(0.0, premium - spent)
+        pct = (saved / premium * 100) if premium > 0 else 0.0
         return {
-            "total_spent":        round(spent, 6),
+            "total_spent": round(spent, 6),
             "premium_equivalent": round(premium, 6),
-            "total_saved":        round(saved, 6),
+            "total_saved": round(saved, 6),
             "savings_percentage": round(pct, 2),
         }
 
@@ -275,34 +285,36 @@ class RoutingAnalytics:
             entries = [e for e in entries if e.get("user_id") == user_id]
         now = datetime.utcnow()
         if period == "day":
-            entries = [e for e in entries
-                       if _parse_ts(e.get("timestamp", "")).date() == now.date()]
+            entries = [e for e in entries if _parse_ts(e.get("timestamp", "")).date() == now.date()]
         elif period == "month":
-            entries = [e for e in entries
-                       if _parse_ts(e.get("timestamp", "")).year == now.year
-                       and _parse_ts(e.get("timestamp", "")).month == now.month]
+            entries = [
+                e
+                for e in entries
+                if _parse_ts(e.get("timestamp", "")).year == now.year
+                and _parse_ts(e.get("timestamp", "")).month == now.month
+            ]
         return entries
 
     @staticmethod
     def _decision_to_dict(decision: RoutingDecision) -> dict[str, Any]:
-        model_id   = decision.chosen_model.model_id   if decision.chosen_model else "none"
-        model_tier = decision.chosen_model.tier        if decision.chosen_model else "none"
+        model_id = decision.chosen_model.model_id if decision.chosen_model else "none"
+        model_tier = decision.chosen_model.tier if decision.chosen_model else "none"
         return {
-            "correlation_id":          decision.correlation_id,
-            "timestamp":               decision.timestamp.isoformat(),
-            "chosen_model":            model_id,
-            "chosen_tier":             model_tier,
-            "cache_hit":               decision.cache_hit,
-            "context_compressed":      decision.context_was_compressed,
-            "estimated_cost":          decision.estimated_cost,
+            "correlation_id": decision.correlation_id,
+            "timestamp": decision.timestamp.isoformat(),
+            "chosen_model": model_id,
+            "chosen_tier": model_tier,
+            "cache_hit": decision.cache_hit,
+            "context_compressed": decision.context_was_compressed,
+            "estimated_cost": decision.estimated_cost,
             "premium_equivalent_cost": decision.estimated_cost + decision.estimated_savings,
-            "savings":                 decision.estimated_savings,
-            "routing_rule":            decision.routing_rule_matched,
-            "cost_blocked":            decision.cost_blocked,
-            "fallback_used":           False,
-            "fallback_models_tried":   [],
-            "fallback_reasons":        [],
-            "was_ab_exploration":      "ab_exploration" in decision.routing_rule_matched,
+            "savings": decision.estimated_savings,
+            "routing_rule": decision.routing_rule_matched,
+            "cost_blocked": decision.cost_blocked,
+            "fallback_used": False,
+            "fallback_models_tried": [],
+            "fallback_reasons": [],
+            "was_ab_exploration": "ab_exploration" in decision.routing_rule_matched,
             "ab_exploration_tier_used": None,
         }
 

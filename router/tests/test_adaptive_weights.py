@@ -33,6 +33,7 @@ Covers:
   - Snapshot integrity (structure, capping)
   - End-to-end integration timeline
 """
+
 from __future__ import annotations
 
 import copy
@@ -45,18 +46,16 @@ import pytest
 
 import router.adaptive_weights as aw_mod
 from router.adaptive_weights import (
-    AdaptiveWeights,
     _MAX_SNAPSHOTS,
     _OUTLIER_STD_MULTIPLIER,
     _QUALITY_FLOOR,
     _ROLLBACK_DROP_THRESHOLD,
-    _SNAPSHOT_INTERVAL,
+    AdaptiveWeights,
 )
-import router.config as cfg_mod
 from router.config import ADAPTIVE_MIN_SAMPLES, PER_CUSTOMER_MIN_SAMPLES
 
-
 # ── Metrics helpers ──────────────────────────────────────────────────────────
+
 
 @dataclass
 class TestMetrics:
@@ -103,6 +102,7 @@ def _record_metric(m: TestMetrics) -> TestMetrics:
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
+
 @pytest.fixture
 def aw() -> AdaptiveWeights:
     """Fresh AdaptiveWeights with no disk I/O."""
@@ -117,6 +117,7 @@ def aw_snap10(monkeypatch) -> AdaptiveWeights:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def inject_signals(
     aw: AdaptiveWeights,
@@ -150,14 +151,15 @@ def print_comparison_table(rows: list[tuple[str, Any, Any]]) -> None:
     """Print a before/after comparison table."""
     col_w = 28
     print(f"\n  {'Metric':<{col_w}} {'Before':>12}  {'After':>12}")
-    print(f"  {'-'*col_w} {'-'*12}  {'-'*12}")
+    print(f"  {'-' * col_w} {'-' * 12}  {'-' * 12}")
     for label, before, after in rows:
         before_s = f"{before:.6f}" if isinstance(before, float) else str(before)
-        after_s  = f"{after:.6f}"  if isinstance(after,  float) else str(after)
+        after_s = f"{after:.6f}" if isinstance(after, float) else str(after)
         print(f"  {label:<{col_w}} {before_s:>12}  {after_s:>12}")
 
 
 # ── Part 1: Rollback Restoration Tests ───────────────────────────────────────
+
 
 class TestRollbackRestoration:
     """Rollback must faithfully restore both _state and _signal_stats."""
@@ -181,15 +183,20 @@ class TestRollbackRestoration:
         aw._check_for_corruption()
         restored_avg = avg_quality(aw._state)
 
-        m = _record_metric(TestMetrics(
-            test_name="Rollback Restores _state avg_quality",
-            initial_state={"pre_corruption_avg": round(pre_avg, 4)},
-            action_description="Corrupt all avg_quality to 0.05, call _check_for_corruption()",
-            final_state={"corrupted_avg": round(corrupted_avg, 4), "restored_avg": round(restored_avg, 4)},
-            expected_value=pre_avg,
-            actual_value=restored_avg,
-            tolerance=0.05,
-        ))
+        m = _record_metric(
+            TestMetrics(
+                test_name="Rollback Restores _state avg_quality",
+                initial_state={"pre_corruption_avg": round(pre_avg, 4)},
+                action_description="Corrupt all avg_quality to 0.05, call _check_for_corruption()",
+                final_state={
+                    "corrupted_avg": round(corrupted_avg, 4),
+                    "restored_avg": round(restored_avg, 4),
+                },
+                expected_value=pre_avg,
+                actual_value=restored_avg,
+                tolerance=0.05,
+            )
+        )
         assert m.passed
         assert restored_avg > corrupted_avg
 
@@ -216,15 +223,20 @@ class TestRollbackRestoration:
 
         restored_mean = aw._signal_stats[key]["mean"]
 
-        m = _record_metric(TestMetrics(
-            test_name="Rollback Restores signal_stats.mean",
-            initial_state={"snap_mean": round(snap_mean, 4)},
-            action_description="Poison signal_stats.mean=0.01, variance=999; trigger rollback",
-            final_state={"poisoned_mean": poisoned_mean, "restored_mean": round(restored_mean, 4)},
-            expected_value=snap_mean,
-            actual_value=restored_mean,
-            tolerance=0.05,
-        ))
+        m = _record_metric(
+            TestMetrics(
+                test_name="Rollback Restores signal_stats.mean",
+                initial_state={"snap_mean": round(snap_mean, 4)},
+                action_description="Poison signal_stats.mean=0.01, variance=999; trigger rollback",
+                final_state={
+                    "poisoned_mean": poisoned_mean,
+                    "restored_mean": round(restored_mean, 4),
+                },
+                expected_value=snap_mean,
+                actual_value=restored_mean,
+                tolerance=0.05,
+            )
+        )
         assert m.passed
 
     def test_rollback_restores_signal_stats_variance(self, aw_snap10):
@@ -242,15 +254,17 @@ class TestRollbackRestoration:
 
         restored_var = aw._signal_stats[key]["variance"]
 
-        m = _record_metric(TestMetrics(
-            test_name="Rollback Restores signal_stats.variance",
-            initial_state={"snap_variance": round(snap_var, 6)},
-            action_description="Poison variance=999; trigger rollback",
-            final_state={"restored_variance": round(restored_var, 6)},
-            expected_value=snap_var,
-            actual_value=restored_var,
-            tolerance=0.01,
-        ))
+        m = _record_metric(
+            TestMetrics(
+                test_name="Rollback Restores signal_stats.variance",
+                initial_state={"snap_variance": round(snap_var, 6)},
+                action_description="Poison variance=999; trigger rollback",
+                final_state={"restored_variance": round(restored_var, 6)},
+                expected_value=snap_var,
+                actual_value=restored_var,
+                tolerance=0.01,
+            )
+        )
         assert m.passed
 
     def test_post_rollback_signals_use_restored_bounds(self, aw_snap10):
@@ -277,11 +291,13 @@ class TestRollbackRestoration:
         aw.record(model, task, 0.84)
         count_after_normal = aw._state[key]["sample_count"]
 
-        print_comparison_table([
-            ("pre_rollback sample_count", pre_count, post_rollback_count),
-            ("after outlier (0.50)", post_rollback_count, count_after_outlier),
-            ("after normal (0.84)",  count_after_outlier, count_after_normal),
-        ])
+        print_comparison_table(
+            [
+                ("pre_rollback sample_count", pre_count, post_rollback_count),
+                ("after outlier (0.50)", post_rollback_count, count_after_outlier),
+                ("after normal (0.84)", count_after_outlier, count_after_normal),
+            ]
+        )
 
         # The outlier (0.50) must be rejected (count unchanged)
         assert count_after_outlier == post_rollback_count, (
@@ -289,11 +305,12 @@ class TestRollbackRestoration:
         )
         # The normal signal (0.84) must be accepted
         assert count_after_normal == post_rollback_count + 1, (
-            f"Normal 0.84 should be accepted post-rollback"
+            "Normal 0.84 should be accepted post-rollback"
         )
 
 
 # ── Part 2: Signal Stats Poisoning Test ──────────────────────────────────────
+
 
 class TestSignalStatsPoisoning:
     """The core regression: rollback must restore signal_stats, not just _state."""
@@ -321,29 +338,31 @@ class TestSignalStatsPoisoning:
             if aw._state[key]["sample_count"] == cnt_before:
                 rejected += 1
 
-        after_mean     = aw._signal_stats[key]["mean"]
-        after_count    = aw._signal_stats[key]["count"]
+        after_mean = aw._signal_stats[key]["mean"]
+        after_count = aw._signal_stats[key]["count"]
         mean_deviation = abs(after_mean - before_mean)
 
-        m = _record_metric(TestMetrics(
-            test_name="Outliers Rejected — signal_stats.mean Unchanged",
-            initial_state={
-                "good_signals": 50,
-                "signal_mean_before": round(before_mean, 4),
-                "signal_count_before": before_count,
-            },
-            action_description="Inject 10 outliers at 0.10 (far from mean ~0.85)",
-            final_state={
-                "rejected": rejected,
-                "mean_after": round(after_mean, 4),
-                "count_after": after_count,
-                "mean_deviation": round(mean_deviation, 6),
-            },
-            expected_value=before_mean,
-            actual_value=after_mean,
-            tolerance=0.05,
-            extra={"outliers_rejected": rejected},
-        ))
+        m = _record_metric(
+            TestMetrics(
+                test_name="Outliers Rejected — signal_stats.mean Unchanged",
+                initial_state={
+                    "good_signals": 50,
+                    "signal_mean_before": round(before_mean, 4),
+                    "signal_count_before": before_count,
+                },
+                action_description="Inject 10 outliers at 0.10 (far from mean ~0.85)",
+                final_state={
+                    "rejected": rejected,
+                    "mean_after": round(after_mean, 4),
+                    "count_after": after_count,
+                    "mean_deviation": round(mean_deviation, 6),
+                },
+                expected_value=before_mean,
+                actual_value=after_mean,
+                tolerance=0.05,
+                extra={"outliers_rejected": rejected},
+            )
+        )
         assert rejected >= 8, f"Expected most outliers rejected, got {rejected}/10"
         assert m.passed
 
@@ -361,11 +380,11 @@ class TestSignalStatsPoisoning:
         inject_signals(aw, model, task, 50, mean=0.85, std=0.02)
         assert len(aw._snapshots) >= 1
 
-        snap_mean    = aw._snapshots[-1]["signal_stats"][key]["mean"]
-        before_mean  = aw._signal_stats[key]["mean"]
+        snap_mean = aw._snapshots[-1]["signal_stats"][key]["mean"]
+        before_mean = aw._signal_stats[key]["mean"]
 
         # Simulate corruption that bypassed the outlier guard
-        aw._signal_stats[key]["mean"]     = 0.05
+        aw._signal_stats[key]["mean"] = 0.05
         aw._signal_stats[key]["variance"] = 500.0
         poisoned_mean = aw._signal_stats[key]["mean"]
 
@@ -375,29 +394,33 @@ class TestSignalStatsPoisoning:
         aw._check_for_corruption()
 
         restored_mean = aw._signal_stats[key]["mean"]
-        deviation     = abs(restored_mean - snap_mean)
+        deviation = abs(restored_mean - snap_mean)
 
-        m = _record_metric(TestMetrics(
-            test_name="Signal Stats Poisoning — Rollback Restores Clean Mean",
-            initial_state={
-                "good_signals_recorded": 50,
-                "signal_mean_before_poison": round(before_mean, 4),
-                "snapshot_mean": round(snap_mean, 4),
-            },
-            action_description="Corrupt signal_stats.mean=0.05, trip rollback, call _check_for_corruption()",
-            final_state={
-                "poisoned_mean": poisoned_mean,
-                "restored_mean": round(restored_mean, 4),
-                "deviation_from_snapshot": round(deviation, 6),
-            },
-            expected_value=snap_mean,
-            actual_value=restored_mean,
-            tolerance=0.01,
-            extra={
-                "next_outlier_bound_approx": f"{restored_mean:.3f} ± {_OUTLIER_STD_MULTIPLIER}σ"
-            },
-        ))
-        assert m.passed, f"signal_stats.mean not restored: got {restored_mean:.4f}, expected ~{snap_mean:.4f}"
+        m = _record_metric(
+            TestMetrics(
+                test_name="Signal Stats Poisoning — Rollback Restores Clean Mean",
+                initial_state={
+                    "good_signals_recorded": 50,
+                    "signal_mean_before_poison": round(before_mean, 4),
+                    "snapshot_mean": round(snap_mean, 4),
+                },
+                action_description="Corrupt signal_stats.mean=0.05, trip rollback, call _check_for_corruption()",
+                final_state={
+                    "poisoned_mean": poisoned_mean,
+                    "restored_mean": round(restored_mean, 4),
+                    "deviation_from_snapshot": round(deviation, 6),
+                },
+                expected_value=snap_mean,
+                actual_value=restored_mean,
+                tolerance=0.01,
+                extra={
+                    "next_outlier_bound_approx": f"{restored_mean:.3f} ± {_OUTLIER_STD_MULTIPLIER}σ"
+                },
+            )
+        )
+        assert m.passed, (
+            f"signal_stats.mean not restored: got {restored_mean:.4f}, expected ~{snap_mean:.4f}"
+        )
 
     def test_new_signals_post_rollback_use_correct_outlier_bounds(self, aw_snap10):
         """
@@ -409,12 +432,12 @@ class TestSignalStatsPoisoning:
         key = f"{model}:{task}"
 
         inject_signals(aw, model, task, 50, mean=0.85, std=0.02)
-        snap_mean  = aw._snapshots[-1]["signal_stats"][key]["mean"]
-        snap_std   = math.sqrt(max(0, aw._snapshots[-1]["signal_stats"][key]["variance"]))
+        snap_mean = aw._snapshots[-1]["signal_stats"][key]["mean"]
+        snap_std = math.sqrt(max(0, aw._snapshots[-1]["signal_stats"][key]["variance"]))
 
         # Poison + rollback
-        aw._signal_stats[key]["mean"]     = 0.50   # poison to center of range
-        aw._signal_stats[key]["variance"] = 0.09   # std≈0.30 — huge window
+        aw._signal_stats[key]["mean"] = 0.50  # poison to center of range
+        aw._signal_stats[key]["variance"] = 0.09  # std≈0.30 — huge window
         for k in list(aw._state.keys()):
             aw._state[k]["avg_quality"] = 0.04
         aw._check_for_corruption()
@@ -423,10 +446,10 @@ class TestSignalStatsPoisoning:
         count_pre = aw._state[key]["sample_count"]
         aw.record(model, task, 0.60)
         count_post = aw._state[key]["sample_count"]
-        rejected_by_restored_bounds = (count_post == count_pre)
+        rejected_by_restored_bounds = count_post == count_pre
 
         print(f"\n  Restored mean: {snap_mean:.4f}, std≈{snap_std:.4f}")
-        print(f"  2σ bound: [{snap_mean - 2*snap_std:.4f}, {snap_mean + 2*snap_std:.4f}]")
+        print(f"  2σ bound: [{snap_mean - 2 * snap_std:.4f}, {snap_mean + 2 * snap_std:.4f}]")
         print(f"  Signal 0.60 rejected: {rejected_by_restored_bounds}")
 
         assert rejected_by_restored_bounds, (
@@ -435,6 +458,7 @@ class TestSignalStatsPoisoning:
 
 
 # ── Part 3: Config Constant Tests ────────────────────────────────────────────
+
 
 class TestConfigConstants:
     """get_adjusted_score must use constants from config, not hardcoded literals."""
@@ -454,21 +478,23 @@ class TestConfigConstants:
         aw.record(model, task, 0.95, base)
         score_after = aw.get_adjusted_score(model, task, base)
 
-        m = _record_metric(TestMetrics(
-            test_name=f"get_adjusted_score Uses ADAPTIVE_MIN_SAMPLES ({ADAPTIVE_MIN_SAMPLES})",
-            initial_state={
-                "samples_recorded": ADAPTIVE_MIN_SAMPLES - 1,
-                "score_at_N-1": score_before,
-            },
-            action_description=f"Record 1 more signal to reach ADAPTIVE_MIN_SAMPLES={ADAPTIVE_MIN_SAMPLES}",
-            final_state={
-                "samples_recorded": ADAPTIVE_MIN_SAMPLES,
-                "score_at_N": round(score_after, 4),
-            },
-            expected_value=base,
-            actual_value=score_before,
-            tolerance=1e-9,
-        ))
+        m = _record_metric(
+            TestMetrics(
+                test_name=f"get_adjusted_score Uses ADAPTIVE_MIN_SAMPLES ({ADAPTIVE_MIN_SAMPLES})",
+                initial_state={
+                    "samples_recorded": ADAPTIVE_MIN_SAMPLES - 1,
+                    "score_at_N-1": score_before,
+                },
+                action_description=f"Record 1 more signal to reach ADAPTIVE_MIN_SAMPLES={ADAPTIVE_MIN_SAMPLES}",
+                final_state={
+                    "samples_recorded": ADAPTIVE_MIN_SAMPLES,
+                    "score_at_N": round(score_after, 4),
+                },
+                expected_value=base,
+                actual_value=score_before,
+                tolerance=1e-9,
+            )
+        )
         assert score_before == base, f"Score should be base before {ADAPTIVE_MIN_SAMPLES} samples"
         assert score_after > base, f"Score should be adaptive at {ADAPTIVE_MIN_SAMPLES} samples"
 
@@ -485,18 +511,20 @@ class TestConfigConstants:
         aw.record(model, task, 0.95, base)
         score_at_5 = aw.get_adjusted_score(model, task, base)
 
-        m = _record_metric(TestMetrics(
-            test_name="Lowering ADAPTIVE_MIN_SAMPLES to 5 Activates Earlier",
-            initial_state={"patched_threshold": 5, "base_score": base},
-            action_description="Record 4 signals (below new threshold), then 1 more",
-            final_state={
-                "score_at_4_samples": score_at_4,
-                "score_at_5_samples": round(score_at_5, 4),
-            },
-            expected_value=base,
-            actual_value=score_at_4,
-            tolerance=1e-9,
-        ))
+        m = _record_metric(
+            TestMetrics(
+                test_name="Lowering ADAPTIVE_MIN_SAMPLES to 5 Activates Earlier",
+                initial_state={"patched_threshold": 5, "base_score": base},
+                action_description="Record 4 signals (below new threshold), then 1 more",
+                final_state={
+                    "score_at_4_samples": score_at_4,
+                    "score_at_5_samples": round(score_at_5, 4),
+                },
+                expected_value=base,
+                actual_value=score_at_4,
+                tolerance=1e-9,
+            )
+        )
         assert score_at_4 == base
         assert score_at_5 > base
 
@@ -505,28 +533,30 @@ class TestConfigConstants:
         aw = AdaptiveWeights(state_file=None)
         model, task, base, cid = "m", "t", 0.65, "cust-threshold-test"
 
-        for i in range(PER_CUSTOMER_MIN_SAMPLES - 1):
+        for _ in range(PER_CUSTOMER_MIN_SAMPLES - 1):
             aw.record(model, task, 0.92, base, customer_id=cid)
         score_before = aw.get_adjusted_score(model, task, base, customer_id=cid)
 
         aw.record(model, task, 0.92, base, customer_id=cid)
         score_after = aw.get_adjusted_score(model, task, base, customer_id=cid)
 
-        m = _record_metric(TestMetrics(
-            test_name=f"PER_CUSTOMER_MIN_SAMPLES={PER_CUSTOMER_MIN_SAMPLES} Activation",
-            initial_state={
-                "threshold": PER_CUSTOMER_MIN_SAMPLES,
-                "samples_at_N-1": PER_CUSTOMER_MIN_SAMPLES - 1,
-            },
-            action_description=f"Record N={PER_CUSTOMER_MIN_SAMPLES}th customer sample",
-            final_state={
-                "score_at_N-1": score_before,
-                "score_at_N":   round(score_after, 4),
-            },
-            expected_value=base,
-            actual_value=score_before,
-            tolerance=1e-9,
-        ))
+        m = _record_metric(
+            TestMetrics(
+                test_name=f"PER_CUSTOMER_MIN_SAMPLES={PER_CUSTOMER_MIN_SAMPLES} Activation",
+                initial_state={
+                    "threshold": PER_CUSTOMER_MIN_SAMPLES,
+                    "samples_at_N-1": PER_CUSTOMER_MIN_SAMPLES - 1,
+                },
+                action_description=f"Record N={PER_CUSTOMER_MIN_SAMPLES}th customer sample",
+                final_state={
+                    "score_at_N-1": score_before,
+                    "score_at_N": round(score_after, 4),
+                },
+                expected_value=base,
+                actual_value=score_before,
+                tolerance=1e-9,
+            )
+        )
         assert score_before == base, "Should use base score before threshold"
         assert score_after > base, "Should use per-customer adaptive score at threshold"
 
@@ -540,19 +570,24 @@ class TestConfigConstants:
             aw.record(model, task, 0.90, base)
         score = aw.get_adjusted_score(model, task, base)
 
-        m = _record_metric(TestMetrics(
-            test_name="No Hardcoded 20: ADAPTIVE_MIN_SAMPLES=7 Works",
-            initial_state={"patched_threshold": 7, "base_score": base},
-            action_description="Record 7 signals with threshold patched to 7",
-            final_state={"adjusted_score": round(score, 4)},
-            expected_value=base + 0.001,  # just above base — adaptive must have kicked in
-            actual_value=score,
-            tolerance=0.3,
-        ))
-        assert score > base, f"Adaptive should activate at 7 samples when threshold is 7, got {score}"
+        m = _record_metric(
+            TestMetrics(
+                test_name="No Hardcoded 20: ADAPTIVE_MIN_SAMPLES=7 Works",
+                initial_state={"patched_threshold": 7, "base_score": base},
+                action_description="Record 7 signals with threshold patched to 7",
+                final_state={"adjusted_score": round(score, 4)},
+                expected_value=base + 0.001,  # just above base — adaptive must have kicked in
+                actual_value=score,
+                tolerance=0.3,
+            )
+        )
+        assert score > base, (
+            f"Adaptive should activate at 7 samples when threshold is 7, got {score}"
+        )
 
 
 # ── Part 4: Slow Drift Detection ─────────────────────────────────────────────
+
 
 class TestSlowDriftDetection:
     """
@@ -576,7 +611,7 @@ class TestSlowDriftDetection:
         steps = []
         current = baseline
         for step in range(1, 8):
-            current = current * 0.98   # 2% degradation per step
+            current = current * 0.98  # 2% degradation per step
             for k in aw._state:
                 aw._state[k]["avg_quality"] = current
             steps.append((step, round(current, 4)))
@@ -589,26 +624,33 @@ class TestSlowDriftDetection:
 
         print(f"\n  Baseline (snapshot avg): {baseline:.4f}")
         print(f"  Rollback threshold:      {baseline * _ROLLBACK_DROP_THRESHOLD:.4f}")
-        print(f"  Degradation steps:")
+        print("  Degradation steps:")
         for step, q in steps:
             marker = " ← trigger" if q < baseline * _ROLLBACK_DROP_THRESHOLD else ""
             print(f"    step {step}: {q:.4f}{marker}")
         print(f"  Pre-rollback avg:  {pre_rollback_avg:.4f}")
         print(f"  Post-rollback avg: {post_rollback_avg:.4f}")
 
-        m = _record_metric(TestMetrics(
-            test_name="Slow Drift Triggers Rollback Before Critical Threshold",
-            initial_state={"baseline": round(baseline, 4), "threshold": round(baseline * _ROLLBACK_DROP_THRESHOLD, 4)},
-            action_description="Degrade avg_quality 2% per step until below rollback threshold",
-            final_state={
-                "pre_rollback_avg":  round(pre_rollback_avg, 4),
-                "post_rollback_avg": round(post_rollback_avg, 4),
-            },
-            expected_value=baseline,
-            actual_value=post_rollback_avg,
-            tolerance=0.10,
-        ))
-        assert post_rollback_avg > pre_rollback_avg, "Rollback should restore avg above degraded level"
+        m = _record_metric(
+            TestMetrics(
+                test_name="Slow Drift Triggers Rollback Before Critical Threshold",
+                initial_state={
+                    "baseline": round(baseline, 4),
+                    "threshold": round(baseline * _ROLLBACK_DROP_THRESHOLD, 4),
+                },
+                action_description="Degrade avg_quality 2% per step until below rollback threshold",
+                final_state={
+                    "pre_rollback_avg": round(pre_rollback_avg, 4),
+                    "post_rollback_avg": round(post_rollback_avg, 4),
+                },
+                expected_value=baseline,
+                actual_value=post_rollback_avg,
+                tolerance=0.10,
+            )
+        )
+        assert post_rollback_avg > pre_rollback_avg, (
+            "Rollback should restore avg above degraded level"
+        )
 
     def test_rollback_not_triggered_before_threshold(self, aw_snap10):
         """Quality at exactly 91% of snapshot avg must NOT trigger rollback."""
@@ -625,15 +667,20 @@ class TestSlowDriftDetection:
         aw._check_for_corruption()
         post_avg = avg_quality(aw._state)
 
-        m = _record_metric(TestMetrics(
-            test_name="No Rollback When Drift Is Within Threshold",
-            initial_state={"baseline": round(baseline, 4), "threshold_pct": _ROLLBACK_DROP_THRESHOLD},
-            action_description=f"Set avg to {_ROLLBACK_DROP_THRESHOLD + 0.01:.0%} of baseline (above threshold)",
-            final_state={"post_check_avg": round(post_avg, 4)},
-            expected_value=safe_degraded,
-            actual_value=post_avg,
-            tolerance=1e-6,
-        ))
+        m = _record_metric(
+            TestMetrics(
+                test_name="No Rollback When Drift Is Within Threshold",
+                initial_state={
+                    "baseline": round(baseline, 4),
+                    "threshold_pct": _ROLLBACK_DROP_THRESHOLD,
+                },
+                action_description=f"Set avg to {_ROLLBACK_DROP_THRESHOLD + 0.01:.0%} of baseline (above threshold)",
+                final_state={"post_check_avg": round(post_avg, 4)},
+                expected_value=safe_degraded,
+                actual_value=post_avg,
+                tolerance=1e-6,
+            )
+        )
         assert abs(post_avg - safe_degraded) < 1e-6, "Should NOT rollback when above threshold"
 
     def test_last_snapshot_avg_reset_after_rollback(self, aw_snap10):
@@ -649,19 +696,25 @@ class TestSlowDriftDetection:
             aw._state[k]["avg_quality"] = 0.01
         aw._check_for_corruption()
 
-        m = _record_metric(TestMetrics(
-            test_name="_last_snapshot_avg Reset to Snapshot After Rollback",
-            initial_state={"snap_avg": round(snap_avg, 4), "pre_rollback_last_snap": round(pre_last_snap, 4)},
-            action_description="Corrupt state, trigger rollback",
-            final_state={"post_rollback_last_snapshot_avg": round(aw._last_snapshot_avg, 4)},
-            expected_value=snap_avg,
-            actual_value=aw._last_snapshot_avg,
-            tolerance=1e-9,
-        ))
+        m = _record_metric(
+            TestMetrics(
+                test_name="_last_snapshot_avg Reset to Snapshot After Rollback",
+                initial_state={
+                    "snap_avg": round(snap_avg, 4),
+                    "pre_rollback_last_snap": round(pre_last_snap, 4),
+                },
+                action_description="Corrupt state, trigger rollback",
+                final_state={"post_rollback_last_snapshot_avg": round(aw._last_snapshot_avg, 4)},
+                expected_value=snap_avg,
+                actual_value=aw._last_snapshot_avg,
+                tolerance=1e-9,
+            )
+        )
         assert aw._last_snapshot_avg == snap_avg
 
 
 # ── Part 5: Snapshot Integrity Tests ─────────────────────────────────────────
+
 
 class TestSnapshotIntegrity:
     """Snapshots must contain both _state and _signal_stats, and be capped correctly."""
@@ -674,15 +727,15 @@ class TestSnapshotIntegrity:
         snap = aw._snapshots[-1]
 
         print(f"\n  Snapshot keys: {list(snap.keys())}")
-        assert "state" in snap,        "Snapshot must contain 'state'"
+        assert "state" in snap, "Snapshot must contain 'state'"
         assert "signal_stats" in snap, "Snapshot must contain 'signal_stats'"
-        assert "avg_quality" in snap,  "Snapshot must contain 'avg_quality'"
+        assert "avg_quality" in snap, "Snapshot must contain 'avg_quality'"
 
         # Deep copies — mutations to live state must not affect snapshot
         snap_state_id = id(snap["state"])
         snap_stats_id = id(snap["signal_stats"])
-        assert snap_state_id  != id(aw._state),        "snapshot state must be a deep copy"
-        assert snap_stats_id  != id(aw._signal_stats), "snapshot signal_stats must be a deep copy"
+        assert snap_state_id != id(aw._state), "snapshot state must be a deep copy"
+        assert snap_stats_id != id(aw._signal_stats), "snapshot signal_stats must be a deep copy"
 
     def test_snapshot_capped_at_max_snapshots(self, monkeypatch):
         """Taking >_MAX_SNAPSHOTS snapshots keeps only the most recent _MAX_SNAPSHOTS."""
@@ -693,15 +746,17 @@ class TestSnapshotIntegrity:
         total_signals = (_MAX_SNAPSHOTS + 3) * 5
         inject_signals(aw, "m", "t", total_signals, mean=0.80)
 
-        m = _record_metric(TestMetrics(
-            test_name=f"Snapshot Cap at _MAX_SNAPSHOTS={_MAX_SNAPSHOTS}",
-            initial_state={"expected_max": _MAX_SNAPSHOTS, "signals_sent": total_signals},
-            action_description=f"Take {_MAX_SNAPSHOTS + 3} snapshots",
-            final_state={"actual_snapshot_count": len(aw._snapshots)},
-            expected_value=_MAX_SNAPSHOTS,
-            actual_value=len(aw._snapshots),
-            tolerance=0,
-        ))
+        m = _record_metric(
+            TestMetrics(
+                test_name=f"Snapshot Cap at _MAX_SNAPSHOTS={_MAX_SNAPSHOTS}",
+                initial_state={"expected_max": _MAX_SNAPSHOTS, "signals_sent": total_signals},
+                action_description=f"Take {_MAX_SNAPSHOTS + 3} snapshots",
+                final_state={"actual_snapshot_count": len(aw._snapshots)},
+                expected_value=_MAX_SNAPSHOTS,
+                actual_value=len(aw._snapshots),
+                tolerance=0,
+            )
+        )
         assert len(aw._snapshots) == _MAX_SNAPSHOTS, (
             f"Expected {_MAX_SNAPSHOTS} snapshots, got {len(aw._snapshots)}"
         )
@@ -720,10 +775,16 @@ class TestSnapshotIntegrity:
 
         snap_mean_after_mutation = aw._snapshots[-1]["signal_stats"][key]["mean"]
 
-        print_comparison_table([
-            ("snapshot mean (before mutation)", snap_mean_before_mutation, snap_mean_after_mutation),
-            ("live signal_stats mean", snap_mean_before_mutation, 0.01),
-        ])
+        print_comparison_table(
+            [
+                (
+                    "snapshot mean (before mutation)",
+                    snap_mean_before_mutation,
+                    snap_mean_after_mutation,
+                ),
+                ("live signal_stats mean", snap_mean_before_mutation, 0.01),
+            ]
+        )
 
         assert abs(snap_mean_before_mutation - snap_mean_after_mutation) < 1e-9, (
             "Snapshot signal_stats must not be aliased to live signal_stats"
@@ -736,21 +797,27 @@ class TestSnapshotIntegrity:
         snap = aw._snapshots[-1]
 
         computed_avg = avg_quality(snap["state"])
-        stored_avg   = snap["avg_quality"]
+        stored_avg = snap["avg_quality"]
 
-        m = _record_metric(TestMetrics(
-            test_name="Snapshot avg_quality Matches State Mean",
-            initial_state={"signals": 12, "target_mean": 0.88},
-            action_description="Take snapshot at signal 10",
-            final_state={"stored_avg": round(stored_avg, 6), "computed_avg": round(computed_avg, 6)},
-            expected_value=computed_avg,
-            actual_value=stored_avg,
-            tolerance=1e-9,
-        ))
+        m = _record_metric(
+            TestMetrics(
+                test_name="Snapshot avg_quality Matches State Mean",
+                initial_state={"signals": 12, "target_mean": 0.88},
+                action_description="Take snapshot at signal 10",
+                final_state={
+                    "stored_avg": round(stored_avg, 6),
+                    "computed_avg": round(computed_avg, 6),
+                },
+                expected_value=computed_avg,
+                actual_value=stored_avg,
+                tolerance=1e-9,
+            )
+        )
         assert abs(stored_avg - computed_avg) < 1e-9
 
 
 # ── Part 6: Integration Test ──────────────────────────────────────────────────
+
 
 class TestEndToEndIntegration:
     """
@@ -765,17 +832,17 @@ class TestEndToEndIntegration:
         key = f"{model}:{task}"
 
         # ── Phase 1: Record 100 quality samples with known distribution ──────
-        print("\n\n" + "="*70)
+        print("\n\n" + "=" * 70)
         print("INTEGRATION TEST: Full Lifecycle Timeline")
-        print("="*70)
+        print("=" * 70)
 
         good_vals = inject_signals(aw, model, task, 100, mean=0.85, std=0.02, seed=1)
-        phase1_count  = aw._state[key]["sample_count"]
-        phase1_avg    = aw._state[key]["avg_quality"]
-        phase1_mean   = aw._signal_stats[key]["mean"]
-        snap_count_1  = len(aw._snapshots)
+        phase1_count = aw._state[key]["sample_count"]
+        phase1_avg = aw._state[key]["avg_quality"]
+        phase1_mean = aw._signal_stats[key]["mean"]
+        snap_count_1 = len(aw._snapshots)
 
-        print(f"\n[INITIAL] 100 good samples recorded")
+        print("\n[INITIAL] 100 good samples recorded")
         print(f"  sample_count:       {phase1_count}")
         print(f"  avg_quality:        {phase1_avg:.4f}")
         print(f"  signal_stats.mean:  {phase1_mean:.4f}")
@@ -792,38 +859,40 @@ class TestEndToEndIntegration:
                 outliers_rejected += 1
 
         phase2_count = aw._state[key]["sample_count"]
-        phase2_avg   = aw._state[key]["avg_quality"]
-        phase2_mean  = aw._signal_stats[key]["mean"]
+        phase2_avg = aw._state[key]["avg_quality"]
+        phase2_mean = aw._signal_stats[key]["mean"]
 
-        print(f"\n[AFTER OUTLIERS] Tried 20 outliers at 0.10")
+        print("\n[AFTER OUTLIERS] Tried 20 outliers at 0.10")
         print(f"  outliers rejected:  {outliers_rejected}/20")
         print(f"  sample_count:       {phase2_count}  (delta: +{phase2_count - phase1_count})")
         print(f"  avg_quality:        {phase2_avg:.4f}")
         print(f"  signal_stats.mean:  {phase2_mean:.4f}")
 
-        assert outliers_rejected >= 15, f"Expected ≥15/20 outliers rejected, got {outliers_rejected}"
+        assert outliers_rejected >= 15, (
+            f"Expected ≥15/20 outliers rejected, got {outliers_rejected}"
+        )
 
         # ── Phase 3: Corrupt state to simulate degradation ───────────────────
         snap_state = copy.deepcopy(aw._snapshots[-1]["state"])
         snap_stats = copy.deepcopy(aw._snapshots[-1]["signal_stats"])
-        snap_avg   = aw._snapshots[-1]["avg_quality"]
+        snap_avg = aw._snapshots[-1]["avg_quality"]
 
         for k in list(aw._state.keys()):
             aw._state[k]["avg_quality"] = 0.05
         phase3_avg = avg_quality(aw._state)
 
-        print(f"\n[CORRUPTED] Artificially set all avg_quality = 0.05")
+        print("\n[CORRUPTED] Artificially set all avg_quality = 0.05")
         print(f"  current avg:        {phase3_avg:.4f}")
         print(f"  snapshot avg:       {snap_avg:.4f}")
         print(f"  threshold:          {snap_avg * _ROLLBACK_DROP_THRESHOLD:.4f}")
 
         # ── Phase 4: Trigger rollback ─────────────────────────────────────────
         aw._check_for_corruption()
-        phase4_avg    = avg_quality(aw._state)
-        phase4_count  = aw._state[key]["sample_count"]
-        phase4_mean   = aw._signal_stats[key]["mean"]
+        phase4_avg = avg_quality(aw._state)
+        phase4_count = aw._state[key]["sample_count"]
+        phase4_mean = aw._signal_stats[key]["mean"]
 
-        print(f"\n[ROLLBACK] _check_for_corruption() called")
+        print("\n[ROLLBACK] _check_for_corruption() called")
         print(f"  restored avg:       {phase4_avg:.4f}")
         print(f"  restored count:     {phase4_count}")
         print(f"  restored stat mean: {phase4_mean:.4f}")
@@ -837,10 +906,10 @@ class TestEndToEndIntegration:
         # ── Phase 5: Record 50 new samples and verify correct processing ──────
         new_vals = inject_signals(aw, model, task, 50, mean=0.86, std=0.02, seed=99)
         phase5_count = aw._state[key]["sample_count"]
-        phase5_avg   = aw._state[key]["avg_quality"]
+        phase5_avg = aw._state[key]["avg_quality"]
 
         new_accepted = phase5_count - phase4_count
-        print(f"\n[RECOVERED] 50 new samples at mean=0.86")
+        print("\n[RECOVERED] 50 new samples at mean=0.86")
         print(f"  new signals accepted: {new_accepted}/50")
         print(f"  sample_count:         {phase5_count}")
         print(f"  avg_quality:          {phase5_avg:.4f}")
@@ -849,48 +918,56 @@ class TestEndToEndIntegration:
         assert phase5_avg >= _QUALITY_FLOOR, "avg_quality must be above floor"
 
         # ── Timeline summary ──────────────────────────────────────────────────
-        print("\n" + "─"*70)
+        print("\n" + "─" * 70)
         print("TIMELINE SUMMARY")
-        print("─"*70)
+        print("─" * 70)
         stages = [
-            ("INITIAL",   phase1_count, f"{phase1_avg:.4f}", f"{phase1_mean:.4f}"),
+            ("INITIAL", phase1_count, f"{phase1_avg:.4f}", f"{phase1_mean:.4f}"),
             ("CORRUPTED", phase2_count, f"{phase3_avg:.4f}", f"{phase2_mean:.4f}"),
-            ("ROLLBACK",  phase4_count, f"{phase4_avg:.4f}", f"{phase4_mean:.4f}"),
-            ("RECOVERED", phase5_count, f"{phase5_avg:.4f}", f"{aw._signal_stats[key]['mean']:.4f}"),
+            ("ROLLBACK", phase4_count, f"{phase4_avg:.4f}", f"{phase4_mean:.4f}"),
+            (
+                "RECOVERED",
+                phase5_count,
+                f"{phase5_avg:.4f}",
+                f"{aw._signal_stats[key]['mean']:.4f}",
+            ),
         ]
         print(f"  {'Stage':<12} {'Samples':>8} {'avg_quality':>12} {'stats.mean':>12}")
-        print(f"  {'-'*12} {'-'*8} {'-'*12} {'-'*12}")
+        print(f"  {'-' * 12} {'-' * 8} {'-' * 12} {'-' * 12}")
         for stage, cnt, aqv, smean in stages:
             print(f"  {stage:<12} {cnt:>8} {aqv:>12} {smean:>12}")
 
-        _record_metric(TestMetrics(
-            test_name="Integration: Full Lifecycle (100 good → 20 outliers → corrupt → rollback → 50 new)",
-            initial_state={"phase1_avg": round(phase1_avg, 4), "phase1_count": phase1_count},
-            action_description="Outlier rejection → corruption → rollback → recovery",
-            final_state={
-                "phase5_avg":      round(phase5_avg, 4),
-                "phase5_count":    phase5_count,
-                "outliers_rejected": outliers_rejected,
-                "new_accepted":    new_accepted,
-            },
-            expected_value=0.80,
-            actual_value=phase5_avg,
-            tolerance=0.20,
-        ))
+        _record_metric(
+            TestMetrics(
+                test_name="Integration: Full Lifecycle (100 good → 20 outliers → corrupt → rollback → 50 new)",
+                initial_state={"phase1_avg": round(phase1_avg, 4), "phase1_count": phase1_count},
+                action_description="Outlier rejection → corruption → rollback → recovery",
+                final_state={
+                    "phase5_avg": round(phase5_avg, 4),
+                    "phase5_count": phase5_count,
+                    "outliers_rejected": outliers_rejected,
+                    "new_accepted": new_accepted,
+                },
+                expected_value=0.80,
+                actual_value=phase5_avg,
+                tolerance=0.20,
+            )
+        )
 
 
 # ── Summary Reporter ──────────────────────────────────────────────────────────
+
 
 def pytest_sessionfinish(session, exitstatus):
     """Print a final summary table of all recorded TestMetrics."""
     if not _ALL_METRICS:
         return
-    print("\n\n" + "="*90)
+    print("\n\n" + "=" * 90)
     print("ADAPTIVE WEIGHTS TEST METRICS SUMMARY")
-    print("="*90)
+    print("=" * 90)
     col = 52
     print(f"  {'Test Name':<{col}} {'Expected':>9} {'Actual':>9} {'Tol':>6} {'Result':>6}")
-    print(f"  {'-'*col} {'-'*9} {'-'*9} {'-'*6} {'-'*6}")
+    print(f"  {'-' * col} {'-' * 9} {'-' * 9} {'-' * 6} {'-' * 6}")
     passed = failed = 0
     for m in _ALL_METRICS:
         status = "PASS" if m.passed else "FAIL"
@@ -904,4 +981,4 @@ def pytest_sessionfinish(session, exitstatus):
             f" {m.tolerance:>6.4f} {'✅' if m.passed else '❌':>6}"
         )
     print(f"\n  Total: {len(_ALL_METRICS)}  Passed: {passed}  Failed: {failed}")
-    print("="*90)
+    print("=" * 90)

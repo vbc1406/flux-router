@@ -48,15 +48,15 @@ from router.model_registry import ModelRegistry
 from router.routing_engine import RoutingEngine
 from router.schemas import RoutingRequest
 
-
 # ── Engine / request helpers ──────────────────────────────────────────────────
 
+
 def _engine() -> RoutingEngine:
-    registry   = ModelRegistry()
-    cache      = ResponseCache(enabled=False)
-    adaptive   = AdaptiveWeights(state_file=None)
-    analytics  = RoutingAnalytics(log_path=None)
-    budget     = BudgetTracker()
+    registry = ModelRegistry()
+    cache = ResponseCache(enabled=False)
+    adaptive = AdaptiveWeights(state_file=None)
+    analytics = RoutingAnalytics(log_path=None)
+    budget = BudgetTracker()
     compressor = ContextCompressor()
     classifier = RequestClassifier(cache)
     return RoutingEngine(registry, classifier, cache, budget, adaptive, compressor, analytics)
@@ -64,8 +64,8 @@ def _engine() -> RoutingEngine:
 
 def _req(prompt: str, **kw: Any) -> RoutingRequest:
     defaults: dict[str, Any] = {
-        "user_id":  "u_priority_test",
-        "plan":     "business_plan",
+        "user_id": "u_priority_test",
+        "plan": "business_plan",
         "priority": "normal",
     }
     defaults.update(kw)
@@ -80,13 +80,26 @@ def rr(coro):
 # ── Prompt corpus ─────────────────────────────────────────────────────────────
 
 _FREE_PROMPTS = [
-    "hi", "hello", "thanks", "ok", "sure", "bye",
-    "What is 2+2?", "Who is Einstein?", "Define osmosis",
-    "What is gravity?", "Who painted the Mona Lisa?",
-    "Is Python compiled?", "Is the earth round?", "Is water H2O?",
-    "Translate 'good morning' to French", "Translate 'thank you' to Spanish",
-    "Convert 5 miles to km", "Convert 100 Fahrenheit to Celsius",
-    "What is the capital of France?", "What is Pi?",
+    "hi",
+    "hello",
+    "thanks",
+    "ok",
+    "sure",
+    "bye",
+    "What is 2+2?",
+    "Who is Einstein?",
+    "Define osmosis",
+    "What is gravity?",
+    "Who painted the Mona Lisa?",
+    "Is Python compiled?",
+    "Is the earth round?",
+    "Is water H2O?",
+    "Translate 'good morning' to French",
+    "Translate 'thank you' to Spanish",
+    "Convert 5 miles to km",
+    "Convert 100 Fahrenheit to Celsius",
+    "What is the capital of France?",
+    "What is Pi?",
 ]
 
 _MID_PROMPTS = [
@@ -127,6 +140,7 @@ _COMPLEX_REASONING = [
 # ═══════════════════════════════════════════════════════════════════════════════
 # SECTION 1: always-premium (100 test cases)
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class TestAlwaysPremium:
     """100 test cases for routing_priority='always-premium'."""
@@ -177,9 +191,7 @@ class TestAlwaysPremium:
 
     @pytest.mark.parametrize("prompt", _FREE_PROMPTS[:10])
     def test_free_plan_cannot_reach_premium(self, prompt):
-        d = rr(self.engine.route(_req(
-            prompt, routing_priority="always-premium", plan="free_plan"
-        )))
+        d = rr(self.engine.route(_req(prompt, routing_priority="always-premium", plan="free_plan")))
         assert d.chosen_model is not None
         assert d.chosen_model.tier in ("free", "cheap")
 
@@ -194,6 +206,7 @@ class TestAlwaysPremium:
 # ═══════════════════════════════════════════════════════════════════════════════
 # SECTION 2: quality-first (100 test cases)
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class TestQualityFirst:
     """100 test cases for routing_priority='quality-first'."""
@@ -262,6 +275,7 @@ class TestQualityFirst:
 # SECTION 3: balanced (baseline — 100 test cases)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class TestBalancedBaseline:
     """
     100 test cases for routing_priority='balanced'.
@@ -295,8 +309,10 @@ class TestBalancedBaseline:
         the same model as explicitly passing "balanced" when A/B is disabled.
         """
         # Disable A/B exploration so the comparison is deterministic
-        d_default  = rr(self.engine.route(_req(prompt, exploration_rate=0.0)))
-        d_balanced = rr(self.engine.route(_req(prompt, routing_priority="balanced", exploration_rate=0.0)))
+        d_default = rr(self.engine.route(_req(prompt, exploration_rate=0.0)))
+        d_balanced = rr(
+            self.engine.route(_req(prompt, routing_priority="balanced", exploration_rate=0.0))
+        )
         assert d_default.chosen_model is not None
         assert d_balanced.chosen_model is not None
         assert d_default.chosen_model.model_id == d_balanced.chosen_model.model_id
@@ -341,6 +357,7 @@ class TestBalancedBaseline:
 # SECTION 4: cost-optimized (100 test cases)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class TestCostOptimized:
     """100 test cases for routing_priority='cost-optimized'."""
 
@@ -376,8 +393,12 @@ class TestCostOptimized:
     @pytest.mark.parametrize("prompt", _MID_PROMPTS[:10])
     def test_cost_optimized_cheaper_or_equal_to_quality_first(self, prompt):
         # Disable A/B so exploration can't make quality-first accidentally cheaper.
-        d_co = rr(self.engine.route(_req(prompt, routing_priority="cost-optimized", exploration_rate=0.0)))
-        d_qf = rr(self.engine.route(_req(prompt, routing_priority="quality-first", exploration_rate=0.0)))
+        d_co = rr(
+            self.engine.route(_req(prompt, routing_priority="cost-optimized", exploration_rate=0.0))
+        )
+        d_qf = rr(
+            self.engine.route(_req(prompt, routing_priority="quality-first", exploration_rate=0.0))
+        )
         assert d_co.chosen_model is not None
         assert d_qf.chosen_model is not None
         # Cost-optimized should choose cheaper or equal option
@@ -413,6 +434,7 @@ class TestCostOptimized:
 # SECTION 5: Mixed Edge Cases (100 test cases)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class TestPriorityEdgeCases:
     """100 edge case tests covering interactions between priority tags and other features."""
 
@@ -421,55 +443,84 @@ class TestPriorityEdgeCases:
 
     # --- Invalid priority values (10) ---
 
-    @pytest.mark.parametrize("bad_priority", [
-        "turbo", "ultra-fast", "cheap-mode", "BALANCED", "Quality-First",
-        "premium", "cost_optimized", "free", "", "   ",
-    ])
+    @pytest.mark.parametrize(
+        "bad_priority",
+        [
+            "turbo",
+            "ultra-fast",
+            "cheap-mode",
+            "BALANCED",
+            "Quality-First",
+            "premium",
+            "cost_optimized",
+            "free",
+            "",
+            "   ",
+        ],
+    )
     def test_invalid_priority_raises_value_error(self, bad_priority):
         with pytest.raises((ValueError, Exception)):
             rr(self.engine.route(_req("test", routing_priority=bad_priority)))
 
     # --- Priority + explicit model override (5) ---
 
-    @pytest.mark.parametrize("priority", ["always-premium", "quality-first", "balanced", "cost-optimized"])
+    @pytest.mark.parametrize(
+        "priority", ["always-premium", "quality-first", "balanced", "cost-optimized"]
+    )
     def test_explicit_override_takes_precedence_over_priority(self, priority):
-        d = rr(self.engine.route(_req(
-            "Write some code",
-            routing_priority=priority,
-            metadata={"model": "gpt-4o-mini"},
-        )))
+        d = rr(
+            self.engine.route(
+                _req(
+                    "Write some code",
+                    routing_priority=priority,
+                    metadata={"model": "gpt-4o-mini"},
+                )
+            )
+        )
         if d.chosen_model:
             assert d.chosen_model.model_id == "gpt-4o-mini"
             assert d.routing_rule_matched == "explicit_model_override"
 
     def test_override_with_always_premium_still_honours_override(self):
-        d = rr(self.engine.route(_req(
-            "hi",
-            routing_priority="always-premium",
-            metadata={"model": "gpt-4o-mini"},
-        )))
+        d = rr(
+            self.engine.route(
+                _req(
+                    "hi",
+                    routing_priority="always-premium",
+                    metadata={"model": "gpt-4o-mini"},
+                )
+            )
+        )
         if d.chosen_model:
             assert d.chosen_model.model_id == "gpt-4o-mini"
 
     # --- Priority + exploration_rate interaction (5) ---
 
     def test_always_premium_with_zero_exploration(self):
-        d = rr(self.engine.route(_req(
-            "Analyze something",
-            routing_priority="always-premium",
-            exploration_rate=0.0,
-        )))
+        d = rr(
+            self.engine.route(
+                _req(
+                    "Analyze something",
+                    routing_priority="always-premium",
+                    exploration_rate=0.0,
+                )
+            )
+        )
         assert d.chosen_model is not None
         assert d.chosen_model.tier == "premium"
 
     def test_cost_optimized_with_zero_exploration_consistent(self):
         results = []
         for _ in range(10):
-            d = rr(self.engine.route(_req(
-                "Write a blog post",
-                routing_priority="cost-optimized",
-                exploration_rate=0.0,
-            )))
+            d = rr(
+                self.engine.route(
+                    _req(
+                        "Write a blog post",
+                        routing_priority="cost-optimized",
+                        exploration_rate=0.0,
+                    )
+                )
+            )
             results.append(d.chosen_model.model_id if d.chosen_model else None)
         assert len(set(results)) == 1, "With 0.0 exploration, model should be deterministic"
 
@@ -477,64 +528,90 @@ class TestPriorityEdgeCases:
 
     @pytest.mark.parametrize("priority", ["always-premium", "quality-first"])
     def test_quality_priorities_respect_cost_cap(self, priority):
-        d = rr(self.engine.route(_req(
-            "Write code",
-            routing_priority=priority,
-            max_cost_per_request=0.0001,  # very tight cap
-            plan="business_plan",
-        )))
+        d = rr(
+            self.engine.route(
+                _req(
+                    "Write code",
+                    routing_priority=priority,
+                    max_cost_per_request=0.0001,  # very tight cap
+                    plan="business_plan",
+                )
+            )
+        )
         if d.chosen_model:
             assert d.estimated_cost <= 0.0001 + 1e-6
 
     @pytest.mark.parametrize("priority", ["cost-optimized", "balanced"])
     def test_other_priorities_also_respect_cost_cap(self, priority):
-        d = rr(self.engine.route(_req(
-            "What is 2+2?",
-            routing_priority=priority,
-            max_cost_per_request=0.0001,
-        )))
+        d = rr(
+            self.engine.route(
+                _req(
+                    "What is 2+2?",
+                    routing_priority=priority,
+                    max_cost_per_request=0.0001,
+                )
+            )
+        )
         if d.chosen_model:
             assert d.estimated_cost <= 0.0001 + 1e-6
 
     # --- Priority + customer_id interaction (5) ---
 
-    @pytest.mark.parametrize("priority", ["always-premium", "quality-first", "balanced", "cost-optimized"])
+    @pytest.mark.parametrize(
+        "priority", ["always-premium", "quality-first", "balanced", "cost-optimized"]
+    )
     def test_customer_id_with_each_priority(self, priority):
-        d = rr(self.engine.route(_req(
-            "Write a Python function",
-            routing_priority=priority,
-            customer_id="cust_edge_test",
-        )))
+        d = rr(
+            self.engine.route(
+                _req(
+                    "Write a Python function",
+                    routing_priority=priority,
+                    customer_id="cust_edge_test",
+                )
+            )
+        )
         assert d.chosen_model is not None
 
     def test_customer_id_none_with_always_premium(self):
-        d = rr(self.engine.route(_req(
-            "Prove Pythagoras theorem",
-            routing_priority="always-premium",
-            customer_id=None,
-        )))
+        d = rr(
+            self.engine.route(
+                _req(
+                    "Prove Pythagoras theorem",
+                    routing_priority="always-premium",
+                    customer_id=None,
+                )
+            )
+        )
         assert d.chosen_model is not None
         assert d.chosen_model.tier == "premium"
 
     # --- Priority + sensitivity level (5) ---
 
     def test_always_premium_with_restricted_sensitivity(self):
-        d = rr(self.engine.route(_req(
-            "Process confidential document",
-            routing_priority="always-premium",
-            metadata={"sensitivity_level": "restricted"},
-            plan="business_plan",
-        )))
+        d = rr(
+            self.engine.route(
+                _req(
+                    "Process confidential document",
+                    routing_priority="always-premium",
+                    metadata={"sensitivity_level": "restricted"},
+                    plan="business_plan",
+                )
+            )
+        )
         if d.chosen_model:
             assert d.chosen_model.provider in ("anthropic", "openai")
 
     def test_cost_optimized_with_restricted_sensitivity(self):
-        d = rr(self.engine.route(_req(
-            "Process internal document",
-            routing_priority="cost-optimized",
-            metadata={"sensitivity_level": "restricted"},
-            plan="business_plan",
-        )))
+        d = rr(
+            self.engine.route(
+                _req(
+                    "Process internal document",
+                    routing_priority="cost-optimized",
+                    metadata={"sensitivity_level": "restricted"},
+                    plan="business_plan",
+                )
+            )
+        )
         if d.chosen_model:
             assert d.chosen_model.provider in ("anthropic", "openai")
 
@@ -542,34 +619,56 @@ class TestPriorityEdgeCases:
 
     @pytest.mark.parametrize("req_priority", ["low", "normal", "high", "critical"])
     def test_balanced_priority_with_each_request_priority(self, req_priority):
-        d = rr(self.engine.route(_req(
-            "Write a function",
-            routing_priority="balanced",
-            priority=req_priority,
-        )))
+        d = rr(
+            self.engine.route(
+                _req(
+                    "Write a function",
+                    routing_priority="balanced",
+                    priority=req_priority,
+                )
+            )
+        )
         assert d.chosen_model is not None
 
     def test_always_premium_overrides_request_priority_latency(self):
         """always-premium should pick premium regardless of request priority."""
-        d_low  = rr(self.engine.route(_req(
-            "Design system", routing_priority="always-premium", priority="low",
-        )))
-        d_crit = rr(self.engine.route(_req(
-            "Design system", routing_priority="always-premium", priority="critical",
-        )))
+        d_low = rr(
+            self.engine.route(
+                _req(
+                    "Design system",
+                    routing_priority="always-premium",
+                    priority="low",
+                )
+            )
+        )
+        d_crit = rr(
+            self.engine.route(
+                _req(
+                    "Design system",
+                    routing_priority="always-premium",
+                    priority="critical",
+                )
+            )
+        )
         if d_low.chosen_model and d_crit.chosen_model:
-            assert d_low.chosen_model.tier  == "premium"
+            assert d_low.chosen_model.tier == "premium"
             assert d_crit.chosen_model.tier == "premium"
 
     # --- Priority + fallback chain fields (5) ---
 
-    @pytest.mark.parametrize("priority", ["always-premium", "quality-first", "balanced", "cost-optimized"])
+    @pytest.mark.parametrize(
+        "priority", ["always-premium", "quality-first", "balanced", "cost-optimized"]
+    )
     def test_typed_fallback_chains_populated(self, priority):
-        d = rr(self.engine.route(_req(
-            "Write a Python class",
-            routing_priority=priority,
-            plan="business_plan",
-        )))
+        d = rr(
+            self.engine.route(
+                _req(
+                    "Write a Python class",
+                    routing_priority=priority,
+                    plan="business_plan",
+                )
+            )
+        )
         assert isinstance(d.fallback_on_rate_limit, list)
         assert isinstance(d.fallback_on_content_safety, list)
         assert isinstance(d.fallback_on_timeout, list)
@@ -579,11 +678,15 @@ class TestPriorityEdgeCases:
         When routing to premium, content safety chain may have same or higher tier
         (premium is top, so chain may be empty).
         """
-        d = rr(self.engine.route(_req(
-            "Review this contract",
-            routing_priority="always-premium",
-            plan="business_plan",
-        )))
+        d = rr(
+            self.engine.route(
+                _req(
+                    "Review this contract",
+                    routing_priority="always-premium",
+                    plan="business_plan",
+                )
+            )
+        )
         # Content safety chain should only contain premium models (since chosen is premium)
         for m in d.fallback_on_content_safety:
             assert m.tier == "premium"
@@ -591,80 +694,110 @@ class TestPriorityEdgeCases:
     # --- Priority + proxy mode (5) ---
 
     def test_proxy_mode_with_always_premium_no_key(self):
-        d = rr(self.engine.route(_req(
-            "Test proxy",
-            routing_priority="always-premium",
-            mode="proxy",
-            provider_api_key=None,
-        )))
+        d = rr(
+            self.engine.route(
+                _req(
+                    "Test proxy",
+                    routing_priority="always-premium",
+                    mode="proxy",
+                    provider_api_key=None,
+                )
+            )
+        )
         assert d.proxy_response is not None
         assert "proxy error" in d.proxy_response.lower()
 
     def test_proxy_mode_decision_still_premium_with_always_premium(self):
-        d = rr(self.engine.route(_req(
-            "Test proxy premium",
-            routing_priority="always-premium",
-            mode="proxy",
-            provider_api_key=None,
-        )))
+        d = rr(
+            self.engine.route(
+                _req(
+                    "Test proxy premium",
+                    routing_priority="always-premium",
+                    mode="proxy",
+                    provider_api_key=None,
+                )
+            )
+        )
         # Even in proxy mode (with no key, so error), the routing decision should be premium
         assert d.chosen_model is not None
         assert d.chosen_model.tier == "premium"
 
     @pytest.mark.parametrize("priority", ["quality-first", "cost-optimized"])
     def test_proxy_mode_with_other_priorities_no_key(self, priority):
-        d = rr(self.engine.route(_req(
-            "Test",
-            routing_priority=priority,
-            mode="proxy",
-            provider_api_key=None,
-        )))
+        d = rr(
+            self.engine.route(
+                _req(
+                    "Test",
+                    routing_priority=priority,
+                    mode="proxy",
+                    provider_api_key=None,
+                )
+            )
+        )
         assert d.proxy_response is not None
 
     # --- Priority consistency across repeated calls (10) ---
 
-    @pytest.mark.parametrize("prompt,priority", [
-        ("hello", "always-premium"),
-        ("Write code", "quality-first"),
-        ("What is 2+2?", "balanced"),
-        ("Summarize text", "cost-optimized"),
-        ("Design system", "always-premium"),
-        ("Translate to French", "quality-first"),
-        ("Classify review", "balanced"),
-        ("Extract emails", "cost-optimized"),
-        ("Write blog post", "quality-first"),
-        ("Prove theorem", "always-premium"),
-    ])
+    @pytest.mark.parametrize(
+        "prompt,priority",
+        [
+            ("hello", "always-premium"),
+            ("Write code", "quality-first"),
+            ("What is 2+2?", "balanced"),
+            ("Summarize text", "cost-optimized"),
+            ("Design system", "always-premium"),
+            ("Translate to French", "quality-first"),
+            ("Classify review", "balanced"),
+            ("Extract emails", "cost-optimized"),
+            ("Write blog post", "quality-first"),
+            ("Prove theorem", "always-premium"),
+        ],
+    )
     def test_deterministic_with_zero_exploration(self, prompt, priority):
         """With exploration_rate=0.0 each priority must produce the same model twice."""
-        d1 = rr(self.engine.route(_req(
-            prompt, routing_priority=priority, exploration_rate=0.0,
-        )))
-        d2 = rr(self.engine.route(_req(
-            prompt, routing_priority=priority, exploration_rate=0.0,
-        )))
+        d1 = rr(
+            self.engine.route(
+                _req(
+                    prompt,
+                    routing_priority=priority,
+                    exploration_rate=0.0,
+                )
+            )
+        )
+        d2 = rr(
+            self.engine.route(
+                _req(
+                    prompt,
+                    routing_priority=priority,
+                    exploration_rate=0.0,
+                )
+            )
+        )
         if d1.chosen_model and d2.chosen_model:
             assert d1.chosen_model.model_id == d2.chosen_model.model_id
 
     # --- All four priorities produce valid decisions (15 general smoke tests) ---
 
-    @pytest.mark.parametrize("prompt,priority", [
-        ("hi", "always-premium"),
-        ("Explain backpropagation", "quality-first"),
-        ("What is 2+2?", "balanced"),
-        ("Convert 5 miles to km", "cost-optimized"),
-        ("Build a REST API", "always-premium"),
-        ("Write a blog post", "quality-first"),
-        ("Is Python compiled?", "balanced"),
-        ("Summarize this paragraph", "cost-optimized"),
-        ("Prove √2 is irrational", "always-premium"),
-        ("Compare React vs Vue", "quality-first"),
-        ("Translate 'hello' to French", "balanced"),
-        ("Classify this review as positive/negative", "cost-optimized"),
-        ("Design a multi-tenant SaaS", "always-premium"),
-        ("Explain the CAP theorem", "quality-first"),
-        ("What is inflation?", "balanced"),
-    ])
+    @pytest.mark.parametrize(
+        "prompt,priority",
+        [
+            ("hi", "always-premium"),
+            ("Explain backpropagation", "quality-first"),
+            ("What is 2+2?", "balanced"),
+            ("Convert 5 miles to km", "cost-optimized"),
+            ("Build a REST API", "always-premium"),
+            ("Write a blog post", "quality-first"),
+            ("Is Python compiled?", "balanced"),
+            ("Summarize this paragraph", "cost-optimized"),
+            ("Prove √2 is irrational", "always-premium"),
+            ("Compare React vs Vue", "quality-first"),
+            ("Translate 'hello' to French", "balanced"),
+            ("Classify this review as positive/negative", "cost-optimized"),
+            ("Design a multi-tenant SaaS", "always-premium"),
+            ("Explain the CAP theorem", "quality-first"),
+            ("What is inflation?", "balanced"),
+        ],
+    )
     def test_all_priorities_return_valid_decision(self, prompt, priority):
         d = rr(self.engine.route(_req(prompt, routing_priority=priority, plan="business_plan")))
         assert d.chosen_model is not None

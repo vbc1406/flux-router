@@ -50,7 +50,6 @@ from .config import (
     ADAPTIVE_CUSTOMER_LOG_MAX,
     ADAPTIVE_DECAY_FACTOR,
     ADAPTIVE_MIN_SAMPLES,
-    ADAPTIVE_WEIGHT_FILE,
     MAX_ADAPTIVE_KEYS,
     MAX_CUSTOMERS,
     MAX_DECAY_OVERRIDES,
@@ -61,13 +60,13 @@ from .config import (
 
 log = structlog.get_logger(__name__)
 
-_WRITE_INTERVAL = 50        # flush to disk every N updates
-_SNAPSHOT_INTERVAL = 1000   # take a snapshot every N signals
+_WRITE_INTERVAL = 50  # flush to disk every N updates
+_SNAPSHOT_INTERVAL = 1000  # take a snapshot every N signals
 _MAX_SNAPSHOTS = 5
-_QUALITY_FLOOR = 0.20       # never allow adaptive quality below this
+_QUALITY_FLOOR = 0.20  # never allow adaptive quality below this
 _OUTLIER_STD_MULTIPLIER = 2.0
 _ROLLBACK_DROP_THRESHOLD = 0.90  # roll back if avg drops below 90% of snapshot avg
-_FORMAT_VERSION = 2              # bumped when the on-disk schema changes; triggers auto-migration
+_FORMAT_VERSION = 2  # bumped when the on-disk schema changes; triggers auto-migration
 
 
 class AdaptiveWeights:
@@ -89,7 +88,7 @@ class AdaptiveWeights:
         base_dir: str | Path | None = None,
     ) -> None:
         self._path = safe_resolve(state_file, base_dir) if state_file else None
-        self._lock   = threading.Lock()
+        self._lock = threading.Lock()
         # Global state: key → {adjustment, sample_count, avg_quality, last_updated}
         self._state: dict[str, dict[str, Any]] = {}
         # Per-customer state: customer_id → same structure as _state
@@ -99,7 +98,7 @@ class AdaptiveWeights:
         self._customer_log: dict[str, deque[dict[str, Any]]] = defaultdict(
             lambda: deque(maxlen=ADAPTIVE_CUSTOMER_LOG_MAX)
         )
-        self._dirty  = 0   # updates since last flush
+        self._dirty = 0  # updates since last flush
         self._total_signals = 0
         # Outlier detection: key → {mean, variance, count}
         self._signal_stats: dict[str, dict[str, float]] = {}
@@ -287,12 +286,14 @@ class AdaptiveWeights:
                     customer_id=customer_id,
                     maxlen=clog.maxlen,
                 )
-            clog.append({
-                "model_id":  model_id,
-                "task_type": task_type,
-                "cost":      cost,
-                "timestamp": datetime.utcnow().isoformat(),
-            })
+            clog.append(
+                {
+                    "model_id": model_id,
+                    "task_type": task_type,
+                    "cost": cost,
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+            )
 
     def get_customer_routing_profile(self, customer_id: str) -> dict[str, Any]:
         """
@@ -312,12 +313,12 @@ class AdaptiveWeights:
 
         if not events:
             return {
-                "customer_id":          customer_id,
-                "total_requests":       0,
-                "top_task_types":       [],
-                "top_models":           [],
+                "customer_id": customer_id,
+                "total_requests": 0,
+                "top_task_types": [],
+                "top_models": [],
                 "avg_cost_per_request": 0.0,
-                "has_custom_weights":   False,
+                "has_custom_weights": False,
             }
 
         task_counts: dict[str, int] = defaultdict(int)
@@ -330,17 +331,16 @@ class AdaptiveWeights:
 
         # Check if any model/task pair has enough samples for custom weights
         has_custom = any(
-            v.get("sample_count", 0) >= PER_CUSTOMER_MIN_SAMPLES
-            for v in c_state.values()
+            v.get("sample_count", 0) >= PER_CUSTOMER_MIN_SAMPLES for v in c_state.values()
         )
 
         return {
-            "customer_id":          customer_id,
-            "total_requests":       len(events),
-            "top_task_types":       sorted(task_counts.items(), key=lambda x: -x[1]),
-            "top_models":           sorted(model_counts.items(), key=lambda x: -x[1]),
+            "customer_id": customer_id,
+            "total_requests": len(events),
+            "top_task_types": sorted(task_counts.items(), key=lambda x: -x[1]),
+            "top_models": sorted(model_counts.items(), key=lambda x: -x[1]),
             "avg_cost_per_request": round(total_cost / len(events), 6) if events else 0.0,
-            "has_custom_weights":   has_custom,
+            "has_custom_weights": has_custom,
         }
 
     def flush(self) -> None:
@@ -397,18 +397,17 @@ class AdaptiveWeights:
         """
         if not entry:
             entry = {
-                "adjustment":   0.0,
+                "adjustment": 0.0,
                 "sample_count": 0,
-                "avg_quality":  base_quality_rating,
+                "avg_quality": base_quality_rating,
                 "last_updated": datetime.utcnow().isoformat(),
             }
         entry["avg_quality"] = (
-            decay_factor * entry["avg_quality"]
-            + (1.0 - decay_factor) * quality_score
+            decay_factor * entry["avg_quality"] + (1.0 - decay_factor) * quality_score
         )
         # Quality floor — prevents permanent blacklisting from bad data
         entry["avg_quality"] = max(_QUALITY_FLOOR, entry["avg_quality"])
-        entry["adjustment"]   = entry["avg_quality"] - base_quality_rating
+        entry["adjustment"] = entry["avg_quality"] - base_quality_rating
         entry["sample_count"] += 1
         entry["last_updated"] = datetime.utcnow().isoformat()
         return entry
@@ -440,19 +439,25 @@ class AdaptiveWeights:
         delta = quality - s["mean"]
         s["mean"] += delta / s["count"]
         delta2 = quality - s["mean"]
-        s["variance"] = (s["variance"] * (s["count"] - 2) + delta * delta2) / (s["count"] - 1) if s["count"] > 1 else 0.0
+        s["variance"] = (
+            (s["variance"] * (s["count"] - 2) + delta * delta2) / (s["count"] - 1)
+            if s["count"] > 1
+            else 0.0
+        )
 
     def _maybe_snapshot(self) -> None:
         """Take a snapshot of global weights every _SNAPSHOT_INTERVAL signals (caller holds lock)."""
         if self._total_signals > 0 and self._total_signals % _SNAPSHOT_INTERVAL == 0:
             snap_avg = self._avg_quality(self._state)
-            self._snapshots.append({
-                "state":        copy.deepcopy(self._state),
-                "signal_stats": copy.deepcopy(self._signal_stats),
-                # Pre-computed avg so _check_for_corruption never recomputes it from
-                # the (potentially large) snapshot state dict on every incoming signal.
-                "avg_quality":  snap_avg,
-            })
+            self._snapshots.append(
+                {
+                    "state": copy.deepcopy(self._state),
+                    "signal_stats": copy.deepcopy(self._signal_stats),
+                    # Pre-computed avg so _check_for_corruption never recomputes it from
+                    # the (potentially large) snapshot state dict on every incoming signal.
+                    "avg_quality": snap_avg,
+                }
+            )
             self._snapshots = self._snapshots[-_MAX_SNAPSHOTS:]
             # Cache the baseline for continuous between-snapshot drift detection.
             self._last_snapshot_avg = snap_avg
@@ -475,7 +480,7 @@ class AdaptiveWeights:
         current_avg = self._avg_quality(self._state)
         if current_avg < self._last_snapshot_avg * _ROLLBACK_DROP_THRESHOLD:
             snapshot = self._snapshots[-1]
-            self._state        = copy.deepcopy(snapshot["state"])
+            self._state = copy.deepcopy(snapshot["state"])
             self._signal_stats = copy.deepcopy(snapshot["signal_stats"])
             # Reset baseline to the restored snapshot so the next signals are compared
             # against the clean state, not the pre-rollback degraded average.
@@ -555,8 +560,8 @@ class AdaptiveWeights:
             return
         try:
             data = {
-                "version":   _FORMAT_VERSION,
-                "global":    self._state,
+                "version": _FORMAT_VERSION,
+                "global": self._state,
                 "customers": {k: dict(v) for k, v in self._customer_state.items()},
             }
             atomic_write_json(self._path, data)

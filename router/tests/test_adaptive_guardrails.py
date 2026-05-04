@@ -38,6 +38,7 @@ Test classes:
   TestCustomerLogWrap       — Issue 5: customer log cap + debug log on wrap
   TestDataMigration         — Issue 6: v0/v1/v2 on-disk format migration
 """
+
 from __future__ import annotations
 
 import json
@@ -46,11 +47,11 @@ import pytest
 
 import router.adaptive_weights as aw_mod
 from router.adaptive_weights import (
-    AdaptiveWeights,
     _FORMAT_VERSION,
     _QUALITY_FLOOR,
     _ROLLBACK_DROP_THRESHOLD,
     _WRITE_INTERVAL,
+    AdaptiveWeights,
 )
 from router.config import ADAPTIVE_CUSTOMER_LOG_MAX, PER_CUSTOMER_MIN_SAMPLES
 
@@ -64,8 +65,25 @@ class TestOutlierFiltering:
         aw = _aw()
         # Seed 15 signals with natural variance around 0.85 so std > 0.01
         import random
+
         random.seed(42)
-        for v in [0.80, 0.82, 0.83, 0.84, 0.85, 0.85, 0.86, 0.86, 0.87, 0.87, 0.88, 0.88, 0.89, 0.90, 0.91]:
+        for v in [
+            0.80,
+            0.82,
+            0.83,
+            0.84,
+            0.85,
+            0.85,
+            0.86,
+            0.86,
+            0.87,
+            0.87,
+            0.88,
+            0.88,
+            0.89,
+            0.90,
+            0.91,
+        ]:
             aw.record("gpt-4o", "code_generation", v)
         key = "gpt-4o:code_generation"
         count_before = aw._state[key]["sample_count"]
@@ -77,7 +95,23 @@ class TestOutlierFiltering:
 
     def test_normal_signal_accepted(self):
         aw = _aw()
-        for v in [0.80, 0.82, 0.83, 0.84, 0.85, 0.85, 0.86, 0.86, 0.87, 0.87, 0.88, 0.88, 0.89, 0.90, 0.91]:
+        for v in [
+            0.80,
+            0.82,
+            0.83,
+            0.84,
+            0.85,
+            0.85,
+            0.86,
+            0.86,
+            0.87,
+            0.87,
+            0.88,
+            0.88,
+            0.89,
+            0.90,
+            0.91,
+        ]:
             aw.record("gpt-4o", "code_generation", v)
         key = "gpt-4o:code_generation"
         count_before = aw._state[key]["sample_count"]
@@ -190,6 +224,7 @@ class TestSnapshotRollback:
 
 # ── Issue #1: Slow drift detection ──────────────────────────────────────────
 
+
 class TestDriftDetection:
     def test_gradual_drift_triggers_rollback_between_snapshots(self):
         """Quality that degrades slowly (below snapshot_avg × 0.9) must roll back
@@ -240,6 +275,7 @@ class TestDriftDetection:
 
 
 # ── Issue #2: Configurable decay factor ─────────────────────────────────────
+
 
 class TestCustomDecayFactor:
     def test_faster_decay_converges_quicker(self):
@@ -294,6 +330,7 @@ class TestCustomDecayFactor:
 
 # ── Issue #3: Quality score validation ──────────────────────────────────────
 
+
 class TestQualityScoreClamping:
     def test_score_above_1_is_clamped_and_accepted(self):
         """Scores > 1.0 must be clamped to 1.0 and recorded, not silently dropped."""
@@ -325,6 +362,7 @@ class TestQualityScoreClamping:
 
 # ── Issue #4: Per-customer threshold ────────────────────────────────────────
 
+
 class TestPerCustomerThreshold:
     def test_threshold_is_10(self):
         assert PER_CUSTOMER_MIN_SAMPLES == 10
@@ -347,6 +385,7 @@ class TestPerCustomerThreshold:
 
 
 # ── Issue #5: Customer log wrap detection ───────────────────────────────────
+
 
 class TestCustomerLogWrap:
     def test_log_length_capped_at_maxlen(self):
@@ -379,13 +418,22 @@ class TestCustomerLogWrap:
 
 # ── Issue #6: Data migration ─────────────────────────────────────────────────
 
+
 class TestDataMigration:
     def test_v0_flat_format_migrated(self, tmp_path):
         """v0 flat-dict format must be loaded and flagged for immediate flush."""
         state_file = tmp_path / "state.json"
-        state_file.write_text(json.dumps({"gpt-4o:reasoning": {
-            "avg_quality": 0.80, "adjustment": 0.30, "sample_count": 25,
-        }}))
+        state_file.write_text(
+            json.dumps(
+                {
+                    "gpt-4o:reasoning": {
+                        "avg_quality": 0.80,
+                        "adjustment": 0.30,
+                        "sample_count": 25,
+                    }
+                }
+            )
+        )
         aw = AdaptiveWeights(state_file=str(state_file), base_dir=tmp_path)
         assert "gpt-4o:reasoning" in aw._state
         # Migration must schedule an immediate flush
@@ -394,10 +442,14 @@ class TestDataMigration:
     def test_v1_format_migrated(self, tmp_path):
         """v1 format (global/customers present, no 'version' key) must trigger migration."""
         state_file = tmp_path / "state.json"
-        state_file.write_text(json.dumps({
-            "global": {"gpt-4o:reasoning": {"avg_quality": 0.80, "sample_count": 5}},
-            "customers": {},
-        }))
+        state_file.write_text(
+            json.dumps(
+                {
+                    "global": {"gpt-4o:reasoning": {"avg_quality": 0.80, "sample_count": 5}},
+                    "customers": {},
+                }
+            )
+        )
         aw = AdaptiveWeights(state_file=str(state_file), base_dir=tmp_path)
         assert "gpt-4o:reasoning" in aw._state
         assert aw._dirty >= _WRITE_INTERVAL
@@ -405,11 +457,15 @@ class TestDataMigration:
     def test_v2_format_no_migration(self, tmp_path):
         """Current v2 format must load cleanly without triggering a migration flush."""
         state_file = tmp_path / "state.json"
-        state_file.write_text(json.dumps({
-            "version": _FORMAT_VERSION,
-            "global": {"gpt-4o:reasoning": {"avg_quality": 0.80, "sample_count": 5}},
-            "customers": {},
-        }))
+        state_file.write_text(
+            json.dumps(
+                {
+                    "version": _FORMAT_VERSION,
+                    "global": {"gpt-4o:reasoning": {"avg_quality": 0.80, "sample_count": 5}},
+                    "customers": {},
+                }
+            )
+        )
         aw = AdaptiveWeights(state_file=str(state_file), base_dir=tmp_path)
         assert "gpt-4o:reasoning" in aw._state
         assert aw._dirty == 0  # no migration needed — file is already current format

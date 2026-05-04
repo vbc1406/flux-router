@@ -32,12 +32,13 @@ from .schemas import ModelOption, RoutingRequest
 
 log = structlog.get_logger(__name__)
 
+
 # How we build the messages list from a RoutingRequest
 def _build_messages(request: RoutingRequest) -> list[dict[str, str]]:
     """Convert RoutingRequest fields into a universal chat messages list."""
     messages: list[dict[str, str]] = []
     for turn in request.message_history:
-        role    = turn.get("role", "user")
+        role = turn.get("role", "user")
         content = turn.get("content", "")
         messages.append({"role": role, "content": content})
     messages.append({"role": "user", "content": request.raw_prompt})
@@ -45,6 +46,7 @@ def _build_messages(request: RoutingRequest) -> list[dict[str, str]]:
 
 
 # ── Custom exception ─────────────────────────────────────────────────────────
+
 
 class ProviderCallError(Exception):
     """Raised when a provider API call fails.  Carries http_status for routing."""
@@ -55,6 +57,7 @@ class ProviderCallError(Exception):
 
 
 # ── Low-level urllib helper ──────────────────────────────────────────────────
+
 
 def _post_json(
     url: str,
@@ -68,10 +71,13 @@ def _post_json(
     leaking prompt fragments, partial keys, emails, or org IDs into logs and
     exception strings. Response bodies are emitted at DEBUG level only.
     """
+    # 🔒 SECURITY-CRITICAL: defense-in-depth against B310 / scheme injection
+    if not url.startswith("https://"):
+        raise ProviderCallError("Invalid URL scheme; only https allowed", http_status=None)
     data = json.dumps(body).encode("utf-8")
-    req  = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=PROVIDER_CALL_TIMEOUT_SECONDS) as resp:
+        with urllib.request.urlopen(req, timeout=PROVIDER_CALL_TIMEOUT_SECONDS) as resp:  # nosec B310 — scheme validated above
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body_text = ""
@@ -97,6 +103,7 @@ def _post_json(
 
 # ── Provider-specific callers (synchronous) ──────────────────────────────────
 
+
 def _call_anthropic_sync(
     model: ModelOption,
     request: RoutingRequest,
@@ -104,9 +111,9 @@ def _call_anthropic_sync(
 ) -> str:
     messages = _build_messages(request)
     body: dict[str, Any] = {
-        "model":      model.model_id,
+        "model": model.model_id,
         "max_tokens": request.max_tokens_requested or 1024,
-        "messages":   messages,
+        "messages": messages,
     }
     if request.system_prompt:
         body["system"] = request.system_prompt
@@ -114,9 +121,9 @@ def _call_anthropic_sync(
         body["temperature"] = request.temperature
 
     headers = {
-        "x-api-key":         api_key,
+        "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
-        "content-type":      "application/json",
+        "content-type": "application/json",
     }
     data = _post_json(
         "https://api.anthropic.com/v1/messages", headers, body, provider_name="anthropic"
@@ -140,8 +147,8 @@ def _call_openai_compat_sync(
         messages.insert(0, {"role": "system", "content": request.system_prompt})
 
     body: dict[str, Any] = {
-        "model":      model.model_id,
-        "messages":   messages,
+        "model": model.model_id,
+        "messages": messages,
         "max_tokens": request.max_tokens_requested or 1024,
     }
     if request.temperature is not None:
@@ -149,11 +156,9 @@ def _call_openai_compat_sync(
 
     headers = {
         "Authorization": f"Bearer {api_key}",
-        "Content-Type":  "application/json",
+        "Content-Type": "application/json",
     }
-    data = _post_json(
-        f"{base_url}/chat/completions", headers, body, provider_name=provider_name
-    )
+    data = _post_json(f"{base_url}/chat/completions", headers, body, provider_name=provider_name)
     try:
         return data["choices"][0]["message"]["content"]
     except (KeyError, IndexError) as exc:
@@ -167,10 +172,12 @@ def _call_google_sync(
 ) -> str:
     contents: list[dict[str, Any]] = []
     for turn in request.message_history:
-        contents.append({
-            "role":  turn.get("role", "user"),
-            "parts": [{"text": turn.get("content", "")}],
-        })
+        contents.append(
+            {
+                "role": turn.get("role", "user"),
+                "parts": [{"text": turn.get("content", "")}],
+            }
+        )
     contents.append({"role": "user", "parts": [{"text": request.raw_prompt}]})
 
     body: dict[str, Any] = {"contents": contents}
@@ -178,10 +185,7 @@ def _call_google_sync(
         body["system_instruction"] = {"parts": [{"text": request.system_prompt}]}
 
     model_id = model.model_id.replace("-thinking", "")  # strip suffix for API
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model_id}:generateContent"
-    )
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent"
     # Pass key as a header to avoid it appearing in server access logs.
     headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
     data = _post_json(url, headers, body, provider_name="google")
@@ -194,13 +198,14 @@ def _call_google_sync(
 # ── Base URL map ─────────────────────────────────────────────────────────────
 
 _OPENAI_COMPAT_BASES: dict[str, str] = {
-    "openai":  "https://api.openai.com/v1",
-    "groq":    "https://api.groq.com/openai/v1",
+    "openai": "https://api.openai.com/v1",
+    "groq": "https://api.groq.com/openai/v1",
     "mistral": "https://api.mistral.ai/v1",
 }
 
 
 # ── Public async entry point ─────────────────────────────────────────────────
+
 
 async def call_provider(
     model: ModelOption,
@@ -214,7 +219,7 @@ async def call_provider(
     Raises ProviderCallError (with .status_code) on failure.
     """
     provider = model.provider.lower()
-    loop     = asyncio.get_running_loop()
+    loop = asyncio.get_running_loop()
 
     # 🔧 EXTENSION POINT: Add a new provider here.
     # Steps: (1) add the provider name to this if/elif chain,
@@ -225,7 +230,7 @@ async def call_provider(
         fn = lambda: _call_anthropic_sync(model, request, api_key)
     elif provider in _OPENAI_COMPAT_BASES:
         base = _OPENAI_COMPAT_BASES[provider]
-        fn   = lambda: _call_openai_compat_sync(model, request, api_key, base, provider)
+        fn = lambda: _call_openai_compat_sync(model, request, api_key, base, provider)
     elif provider == "google":
         fn = lambda: _call_google_sync(model, request, api_key)
     else:

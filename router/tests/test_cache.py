@@ -19,6 +19,7 @@ Test classes:
   TestCacheEligibility   — which request types are skipped (non-deterministic, etc.)
   TestResponseCache      — get/set, TTL expiry, hit-rate counters, disabled mode
 """
+
 from __future__ import annotations
 
 import time
@@ -31,13 +32,20 @@ from router.schemas import ModelOption
 
 def _model(mid: str = "test-model") -> ModelOption:
     return ModelOption(
-        provider="test", model_id=mid, display_name="Test",
-        tier="cheap", cost_per_1k_input=0.001, cost_per_1k_output=0.002,
-        max_context_window=4096, max_output_tokens=1000, capabilities=[],
+        provider="test",
+        model_id=mid,
+        display_name="Test",
+        tier="cheap",
+        cost_per_1k_input=0.001,
+        cost_per_1k_output=0.002,
+        max_context_window=4096,
+        max_output_tokens=1000,
+        capabilities=[],
     )
 
 
 # ── Fingerprinting ────────────────────────────────────────────────────────────
+
 
 class TestFingerprint:
     def test_deterministic(self):
@@ -60,8 +68,8 @@ class TestFingerprint:
         assert fp_lo != fp_hi
 
     def test_filler_normalised_away(self):
-        fp1 = fingerprint("What is 2+2?",         None, [], None)
-        fp2 = fingerprint("Please What is 2+2?",  None, [], None)
+        fp1 = fingerprint("What is 2+2?", None, [], None)
+        fp2 = fingerprint("Please What is 2+2?", None, [], None)
         fp3 = fingerprint("Can you What is 2+2?", None, [], None)
         # All three normalise to the same core question
         assert fp1 == fp2 == fp3
@@ -72,21 +80,21 @@ class TestFingerprint:
         assert fp1 == fp2
 
     def test_whitespace_collapse(self):
-        fp1 = fingerprint("hello   world",  None, [], None)
-        fp2 = fingerprint("hello world",    None, [], None)
+        fp1 = fingerprint("hello   world", None, [], None)
+        fp2 = fingerprint("hello world", None, [], None)
         assert fp1 == fp2
 
     def test_date_removal(self):
-        fp1 = fingerprint("What happened today?",       None, [], None)
-        fp2 = fingerprint("What happened?",             None, [], None)
-        fp3 = fingerprint("What happened currently?",   None, [], None)
+        fp1 = fingerprint("What happened today?", None, [], None)
+        fp2 = fingerprint("What happened?", None, [], None)
+        fp3 = fingerprint("What happened currently?", None, [], None)
         # "today" and "currently" stripped → similar hash as the bare question
         assert fp1 == fp2 == fp3
 
     def test_system_prompt_included(self):
-        fp1 = fingerprint("Hello", "You are a pirate", [],  None)
-        fp2 = fingerprint("Hello", "You are helpful",  [],  None)
-        fp3 = fingerprint("Hello", None,               [],  None)
+        fp1 = fingerprint("Hello", "You are a pirate", [], None)
+        fp2 = fingerprint("Hello", "You are helpful", [], None)
+        fp3 = fingerprint("Hello", None, [], None)
         assert fp1 != fp2
         assert fp1 != fp3
 
@@ -114,15 +122,16 @@ class TestFingerprint:
 
 # ── Cache eligibility ─────────────────────────────────────────────────────────
 
+
 class TestCacheEligibility:
     def test_simple_qa_eligible(self):
-        assert is_cache_eligible("simple_qa", None)  is True
-        assert is_cache_eligible("simple_qa", 0.0)   is True
-        assert is_cache_eligible("simple_qa", 0.3)   is True
+        assert is_cache_eligible("simple_qa", None) is True
+        assert is_cache_eligible("simple_qa", 0.0) is True
+        assert is_cache_eligible("simple_qa", 0.3) is True
 
     def test_simple_qa_high_temp_not_eligible(self):
         assert is_cache_eligible("simple_qa", 0.31) is False
-        assert is_cache_eligible("simple_qa", 1.0)  is False
+        assert is_cache_eligible("simple_qa", 1.0) is False
 
     def test_translation_eligible(self):
         assert is_cache_eligible("translation", None) is True
@@ -137,7 +146,7 @@ class TestCacheEligibility:
         assert is_cache_eligible("summarization", None) is True
 
     def test_creative_not_eligible(self):
-        assert is_cache_eligible("creative_writing", 0.0)  is False
+        assert is_cache_eligible("creative_writing", 0.0) is False
         assert is_cache_eligible("creative_writing", None) is False
 
     def test_conversation_not_eligible(self):
@@ -155,6 +164,7 @@ class TestCacheEligibility:
 
 
 # ── ResponseCache ─────────────────────────────────────────────────────────────
+
 
 class TestResponseCache:
     def setup_method(self):
@@ -207,13 +217,13 @@ class TestResponseCache:
 
     def test_stats_hit_rate(self):
         self.cache.set("fp_s", "data", self.model, 0.001)
-        self.cache.get("fp_s")   # hit
-        self.cache.get("fp_s")   # hit
-        self.cache.get("missing") # miss
+        self.cache.get("fp_s")  # hit
+        self.cache.get("fp_s")  # hit
+        self.cache.get("missing")  # miss
         stats = self.cache.stats()
-        assert stats["total_hits"]   == 2
+        assert stats["total_hits"] == 2
         assert stats["total_misses"] == 1
-        assert abs(stats["hit_rate"] - 2/3) < 0.01
+        assert abs(stats["hit_rate"] - 2 / 3) < 0.01
 
     def test_disabled_cache_always_misses(self):
         cache = ResponseCache(enabled=False)

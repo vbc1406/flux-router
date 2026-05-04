@@ -12,8 +12,7 @@ import asyncio
 import random
 import sys
 import time
-import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -23,12 +22,12 @@ from rich import box
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.text import Text
 
 from router.adaptive_weights import AdaptiveWeights
 from router.analytics import RoutingAnalytics
 from router.budget_tracker import BudgetTracker
-from router.cache import ResponseCache, fingerprint as fp_fn, is_cache_eligible
+from router.cache import ResponseCache, is_cache_eligible
+from router.cache import fingerprint as fp_fn
 from router.classifier import RequestClassifier
 from router.context_compressor import ContextCompressor
 from router.model_registry import ModelRegistry
@@ -69,8 +68,14 @@ _YES_NO = [
 ]
 
 _PHRASES = [
-    "good morning", "thank you", "good night", "how are you",
-    "see you later", "have a nice day", "excuse me", "you're welcome",
+    "good morning",
+    "thank you",
+    "good night",
+    "how are you",
+    "see you later",
+    "have a nice day",
+    "excuse me",
+    "you're welcome",
 ]
 
 _UNITS = [
@@ -176,7 +181,10 @@ _COMPLEX_CODE = [
     ("REST API with authentication, rate limiting, pagination, and WebSocket support", "FastAPI"),
     ("drag-and-drop kanban board with state management, animations, and persistence", "React"),
     ("CLI tool for monitoring system resources with configurable alerts and logging", "Python"),
-    ("real-time chat application with rooms, typing indicators, and message persistence", "Node.js"),
+    (
+        "real-time chat application with rooms, typing indicators, and message persistence",
+        "Node.js",
+    ),
     ("distributed job queue with retry logic, dead letter queues, and metrics", "Python"),
 ]
 
@@ -203,7 +211,7 @@ _LEGAL_FINANCIAL = [
     ),
 ]
 
-_BUGGY_CODE_1 = '''```python
+_BUGGY_CODE_1 = """```python
 def process_orders(orders):
     results = []
     for order in orders:
@@ -216,9 +224,9 @@ def process_orders(orders):
             results.append(order)
     return results
 # Issues: mutates input dicts, no handling for missing keys, no float precision
-```'''
+```"""
 
-_BUGGY_CODE_2 = '''```python
+_BUGGY_CODE_2 = """```python
 import asyncio
 import threading
 
@@ -238,15 +246,15 @@ async def consumer():
                 item = shared_data.pop(0)
                 await process(item)
         await asyncio.sleep(0.1)
-```'''
+```"""
 
-_BUGGY_CODE_3 = '''```javascript
+_BUGGY_CODE_3 = """```javascript
 const handlers = [];
 setInterval(() => {
   handlers.push(() => console.log('tick'));
 }, 100);
 // Memory leak: handlers array grows unbounded
-```'''
+```"""
 
 _ARCH_SCENARIOS = [
     "a multi-tenant SaaS platform with row-level security, audit logging, and soft deletes",
@@ -297,6 +305,7 @@ _LONG_CONTRACT = (
 
 # ── Dataset generation ─────────────────────────────────────────────────────────
 
+
 def _req(
     prompt: str,
     category: str,
@@ -308,14 +317,14 @@ def _req(
     plan: str = "business_plan",
 ) -> dict:
     return {
-        "raw_prompt":            prompt,
-        "user_id":               user_id or "bench_user_{}".format(random.randint(1, 20)),
-        "plan":                  plan,
-        "priority":              priority,
-        "temperature":           temperature,
+        "raw_prompt": prompt,
+        "user_id": user_id or "bench_user_{}".format(random.randint(1, 20)),
+        "plan": plan,
+        "priority": priority,
+        "temperature": temperature,
         "required_capabilities": capabilities or [],
-        "metadata":              dict(metadata or {}),
-        "category":              category,
+        "metadata": dict(metadata or {}),
+        "category": category,
     }
 
 
@@ -355,10 +364,12 @@ def generate_test_dataset() -> List[dict]:
 
     # Classification (25)
     for review in random.choices(_REVIEWS, k=25):
-        ds.append(_req(
-            "Classify this review as positive or negative: '{}'".format(review),
-            "cheap_classification",
-        ))
+        ds.append(
+            _req(
+                "Classify this review as positive or negative: '{}'".format(review),
+                "cheap_classification",
+            )
+        )
 
     # Extraction (25)
     for i in range(25):
@@ -390,10 +401,14 @@ def generate_test_dataset() -> List[dict]:
     # Code generation (25)
     for task in random.choices(_SORT_TASKS, k=25):
         lang = random.choice(["Python", "JavaScript", "Go", "Java"])
-        ds.append(_req(
-            "Write a {} function to {} with O(n log n) or better time complexity".format(lang, task),
-            "mid_code",
-        ))
+        ds.append(
+            _req(
+                "Write a {} function to {} with O(n log n) or better time complexity".format(
+                    lang, task
+                ),
+                "mid_code",
+            )
+        )
 
     # Blog posts (20)
     for topic in random.choices(_BLOG_TOPICS, k=20):
@@ -405,7 +420,9 @@ def generate_test_dataset() -> List[dict]:
 
     # Explanations (20)
     for topic in random.choices(_EXPLAIN_TOPICS, k=20):
-        ds.append(_req("Explain {} in detail with practical examples".format(topic), "mid_explanation"))
+        ds.append(
+            _req("Explain {} in detail with practical examples".format(topic), "mid_explanation")
+        )
 
     # Analysis (15)
     for topic in random.choices(_ANALYSIS_TOPICS, k=15):
@@ -425,18 +442,22 @@ def generate_test_dataset() -> List[dict]:
     # Debugging (25)
     _debug = [_BUGGY_CODE_1, _BUGGY_CODE_2, _BUGGY_CODE_3]
     for code in random.choices(_debug, k=25):
-        ds.append(_req(
-            "Debug this code and explain every bug you find:\n{}".format(code),
-            "premium_debug",
-            priority="high",
-        ))
+        ds.append(
+            _req(
+                "Debug this code and explain every bug you find:\n{}".format(code),
+                "premium_debug",
+                priority="high",
+            )
+        )
 
     # Architecture (25)
     for scenario in random.choices(_ARCH_SCENARIOS, k=25):
-        ds.append(_req(
-            "Design a complete system architecture for {}".format(scenario),
-            "premium_architecture",
-        ))
+        ds.append(
+            _req(
+                "Design a complete system architecture for {}".format(scenario),
+                "premium_architecture",
+            )
+        )
 
     # ── ULTRA tier targets (50) ───────────────────────────────────────────────
 
@@ -446,12 +467,16 @@ def generate_test_dataset() -> List[dict]:
 
     # Long-document analysis (15)
     for _ in range(15):
-        ds.append(_req(
-            "Given this contract, identify every liability clause, cross-reference "
-            "with indemnification sections, and produce a risk matrix:\n{}".format(_LONG_CONTRACT),
-            "ultra_longdoc",
-            priority="critical",
-        ))
+        ds.append(
+            _req(
+                "Given this contract, identify every liability clause, cross-reference "
+                "with indemnification sections, and produce a risk matrix:\n{}".format(
+                    _LONG_CONTRACT
+                ),
+                "ultra_longdoc",
+                priority="critical",
+            )
+        )
 
     # Multi-step reasoning (15)
     for prompt in random.choices(_REASONING_PROMPTS, k=15):
@@ -469,7 +494,9 @@ def generate_test_dataset() -> List[dict]:
     # Very long prompts (5)
     _lorem = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor "
     ds.append(_req("Analyze this text: " + _lorem * 150, "edge_long"))
-    ds.append(_req("Summarize the following: " + ("The quick brown fox jumps. " * 400), "edge_long"))
+    ds.append(
+        _req("Summarize the following: " + ("The quick brown fox jumps. " * 400), "edge_long")
+    )
     _code_blob = "```python\n" + ("result = result + compute(x)\n" * 400) + "```"
     ds.append(_req(_code_blob, "edge_long"))
     ds.append(_req("Review this code: " + _code_blob, "edge_long"))
@@ -479,27 +506,35 @@ def generate_test_dataset() -> List[dict]:
     ds.append(_req("```python\ndef foo(x):\n    return x * 2\n```", "edge_code_only"))
     ds.append(_req("```javascript\nconst add = (a, b) => a + b;\n```", "edge_code_only"))
     ds.append(_req("SELECT * FROM users WHERE id = 1 AND active = true;", "edge_sql_only"))
-    ds.append(_req("git commit -m 'fix: resolve race condition in auth middleware'", "edge_cli_only"))
-    ds.append(_req(
-        "curl -X POST https://api.example.com/v1/data -H 'Content-Type: application/json'",
-        "edge_url_only",
-    ))
+    ds.append(
+        _req("git commit -m 'fix: resolve race condition in auth middleware'", "edge_cli_only")
+    )
+    ds.append(
+        _req(
+            "curl -X POST https://api.example.com/v1/data -H 'Content-Type: application/json'",
+            "edge_url_only",
+        )
+    )
 
     # Vision requests (5)
     for _ in range(5):
-        ds.append(_req(
-            "What objects are visible in this image? Describe each one in detail.",
-            "edge_vision",
-            capabilities=["vision"],
-        ))
+        ds.append(
+            _req(
+                "What objects are visible in this image? Describe each one in detail.",
+                "edge_vision",
+                capabilities=["vision"],
+            )
+        )
 
     # Function calling (5)
     for _ in range(5):
-        ds.append(_req(
-            "Get the current weather for San Francisco, CA",
-            "edge_function_calling",
-            capabilities=["function_calling"],
-        ))
+        ds.append(
+            _req(
+                "Get the current weather for San Francisco, CA",
+                "edge_function_calling",
+                capabilities=["function_calling"],
+            )
+        )
 
     # High temperature (should NOT be cached) (5)
     _creative = "Write a short poem about the ocean at sunset"
@@ -517,10 +552,16 @@ def generate_test_dataset() -> List[dict]:
         ds.append(_req(_dup, "edge_duplicate"))
 
     # Explicit model overrides (2)
-    ds.append(_req("Write a haiku about mountains", "edge_override",
-                   metadata={"model": "gpt-4o-mini"}))
-    ds.append(_req("Explain recursion briefly", "edge_override",
-                   metadata={"model": "claude-haiku-4-5-20251001"}))
+    ds.append(
+        _req("Write a haiku about mountains", "edge_override", metadata={"model": "gpt-4o-mini"})
+    )
+    ds.append(
+        _req(
+            "Explain recursion briefly",
+            "edge_override",
+            metadata={"model": "claude-haiku-4-5-20251001"},
+        )
+    )
 
     # Anti-gaming: rapid-fire from same user (5)
     for _ in range(5):
@@ -528,18 +569,21 @@ def generate_test_dataset() -> List[dict]:
 
     # Budget-limited: free_plan user (3)
     for _ in range(3):
-        ds.append(_req(
-            "Write a detailed analysis of quantum computing applications in cryptography",
-            "edge_budget",
-            user_id="budget_user_1",
-            plan="free_plan",
-        ))
+        ds.append(
+            _req(
+                "Write a detailed analysis of quantum computing applications in cryptography",
+                "edge_budget",
+                user_id="budget_user_1",
+                plan="free_plan",
+            )
+        )
 
     assert len(ds) == 500, "Expected 500, got {}".format(len(ds))
     return ds
 
 
 # ── Results container ─────────────────────────────────────────────────────────
+
 
 @dataclass
 class RouteResult:
@@ -569,6 +613,7 @@ class BenchmarkResults:
 
 # ── Benchmark runner ──────────────────────────────────────────────────────────
 
+
 def _extract_reasoning(reasoning: str) -> Tuple[str, float]:
     """Pull task_type and complexity out of the routing decision reasoning string."""
     task_type = "unknown"
@@ -584,28 +629,28 @@ def _extract_reasoning(reasoning: str) -> Tuple[str, float]:
 
 
 async def run_benchmark(dataset: List[dict]) -> BenchmarkResults:
-    registry   = ModelRegistry()
-    cache      = ResponseCache()
-    adaptive   = AdaptiveWeights(state_file=None)
-    analytics  = RoutingAnalytics(log_path=None)
-    budget     = BudgetTracker()
+    registry = ModelRegistry()
+    cache = ResponseCache()
+    adaptive = AdaptiveWeights(state_file=None)
+    analytics = RoutingAnalytics(log_path=None)
+    budget = BudgetTracker()
     compressor = ContextCompressor()
     classifier = RequestClassifier(cache)
-    _quality   = QualityScorer(adaptive)
+    _quality = QualityScorer(adaptive)
     # Separate classifier instance with cache disabled — used to get task_type
     # for every request regardless of cache hit status (cache hits have no task=
     # in their reasoning string, which would otherwise inflate "unknown" count).
     _probe_cache = ResponseCache(enabled=False)
-    _probe_clf   = RequestClassifier(_probe_cache)
+    _probe_clf = RequestClassifier(_probe_cache)
 
     engine = RoutingEngine(
-        model_registry     = registry,
-        classifier         = classifier,
-        cache              = cache,
-        budget_tracker     = budget,
-        adaptive_weights   = adaptive,
-        context_compressor = compressor,
-        analytics          = analytics,
+        model_registry=registry,
+        classifier=classifier,
+        cache=cache,
+        budget_tracker=budget,
+        adaptive_weights=adaptive,
+        context_compressor=compressor,
+        analytics=analytics,
     )
 
     results: List[RouteResult] = []
@@ -613,23 +658,29 @@ async def run_benchmark(dataset: List[dict]) -> BenchmarkResults:
 
     for idx, sample in enumerate(dataset, start=1):
         category = sample["category"]
-        temp     = sample["temperature"]
+        temp = sample["temperature"]
 
         try:
             req = RoutingRequest(
-                raw_prompt            = sample["raw_prompt"],
-                user_id               = sample["user_id"],
-                plan                  = sample["plan"],
-                priority              = sample["priority"],
-                temperature           = temp,
-                required_capabilities = sample["required_capabilities"],
-                metadata              = sample["metadata"],
+                raw_prompt=sample["raw_prompt"],
+                user_id=sample["user_id"],
+                plan=sample["plan"],
+                priority=sample["priority"],
+                temperature=temp,
+                required_capabilities=sample["required_capabilities"],
+                metadata=sample["metadata"],
             )
         except Exception as exc:
-            results.append(RouteResult(
-                idx=idx, category=category, prompt=sample["raw_prompt"],
-                decision=RoutingDecision(), routing_time_ms=0.0, error=str(exc),
-            ))
+            results.append(
+                RouteResult(
+                    idx=idx,
+                    category=category,
+                    prompt=sample["raw_prompt"],
+                    decision=RoutingDecision(),
+                    routing_time_ms=0.0,
+                    error=str(exc),
+                )
+            )
             continue
 
         t0 = time.perf_counter()
@@ -644,9 +695,9 @@ async def run_benchmark(dataset: List[dict]) -> BenchmarkResults:
         # Always classify directly — don't rely on reasoning string which is
         # absent for cache hits.
         try:
-            _analysis   = _probe_clf.analyze(req)
-            task_type   = _analysis.task_type
-            complexity  = _analysis.complexity_score
+            _analysis = _probe_clf.analyze(req)
+            task_type = _analysis.task_type
+            complexity = _analysis.complexity_score
         except Exception:
             task_type, complexity = _extract_reasoning(decision.reasoning)
 
@@ -666,22 +717,24 @@ async def run_benchmark(dataset: List[dict]) -> BenchmarkResults:
                 req.temperature,
             )
             cache.set(
-                fp            = real_fp,
-                response_text = "[benchmark mock response]",
-                model_used    = decision.chosen_model,
-                original_cost = decision.estimated_cost,
+                fp=real_fp,
+                response_text="[benchmark mock response]",
+                model_used=decision.chosen_model,
+                original_cost=decision.estimated_cost,
             )
 
-        results.append(RouteResult(
-            idx            = idx,
-            category       = category,
-            prompt         = sample["raw_prompt"],
-            decision       = decision,
-            routing_time_ms= routing_ms,
-            task_type      = task_type,
-            complexity     = complexity,
-            error          = error,
-        ))
+        results.append(
+            RouteResult(
+                idx=idx,
+                category=category,
+                prompt=sample["raw_prompt"],
+                decision=decision,
+                routing_time_ms=routing_ms,
+                task_type=task_type,
+                complexity=complexity,
+                error=error,
+            )
+        )
 
     total_time = time.perf_counter() - start_all
     return BenchmarkResults(results=results, total_time_s=total_time)
@@ -689,36 +742,35 @@ async def run_benchmark(dataset: List[dict]) -> BenchmarkResults:
 
 # ── Consistency check ─────────────────────────────────────────────────────────
 
+
 async def run_consistency_check(prompts: List[str]) -> List[dict]:
     """
     Route each prompt twice with a fresh engine (cache disabled) and return
     any cases where the chosen model differed between runs — excluding A/B
     exploration which is intentionally non-deterministic.
     """
-    registry   = ModelRegistry()
-    cache      = ResponseCache(enabled=False)
-    adaptive   = AdaptiveWeights(state_file=None)
-    analytics  = RoutingAnalytics(log_path=None)
-    budget     = BudgetTracker()
+    registry = ModelRegistry()
+    cache = ResponseCache(enabled=False)
+    adaptive = AdaptiveWeights(state_file=None)
+    analytics = RoutingAnalytics(log_path=None)
+    budget = BudgetTracker()
     compressor = ContextCompressor()
     classifier = RequestClassifier(cache)
 
     engine = RoutingEngine(
-        model_registry     = registry,
-        classifier         = classifier,
-        cache              = cache,
-        budget_tracker     = budget,
-        adaptive_weights   = adaptive,
-        context_compressor = compressor,
-        analytics          = analytics,
+        model_registry=registry,
+        classifier=classifier,
+        cache=cache,
+        budget_tracker=budget,
+        adaptive_weights=adaptive,
+        context_compressor=compressor,
+        analytics=analytics,
     )
 
     inconsistencies: List[dict] = []
     for prompt in prompts:
-        req1 = RoutingRequest(raw_prompt=prompt, user_id="consistency_user",
-                              plan="business_plan")
-        req2 = RoutingRequest(raw_prompt=prompt, user_id="consistency_user",
-                              plan="business_plan")
+        req1 = RoutingRequest(raw_prompt=prompt, user_id="consistency_user", plan="business_plan")
+        req2 = RoutingRequest(raw_prompt=prompt, user_id="consistency_user", plan="business_plan")
         d1 = await engine.route(req1)
         d2 = await engine.route(req2)
 
@@ -736,6 +788,7 @@ async def run_consistency_check(prompts: List[str]) -> List[dict]:
 
 # ── Reporting helpers ─────────────────────────────────────────────────────────
 
+
 def _pct(values: List[float], p: float) -> float:
     if not values:
         return 0.0
@@ -751,26 +804,27 @@ def _bar(count: int, max_count: int, width: int = 36) -> str:
 
 # ── Report sections ───────────────────────────────────────────────────────────
 
+
 def print_section_a(bench: BenchmarkResults) -> None:
     console.rule("[bold cyan]A · Overall Performance[/bold cyan]")
-    times      = [r.routing_time_ms for r in bench.results]
-    total_ms   = bench.total_time_s * 1000
-    under_10   = sum(1 for t in times if t < 10)
-    n          = len(bench.results)
+    times = [r.routing_time_ms for r in bench.results]
+    total_ms = bench.total_time_s * 1000
+    under_10 = sum(1 for t in times if t < 10)
+    n = len(bench.results)
 
     tbl = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
     tbl.add_column("Metric", style="dim", min_width=28)
     tbl.add_column("Value", style="bold")
     for label, val in [
-        ("Total requests",      str(n)),
-        ("Total routing time",  "{:.1f} ms".format(total_ms)),
-        ("Avg per request",     "{:.3f} ms".format(total_ms / n)),
-        ("P50 latency",         "{:.3f} ms".format(_pct(times, 50))),
-        ("P95 latency",         "{:.3f} ms".format(_pct(times, 95))),
-        ("P99 latency",         "{:.3f} ms".format(_pct(times, 99))),
-        ("Max latency",         "{:.3f} ms".format(max(times))),
-        ("Requests under 10ms", "{}/{} ({:.1f}%)".format(under_10, n, under_10/n*100)),
-        ("Errors / crashes",    str(len(bench.failed))),
+        ("Total requests", str(n)),
+        ("Total routing time", "{:.1f} ms".format(total_ms)),
+        ("Avg per request", "{:.3f} ms".format(total_ms / n)),
+        ("P50 latency", "{:.3f} ms".format(_pct(times, 50))),
+        ("P95 latency", "{:.3f} ms".format(_pct(times, 95))),
+        ("P99 latency", "{:.3f} ms".format(_pct(times, 99))),
+        ("Max latency", "{:.3f} ms".format(max(times))),
+        ("Requests under 10ms", "{}/{} ({:.1f}%)".format(under_10, n, under_10 / n * 100)),
+        ("Errors / crashes", str(len(bench.failed))),
     ]:
         tbl.add_row(label, val)
     console.print(tbl)
@@ -778,7 +832,7 @@ def print_section_a(bench: BenchmarkResults) -> None:
 
 def print_section_b(bench: BenchmarkResults) -> None:
     console.rule("[bold cyan]B · Tier Distribution[/bold cyan]")
-    _tiers    = ["free", "cheap", "mid", "premium", "ultra", "blocked/none"]
+    _tiers = ["free", "cheap", "mid", "premium", "ultra", "blocked/none"]
     tier_data: dict = {t: {"count": 0, "costs": []} for t in _tiers}
     total = len(bench.results)
 
@@ -791,15 +845,19 @@ def print_section_b(bench: BenchmarkResults) -> None:
         tier_data[key]["costs"].append(r.decision.estimated_cost)
 
     _colors = {
-        "free": "bright_green", "cheap": "green", "mid": "yellow",
-        "premium": "red", "ultra": "bright_red", "blocked/none": "dim",
+        "free": "bright_green",
+        "cheap": "green",
+        "mid": "yellow",
+        "premium": "red",
+        "ultra": "bright_red",
+        "blocked/none": "dim",
     }
     tbl = Table(box=box.ROUNDED)
-    tbl.add_column("Tier",     style="bold",  width=14)
-    tbl.add_column("Count",    justify="right", width=7)
-    tbl.add_column("% Share",  justify="right", width=8)
+    tbl.add_column("Tier", style="bold", width=14)
+    tbl.add_column("Count", justify="right", width=7)
+    tbl.add_column("% Share", justify="right", width=8)
     tbl.add_column("Avg Cost", justify="right", width=12)
-    tbl.add_column("Bar",      min_width=20)
+    tbl.add_column("Bar", min_width=20)
 
     max_cnt = max(d["count"] for d in tier_data.values()) or 1
     for tier in _tiers:
@@ -825,28 +883,28 @@ def print_section_c(bench: BenchmarkResults) -> None:
 
     # Expected task type per category (for misclassification detection)
     _expected: dict = {
-        "free_greeting":       {"conversation"},
-        "free_factual":        {"simple_qa"},
-        "free_yesno":          {"simple_qa"},
-        "free_translation":    {"translation"},
-        "free_conversion":     {"simple_qa", "unknown"},
-        "cheap_classification":{"classification"},
-        "cheap_extraction":    {"extraction"},
+        "free_greeting": {"conversation"},
+        "free_factual": {"simple_qa"},
+        "free_yesno": {"simple_qa"},
+        "free_translation": {"translation"},
+        "free_conversion": {"simple_qa", "unknown"},
+        "cheap_classification": {"classification"},
+        "cheap_extraction": {"extraction"},
         "cheap_summarization": {"summarization"},
-        "cheap_qa":            {"simple_qa"},
-        "cheap_sentiment":     {"classification"},
-        "mid_code":            {"code_generation"},
-        "mid_blog":            {"creative_writing"},
-        "mid_comparison":      {"analysis"},
-        "mid_explanation":     {"simple_qa", "reasoning", "analysis", "unknown"},
-        "mid_analysis":        {"analysis"},
-        "premium_code":        {"code_generation", "code_review"},
-        "premium_legal":       {"analysis", "long_document", "unknown"},
-        "premium_debug":       {"code_review"},
-        "premium_architecture":{"analysis", "unknown"},
-        "ultra_math":          {"reasoning"},
-        "ultra_longdoc":       {"long_document"},
-        "ultra_reasoning":     {"reasoning"},
+        "cheap_qa": {"simple_qa"},
+        "cheap_sentiment": {"classification"},
+        "mid_code": {"code_generation"},
+        "mid_blog": {"creative_writing"},
+        "mid_comparison": {"analysis"},
+        "mid_explanation": {"simple_qa", "reasoning", "analysis", "unknown"},
+        "mid_analysis": {"analysis"},
+        "premium_code": {"code_generation", "code_review"},
+        "premium_legal": {"analysis", "long_document", "unknown"},
+        "premium_debug": {"code_review"},
+        "premium_architecture": {"analysis", "unknown"},
+        "ultra_math": {"reasoning"},
+        "ultra_longdoc": {"long_document"},
+        "ultra_reasoning": {"reasoning"},
     }
 
     # Aggregate by actual task type
@@ -865,24 +923,24 @@ def print_section_c(bench: BenchmarkResults) -> None:
             type_stats[tt]["wrong"] += 1
 
     tbl = Table(box=box.ROUNDED)
-    tbl.add_column("Task Type",      min_width=16)
-    tbl.add_column("Count",          justify="right", width=7)
+    tbl.add_column("Task Type", min_width=16)
+    tbl.add_column("Count", justify="right", width=7)
     tbl.add_column("Avg Complexity", justify="right", width=15)
-    tbl.add_column("Top Model",      min_width=22)
-    tbl.add_column("Notes",          min_width=14)
+    tbl.add_column("Top Model", min_width=22)
+    tbl.add_column("Notes", min_width=14)
 
     for tt, d in sorted(type_stats.items(), key=lambda x: -x[1]["count"]):
-        cnt     = d["count"]
-        avg_c   = sum(d["complexities"]) / cnt if cnt else 0.0
-        models  = d["models"]
-        top_m   = max(set(models), key=models.count) if models else "—"
-        wrong   = d["wrong"]
-        note    = ""
-        style   = "white"
+        cnt = d["count"]
+        avg_c = sum(d["complexities"]) / cnt if cnt else 0.0
+        models = d["models"]
+        top_m = max(set(models), key=models.count) if models else "—"
+        wrong = d["wrong"]
+        note = ""
+        style = "white"
 
         if tt == "unknown" and cnt > len(bench.results) * 0.05:
             style = "bold red"
-            note  = "[bold red]HIGH[/]"
+            note = "[bold red]HIGH[/]"
         elif wrong > 0:
             note = "[yellow]{}?[/]".format(wrong)
 
@@ -900,43 +958,57 @@ def print_section_c(bench: BenchmarkResults) -> None:
     color = "red" if unknown_pct > 5 else "green"
     console.print(
         "  'unknown' task type: [{c}]{n} ({p:.1f}%)[/{c}]".format(
-            c=color, n=unknown_cnt, p=unknown_pct,
+            c=color,
+            n=unknown_cnt,
+            p=unknown_pct,
         )
     )
 
 
 def print_section_d(bench: BenchmarkResults) -> None:
     console.rule("[bold cyan]D · Cost Analysis[/bold cyan]")
-    costs   = [r.decision.estimated_cost   for r in bench.results]
+    costs = [r.decision.estimated_cost for r in bench.results]
     savings = [r.decision.estimated_savings for r in bench.results]
     total_c = sum(costs)
     total_s = sum(savings)
     prem_eq = total_c + total_s
-    pct_s   = (total_s / prem_eq * 100) if prem_eq > 0 else 0.0
-    n       = len(bench.results)
+    pct_s = (total_s / prem_eq * 100) if prem_eq > 0 else 0.0
+    n = len(bench.results)
 
-    nonzero = [(c, r) for c, r in zip(costs, bench.results) if c > 0 and r.decision.chosen_model]
+    nonzero = [
+        (c, r)
+        for c, r in zip(costs, bench.results)  # noqa: B905 — Python 3.9 lacks strict=
+        if c > 0 and r.decision.chosen_model
+    ]
     cheapest = min(nonzero, key=lambda x: x[0]) if nonzero else None
-    costliest= max(nonzero, key=lambda x: x[0]) if nonzero else None
+    costliest = max(nonzero, key=lambda x: x[0]) if nonzero else None
 
     rows = [
-        ("Total estimated cost",     "${:.5f}".format(total_c)),
-        ("Premium-equivalent cost",  "${:.5f}".format(prem_eq)),
-        ("Total savings",            "${:.5f} ({:.1f}%)".format(total_s, pct_s)),
-        ("Cost per request (avg)",   "${:.7f}".format(total_c / n)),
+        ("Total estimated cost", "${:.5f}".format(total_c)),
+        ("Premium-equivalent cost", "${:.5f}".format(prem_eq)),
+        ("Total savings", "${:.5f} ({:.1f}%)".format(total_s, pct_s)),
+        ("Cost per request (avg)", "${:.7f}".format(total_c / n)),
     ]
     if cheapest:
         m = cheapest[1].decision.chosen_model
-        rows.append(("Cheapest request",
-                      "${:.7f}  model: {}".format(cheapest[0], m.display_name if m else "n/a")))
+        rows.append(
+            (
+                "Cheapest request",
+                "${:.7f}  model: {}".format(cheapest[0], m.display_name if m else "n/a"),
+            )
+        )
     if costliest:
         m = costliest[1].decision.chosen_model
-        rows.append(("Most expensive request",
-                      "${:.5f}  model: {}".format(costliest[0], m.display_name if m else "n/a")))
+        rows.append(
+            (
+                "Most expensive request",
+                "${:.5f}  model: {}".format(costliest[0], m.display_name if m else "n/a"),
+            )
+        )
 
     tbl = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
     tbl.add_column("Metric", style="dim", min_width=28)
-    tbl.add_column("Value",  style="bold")
+    tbl.add_column("Value", style="bold")
     for label, val in rows:
         tbl.add_row(label, val)
     console.print(tbl)
@@ -944,25 +1016,30 @@ def print_section_d(bench: BenchmarkResults) -> None:
 
 def print_section_e(bench: BenchmarkResults) -> None:
     console.rule("[bold cyan]E · Cache Performance[/bold cyan]")
-    cache_hits  = sum(1 for r in bench.results if r.decision.cache_hit)
-    total       = len(bench.results)
+    cache_hits = sum(1 for r in bench.results if r.decision.cache_hit)
+    total = len(bench.results)
     # Approximate eligible count: task types known to be cacheable
-    eligible    = sum(
-        1 for r in bench.results
-        if r.task_type in {"translation", "classification", "extraction", "summarization", "simple_qa"}
+    eligible = sum(
+        1
+        for r in bench.results
+        if r.task_type
+        in {"translation", "classification", "extraction", "summarization", "simple_qa"}
     )
     cache_saved = sum(r.decision.estimated_savings for r in bench.results if r.decision.cache_hit)
 
     rows = [
         ("Approx cache-eligible requests", str(eligible)),
-        ("Cache hits",                     str(cache_hits)),
-        ("Cache hit rate (overall)",       "{:.1f}%".format(cache_hits / total * 100)),
-        ("Cache hit rate (eligible only)", "{:.1f}%".format(cache_hits / eligible * 100) if eligible else "0.0%"),
-        ("Cost saved by cache",            "${:.6f}".format(cache_saved)),
+        ("Cache hits", str(cache_hits)),
+        ("Cache hit rate (overall)", "{:.1f}%".format(cache_hits / total * 100)),
+        (
+            "Cache hit rate (eligible only)",
+            "{:.1f}%".format(cache_hits / eligible * 100) if eligible else "0.0%",
+        ),
+        ("Cost saved by cache", "${:.6f}".format(cache_saved)),
     ]
     tbl = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
     tbl.add_column("Metric", style="dim", min_width=36)
-    tbl.add_column("Value",  style="bold")
+    tbl.add_column("Value", style="bold")
     for label, val in rows:
         tbl.add_row(label, val)
     console.print(tbl)
@@ -972,37 +1049,37 @@ def print_section_f(bench: BenchmarkResults) -> None:
     console.rule("[bold cyan]F · Edge Case Report[/bold cyan]")
 
     _edge_labels = [
-        ("edge_empty",           "Empty / near-empty prompts"),
-        ("edge_emoji",           "Single emoji prompts"),
-        ("edge_long",            "Very long prompts (10K+ chars)"),
-        ("edge_code_only",       "Code only (no natural language)"),
-        ("edge_sql_only",        "SQL statement only"),
-        ("edge_cli_only",        "CLI command only"),
-        ("edge_url_only",        "URL / curl command only"),
-        ("edge_vision",          "Vision requests (image capability)"),
-        ("edge_function_calling","Function calling capability"),
-        ("edge_high_temp",       "High temperature 1.0 (no cache)"),
-        ("edge_low_temp",        "Low temperature 0.0 (cacheable)"),
-        ("edge_duplicate",       "Duplicate prompts (cache hit test)"),
-        ("edge_override",        "Explicit model override"),
-        ("edge_antispam",        "Anti-gaming (same user flood)"),
-        ("edge_budget",          "Budget-limited (free plan)"),
+        ("edge_empty", "Empty / near-empty prompts"),
+        ("edge_emoji", "Single emoji prompts"),
+        ("edge_long", "Very long prompts (10K+ chars)"),
+        ("edge_code_only", "Code only (no natural language)"),
+        ("edge_sql_only", "SQL statement only"),
+        ("edge_cli_only", "CLI command only"),
+        ("edge_url_only", "URL / curl command only"),
+        ("edge_vision", "Vision requests (image capability)"),
+        ("edge_function_calling", "Function calling capability"),
+        ("edge_high_temp", "High temperature 1.0 (no cache)"),
+        ("edge_low_temp", "Low temperature 0.0 (cacheable)"),
+        ("edge_duplicate", "Duplicate prompts (cache hit test)"),
+        ("edge_override", "Explicit model override"),
+        ("edge_antispam", "Anti-gaming (same user flood)"),
+        ("edge_budget", "Budget-limited (free plan)"),
     ]
 
     tbl = Table(box=box.ROUNDED)
-    tbl.add_column("Edge Case",   min_width=32)
-    tbl.add_column("N",           width=4,  justify="right")
-    tbl.add_column("Status",      width=6)
+    tbl.add_column("Edge Case", min_width=32)
+    tbl.add_column("N", width=4, justify="right")
+    tbl.add_column("Status", width=6)
     tbl.add_column("Models Chosen", min_width=24)
-    tbl.add_column("Notes",       min_width=18)
+    tbl.add_column("Notes", min_width=18)
 
     for cat, label in _edge_labels:
         group = [r for r in bench.results if r.category == cat]
         if not group:
             continue
-        errors     = [r for r in group if r.error]
-        status     = "[bold red]FAIL[/]" if errors else "[bold green]PASS[/]"
-        model_names= set()
+        errors = [r for r in group if r.error]
+        status = "[bold red]FAIL[/]" if errors else "[bold green]PASS[/]"
+        model_names = set()
         for r in group:
             if r.decision.chosen_model:
                 model_names.add(r.decision.chosen_model.display_name[:18])
@@ -1011,9 +1088,17 @@ def print_section_f(bench: BenchmarkResults) -> None:
         cache_hits = sum(1 for r in group if r.decision.cache_hit)
 
         if cat == "edge_duplicate":
-            note = "[green]{} cache hit(s)[/]".format(cache_hits) if cache_hits else "[red]0 cache hits[/]"
+            note = (
+                "[green]{} cache hit(s)[/]".format(cache_hits)
+                if cache_hits
+                else "[red]0 cache hits[/]"
+            )
         elif cat == "edge_low_temp":
-            note = "[green]{} cache hit(s)[/]".format(cache_hits) if cache_hits else "[yellow]0 hits yet[/]"
+            note = (
+                "[green]{} cache hit(s)[/]".format(cache_hits)
+                if cache_hits
+                else "[yellow]0 hits yet[/]"
+            )
         elif cat == "edge_high_temp":
             note = "should not cache (temp=1.0)"
         elif cat == "edge_budget":
@@ -1023,10 +1108,15 @@ def print_section_f(bench: BenchmarkResults) -> None:
             tiers = [r.decision.chosen_model.tier for r in group if r.decision.chosen_model]
             note = "all tiers: {}".format(set(tiers))
         elif cat == "edge_override":
-            note = "override honoured" if all(
-                r.decision.routing_rule_matched == "explicit_model_override"
-                for r in group if r.decision.chosen_model
-            ) else "[yellow]some not honoured[/]"
+            note = (
+                "override honoured"
+                if all(
+                    r.decision.routing_rule_matched == "explicit_model_override"
+                    for r in group
+                    if r.decision.chosen_model
+                )
+                else "[yellow]some not honoured[/]"
+            )
         else:
             note = ""
 
@@ -1045,10 +1135,13 @@ def print_section_g(inconsistencies: List[dict]) -> None:
     if not inconsistencies:
         console.print("  [bold green]✓ All 20 prompts produced identical routing on both runs[/]")
     else:
-        console.print("  [bold red]✗ {} inconsistency/ies detected (excluding expected A/B jitter):[/]".format(
-            len(inconsistencies)))
+        console.print(
+            "  [bold red]✗ {} inconsistency/ies detected (excluding expected A/B jitter):[/]".format(
+                len(inconsistencies)
+            )
+        )
         tbl = Table(box=box.SIMPLE)
-        tbl.add_column("Prompt",      min_width=40)
+        tbl.add_column("Prompt", min_width=40)
         tbl.add_column("Run 1 Model", min_width=20)
         tbl.add_column("Run 2 Model", min_width=20)
         for inc in inconsistencies:
@@ -1060,10 +1153,10 @@ def print_section_h(bench: BenchmarkResults) -> None:
     console.rule("[bold cyan]H · Routing Time Distribution[/bold cyan]")
     times = [r.routing_time_ms for r in bench.results]
     _buckets = [
-        ("  0–1 ms ", 0,   1),
-        ("  1–2 ms ", 1,   2),
-        ("  2–5 ms ", 2,   5),
-        ("  5–10 ms", 5,  10),
+        ("  0–1 ms ", 0, 1),
+        ("  1–2 ms ", 1, 2),
+        ("  2–5 ms ", 2, 5),
+        ("  5–10 ms", 5, 10),
         ("  10ms+  ", 10, float("inf")),
     ]
     counts = [(lbl, sum(1 for t in times if lo <= t < hi)) for lbl, lo, hi in _buckets]
@@ -1075,10 +1168,11 @@ def print_section_h(bench: BenchmarkResults) -> None:
 
 # ── Validation rules ──────────────────────────────────────────────────────────
 
+
 def validate(bench: BenchmarkResults) -> Tuple[bool, List[str]]:
     failures: List[str] = []
     times = [r.routing_time_ms for r in bench.results]
-    n     = len(bench.results)
+    n = len(bench.results)
 
     # 1. Any single request > 50 ms
     over_50 = [r for r in bench.results if r.routing_time_ms > 50]
@@ -1112,7 +1206,8 @@ def validate(bench: BenchmarkResults) -> Tuple[bool, List[str]]:
 
     # 6. Trivial requests (≤ 20 chars, non-edge) routing to premium / ultra
     trivial_bad = [
-        r for r in bench.results
+        r
+        for r in bench.results
         if len(r.prompt.strip()) <= 20
         and not r.category.startswith("edge_")
         and r.decision.chosen_model is not None
@@ -1120,12 +1215,15 @@ def validate(bench: BenchmarkResults) -> Tuple[bool, List[str]]:
     ]
     if trivial_bad:
         failures.append(
-            "{} trivial request(s) (≤20 chars) routed to premium/ultra tier".format(len(trivial_bad))
+            "{} trivial request(s) (≤20 chars) routed to premium/ultra tier".format(
+                len(trivial_bad)
+            )
         )
 
     # 7. Critical reasoning / long_document routed to free tier
     critical_free = [
-        r for r in bench.results
+        r
+        for r in bench.results
         if r.task_type in ("reasoning", "long_document")
         and r.decision.chosen_model is not None
         and r.decision.chosen_model.tier == "free"
@@ -1140,13 +1238,16 @@ def validate(bench: BenchmarkResults) -> Tuple[bool, List[str]]:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+
 async def main() -> None:
     console.print()
-    console.print(Panel.fit(
-        "[bold cyan]LLM Router Benchmark[/bold cyan]\n"
-        "[dim]500 synthetic requests · full routing stack · no real API calls[/dim]",
-        border_style="cyan",
-    ))
+    console.print(
+        Panel.fit(
+            "[bold cyan]LLM Router Benchmark[/bold cyan]\n"
+            "[dim]500 synthetic requests · full routing stack · no real API calls[/dim]",
+            border_style="cyan",
+        )
+    )
     console.print()
 
     console.print("[dim]Generating 500-request dataset (seed=42)...[/dim]")
@@ -1156,9 +1257,12 @@ async def main() -> None:
 
     console.print("[dim]Running routing benchmark...[/dim]")
     bench = await run_benchmark(dataset)
-    console.print("[dim]Benchmark complete: {} decisions in {:.1f}ms.[/dim]".format(
-        len(bench.results), bench.total_time_s * 1000,
-    ))
+    console.print(
+        "[dim]Benchmark complete: {} decisions in {:.1f}ms.[/dim]".format(
+            len(bench.results),
+            bench.total_time_s * 1000,
+        )
+    )
     console.print()
 
     console.print("[dim]Running consistency check (20 prompts × 2 runs)...[/dim]")
@@ -1208,11 +1312,13 @@ async def main() -> None:
     passed, failures = validate(bench)
     console.rule("[bold]Final Verdict[/bold]")
     if passed:
-        console.print(Panel(
-            "[bold bright_green]✓  PASS — All {} validation checks passed[/]".format(7),
-            border_style="bright_green",
-            expand=False,
-        ))
+        console.print(
+            Panel(
+                "[bold bright_green]✓  PASS — All {} validation checks passed[/]".format(7),
+                border_style="bright_green",
+                expand=False,
+            )
+        )
     else:
         msg = "[bold red]✗  FAIL[/bold red]\n" + "\n".join("  • " + f for f in failures)
         console.print(Panel(msg, border_style="red", expand=False))

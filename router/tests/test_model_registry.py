@@ -16,16 +16,10 @@ How to add a test:
 Test classes:
   TestRegistryLoadsFromJson — JSON file loading, field parsing, hardcoded fallback
 """
+
 from __future__ import annotations
 
-import json
-import tempfile
-from pathlib import Path
-
-import pytest
-
 from router.model_registry import ModelRegistry, _build_hardcoded_registry, _load_registry_from_json
-from router.schemas import ModelOption
 
 _HARDCODED_COUNT = len(_build_hardcoded_registry())
 
@@ -43,6 +37,7 @@ class TestRegistryLoadsFromJson:
     def test_registry_falls_back_to_hardcoded(self, tmp_path, monkeypatch):
         # Point _load_registry_from_json at a non-existent path
         import router.model_registry as mr
+
         original = mr._load_registry_from_json
 
         def patched():
@@ -56,9 +51,7 @@ class TestRegistryLoadsFromJson:
     def test_registry_all_models_have_general(self):
         reg = ModelRegistry()
         for m in reg.all_available_models():
-            assert "general" in m.quality_ratings, (
-                f"{m.model_id} missing 'general' quality rating"
-            )
+            assert "general" in m.quality_ratings, f"{m.model_id} missing 'general' quality rating"
 
     def test_registry_model_count(self):
         # JSON and hardcoded registry must agree on model count

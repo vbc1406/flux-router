@@ -37,9 +37,6 @@ import asyncio
 import time
 import uuid
 from typing import Any
-from unittest.mock import patch
-
-import pytest
 
 from router.adaptive_weights import AdaptiveWeights
 from router.analytics import RoutingAnalytics
@@ -51,15 +48,15 @@ from router.model_registry import ModelRegistry
 from router.routing_engine import ConversationStore, RoutingEngine
 from router.schemas import RoutingRequest
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _engine() -> RoutingEngine:
-    registry   = ModelRegistry()
-    cache      = ResponseCache(enabled=False)
-    adaptive   = AdaptiveWeights(state_file=None)
-    analytics  = RoutingAnalytics(log_path=None)
-    budget     = BudgetTracker()
+    registry = ModelRegistry()
+    cache = ResponseCache(enabled=False)
+    adaptive = AdaptiveWeights(state_file=None)
+    analytics = RoutingAnalytics(log_path=None)
+    budget = BudgetTracker()
     compressor = ContextCompressor()
     classifier = RequestClassifier(cache)
     return RoutingEngine(registry, classifier, cache, budget, adaptive, compressor, analytics)
@@ -67,16 +64,16 @@ def _engine() -> RoutingEngine:
 
 def _req(prompt: str, conv_id: str | None = None, **kw: Any) -> RoutingRequest:
     defaults: dict[str, Any] = {
-        "user_id":  "u_sticky",
-        "plan":     "business_plan",
+        "user_id": "u_sticky",
+        "plan": "business_plan",
         "priority": "normal",
-        "exploration_rate": 0.0,   # disable A/B so results are deterministic
+        "exploration_rate": 0.0,  # disable A/B so results are deterministic
     }
     defaults.update(kw)
     return RoutingRequest(
-        raw_prompt      = prompt,
-        correlation_id  = str(uuid.uuid4()),
-        conversation_id = conv_id,
+        raw_prompt=prompt,
+        correlation_id=str(uuid.uuid4()),
+        conversation_id=conv_id,
         **defaults,
     )
 
@@ -92,6 +89,7 @@ _MID_PROMPT = "Write a Python function to implement binary search with full test
 # ═══════════════════════════════════════════════════════════════════════════════
 # ConversationStore unit tests
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class TestConversationStore:
     def test_get_returns_none_for_unknown(self):
@@ -159,6 +157,7 @@ class TestConversationStore:
 # Integration tests: sticky model bias in route()
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class TestStickyModel:
     def setup_method(self):
         self.engine = _engine()
@@ -208,11 +207,15 @@ class TestStickyModel:
         assert d1.chosen_model is not None
 
         # Second turn: always-premium must pick premium regardless of sticky state.
-        d2 = rr(self.engine.route(_req(
-            _MID_PROMPT,
-            conv_id=conv_id,
-            routing_priority="always-premium",
-        )))
+        d2 = rr(
+            self.engine.route(
+                _req(
+                    _MID_PROMPT,
+                    conv_id=conv_id,
+                    routing_priority="always-premium",
+                )
+            )
+        )
         assert d2.chosen_model is not None
         assert d2.chosen_model.tier == "premium"
 
@@ -240,7 +243,7 @@ class TestStickyModel:
         from router.config import CONVERSATION_DEPTH_THRESHOLD
 
         conv_id = "conv_deep"
-        prompt  = "Explain a Python generator with examples"
+        prompt = "Explain a Python generator with examples"
 
         for _ in range(CONVERSATION_DEPTH_THRESHOLD):
             rr(self.engine.route(_req(prompt, conv_id=conv_id)))

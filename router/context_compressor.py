@@ -17,11 +17,9 @@ Strategy (applied in order until the context fits):
 
 from __future__ import annotations
 
-import copy
-
 import structlog
 
-from .config import CONTEXT_COMPRESSION_THRESHOLD, CONTEXT_SUMMARY_TARGET_TOKENS
+from .config import CONTEXT_SUMMARY_TARGET_TOKENS
 from .schemas import RoutingRequest
 
 log = structlog.get_logger(__name__)
@@ -51,7 +49,7 @@ def _message_tokens(msg: dict) -> int:
                 if block.get("type") == "text":
                     total += _count_tokens(block.get("text", ""))
                 elif block.get("type") in ("image_url", "image"):
-                    total += 512   # fixed overhead for image encoding
+                    total += 512  # fixed overhead for image encoding
         return total
     return 0
 
@@ -97,10 +95,13 @@ def _compress_old_message(msg: dict) -> dict | None:
                 new_blocks.append(block)
                 continue
             if block.get("type") in ("image_url", "image"):
-                continue   # drop image
+                continue  # drop image
             if block.get("type") == "text":
                 text = block.get("text", "")
-                if role == "assistant" and len(text.split()) > _TRUNC_HEAD_WORDS + _TRUNC_TAIL_WORDS:
+                if (
+                    role == "assistant"
+                    and len(text.split()) > _TRUNC_HEAD_WORDS + _TRUNC_TAIL_WORDS
+                ):
                     new_blocks.append({**block, "text": _truncate_text(text)})
                 else:
                     new_blocks.append(block)
@@ -131,15 +132,15 @@ class ContextCompressor:
         Return a new RoutingRequest whose message_history has been trimmed to fit
         within `target_tokens`.  The system_prompt and raw_prompt are never touched.
         """
-        history    = request.message_history
-        total      = estimate_tokens(history)
+        history = request.message_history
+        total = estimate_tokens(history)
 
         if total <= target_tokens:
-            return request   # nothing to do
+            return request  # nothing to do
 
         # Split into recent (preserved) and old (candidates for compression)
         recent = history[-_PRESERVE_RECENT:] if len(history) >= _PRESERVE_RECENT else history
-        old    = history[:-_PRESERVE_RECENT] if len(history) > _PRESERVE_RECENT else []
+        old = history[:-_PRESERVE_RECENT] if len(history) > _PRESERVE_RECENT else []
 
         dropped = 0
 

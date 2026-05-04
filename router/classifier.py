@@ -52,11 +52,22 @@ _LANG_RE = re.compile(
     r"arabic|russian|hindi|dutch|swedish|polish|turkish|vietnamese)\b",
     re.IGNORECASE,
 )
-_TRANSLATE_RE    = re.compile(r"\b(?:translat\w*|in\s+(?:spanish|french|german|japanese|chinese|korean|arabic))\b", re.IGNORECASE)
-_SUMMARIZE_RE    = re.compile(r"\b(?:summar\w*|tldr|tl;dr|key\s+points?|main\s+ideas?|brief\s+(?:me|summary))\b", re.IGNORECASE)
-_CLASSIFY_RE     = re.compile(r"\b(?:classif\w*|categoriz\w*|label|sentiment\s+(?:of|analysis)|is\s+this\s+(?:positive|negative))\b", re.IGNORECASE)
-_EXTRACT_RE      = re.compile(r"\b(extract|parse\s+(?:all|the)|find\s+all|list\s+(?:all|every)|pull\s+out)\b", re.IGNORECASE)
-_CODE_GEN_RE     = re.compile(
+_TRANSLATE_RE = re.compile(
+    r"\b(?:translat\w*|in\s+(?:spanish|french|german|japanese|chinese|korean|arabic))\b",
+    re.IGNORECASE,
+)
+_SUMMARIZE_RE = re.compile(
+    r"\b(?:summar\w*|tldr|tl;dr|key\s+points?|main\s+ideas?|brief\s+(?:me|summary))\b",
+    re.IGNORECASE,
+)
+_CLASSIFY_RE = re.compile(
+    r"\b(?:classif\w*|categoriz\w*|label|sentiment\s+(?:of|analysis)|is\s+this\s+(?:positive|negative))\b",
+    re.IGNORECASE,
+)
+_EXTRACT_RE = re.compile(
+    r"\b(extract|parse\s+(?:all|the)|find\s+all|list\s+(?:all|every)|pull\s+out)\b", re.IGNORECASE
+)
+_CODE_GEN_RE = re.compile(
     r"\b(?:write\s+(?:a\s+)?(?:function|class|script|program|code|module)"
     r"|implement"
     r"|build\s+(?:a\s+)?(?:full\s+|complete\s+)?(?:function|class|api|service|tool|application|app|component|server|client|system)"
@@ -74,31 +85,42 @@ _CREATIVE_EXTENDED_RE = re.compile(
     r"\b(?:come\s+up\s+with|brainstorm|imagine\s+(?:a|if|that)|think\s+of\s+ideas?)\b",
     re.IGNORECASE,
 )
-_LANG_NAME_RE    = re.compile(
+_LANG_NAME_RE = re.compile(
     r"\b(?:python|javascript|typescript|java|c\+\+|c#|go|rust|ruby|swift|kotlin|php|scala"
     r"|matlab|sql|bash|shell"
     r"|react|vue|angular|fastapi|django|flask|node(?:\.js)?|express|next(?:\.js)?|nuxt"
     r"|svelte|laravel|rails|spring)\b",
     re.IGNORECASE,
 )
-_CODE_REVIEW_RE  = re.compile(r"\b(review\s+(?:this\s+)?(?:code|function|class)|debug|fix\s+(?:this|the|my)|what(?:'s|\s+is)\s+wrong|find\s+(?:the\s+)?bug)\b", re.IGNORECASE)
-_CREATIVE_RE     = re.compile(
+_CODE_REVIEW_RE = re.compile(
+    r"\b(review\s+(?:this\s+)?(?:code|function|class)|debug|fix\s+(?:this|the|my)|what(?:'s|\s+is)\s+wrong|find\s+(?:the\s+)?bug)\b",
+    re.IGNORECASE,
+)
+_CREATIVE_RE = re.compile(
     r"\b(?:write\s+a(?:\s+[\w-]+){0,4}\s+(?:story|poem|haiku|essay|blog|article|letter|song|script|novel)"
     r"|draft\s+a|compose\s+a)\b",
     re.IGNORECASE,
 )
-_ANALYSIS_RE     = re.compile(
+_ANALYSIS_RE = re.compile(
     r"\b(?:analy[sz]\w*|compar\w*|evaluat\w*|pros\s+and\s+cons|trade.?offs?|assess|critique|explai\w+|risks?\b)\b",
     re.IGNORECASE,
 )
-_REASONING_RE    = re.compile(r"\b(why\s+(?:does|is|do|did)|explain\s+why|prove\s+(?:that)?|solve|step\s+by\s+step|deriv\w*|theorem|proof)\b", re.IGNORECASE)
-_SIMPLE_QA_RE    = re.compile(r"^(what\s+is|what's|who\s+is|who's|define|when\s+did|where\s+is|how\s+many|which\s+is)", re.IGNORECASE)
+_REASONING_RE = re.compile(
+    r"\b(why\s+(?:does|is|do|did)|explain\s+why|prove\s+(?:that)?|solve|step\s+by\s+step|deriv\w*|theorem|proof)\b",
+    re.IGNORECASE,
+)
+_SIMPLE_QA_RE = re.compile(
+    r"^(what\s+is|what's|who\s+is|who's|define|when\s+did|where\s+is|how\s+many|which\s+is)",
+    re.IGNORECASE,
+)
 _STEP_BY_STEP_RE = re.compile(r"\bstep.by.step\b|\bstep\s+\d\b", re.IGNORECASE)
-_STRUCT_OUT_RE   = re.compile(r"\b(json|xml|yaml|schema|structured\s+output|in\s+(?:json|yaml|xml)\s+format)\b", re.IGNORECASE)
-_CODE_FENCE_RE   = re.compile(r"```")
-_MATH_SYM_RE     = re.compile(r"[∑∫≥≤∀∃≠²³√∞±∇∂∈∉⊆⊇∩∪]|(?<!\w)=(?!\w)|(?<!\w)[+\-*/^](?!\w)")
-_BULLET_RE       = re.compile(r"^(\s*[-*•]\s|\s*\d+\.\s)", re.MULTILINE)
-_QUESTION_RE     = re.compile(r"\?")
+_STRUCT_OUT_RE = re.compile(
+    r"\b(json|xml|yaml|schema|structured\s+output|in\s+(?:json|yaml|xml)\s+format)\b", re.IGNORECASE
+)
+_CODE_FENCE_RE = re.compile(r"```")
+_MATH_SYM_RE = re.compile(r"[∑∫≥≤∀∃≠²³√∞±∇∂∈∉⊆⊇∩∪]|(?<!\w)=(?!\w)|(?<!\w)[+\-*/^](?!\w)")
+_BULLET_RE = re.compile(r"^(\s*[-*•]\s|\s*\d+\.\s)", re.MULTILINE)
+_QUESTION_RE = re.compile(r"\?")
 _DOMAIN_SPECIFIC_RE = re.compile(
     r"\b(kkt\s+conditions?|lagrangian|hamiltonian|riemann|zeta\s+function|"
     r"gdpr|ecj|indemnif|tort\s+law|habeas\s+corpus|promissory|"
@@ -127,19 +149,58 @@ _SENSITIVE_INTERNAL_RE = re.compile(
 
 # ── Keyword groups for secondary scoring pass ────────────────────────────────
 
-_KW_CODE = frozenset({
-    "python", "javascript", "api", "database", "function", "class",
-    "deploy", "server", "frontend", "backend", "typescript", "sql",
-    "react", "node", "flask", "django", "fastapi", "docker",
-})
-_KW_REASONING = frozenset({
-    "why", "how", "compare", "difference", "explain", "analyze",
-    "analyse", "pros", "cons", "tradeoff", "tradeoffs",
-})
-_KW_CREATIVE = frozenset({
-    "story", "poem", "creative", "fiction", "blog", "article",
-    "brainstorm", "imagine", "narrative", "character", "plot",
-})
+_KW_CODE = frozenset(
+    {
+        "python",
+        "javascript",
+        "api",
+        "database",
+        "function",
+        "class",
+        "deploy",
+        "server",
+        "frontend",
+        "backend",
+        "typescript",
+        "sql",
+        "react",
+        "node",
+        "flask",
+        "django",
+        "fastapi",
+        "docker",
+    }
+)
+_KW_REASONING = frozenset(
+    {
+        "why",
+        "how",
+        "compare",
+        "difference",
+        "explain",
+        "analyze",
+        "analyse",
+        "pros",
+        "cons",
+        "tradeoff",
+        "tradeoffs",
+    }
+)
+_KW_CREATIVE = frozenset(
+    {
+        "story",
+        "poem",
+        "creative",
+        "fiction",
+        "blog",
+        "article",
+        "brainstorm",
+        "imagine",
+        "narrative",
+        "character",
+        "plot",
+    }
+)
 
 
 def estimate_tokens(text: str) -> int:
@@ -158,22 +219,12 @@ def estimate_tokens(text: str) -> int:
 
     # Detect code blocks
     code_indicators = text.count("```") + text.count("def ") + text.count("function ")
-    symbol_ratio = sum(
-        1 for c in text if c in "{}[]()=<>|&;:"
-    ) / max(total_chars, 1)
+    symbol_ratio = sum(1 for c in text if c in "{}[]()=<>|&;:") / max(total_chars, 1)
 
     is_code_heavy = code_indicators > 0 or symbol_ratio > 0.05
 
     # Detect CJK
-    cjk_count = sum(
-        1
-        for c in text
-        if (
-            "一" <= c <= "鿿"
-            or "぀" <= c <= "ヿ"
-            or "가" <= c <= "힯"
-        )
-    )
+    cjk_count = sum(1 for c in text if ("一" <= c <= "鿿" or "぀" <= c <= "ヿ" or "가" <= c <= "힯"))
 
     cjk_ratio = cjk_count / max(total_chars, 1)
 
@@ -209,18 +260,20 @@ class RequestClassifier:
         Call this BEFORE any cache or budget check — both depend on what
         the classifier produces.
         """
-        prompt      = request.raw_prompt
-        history     = request.message_history
-        sys_prompt  = request.system_prompt or ""
-        priority    = request.priority
+        prompt = request.raw_prompt
+        history = request.message_history
+        sys_prompt = request.system_prompt or ""
+        priority = request.priority
 
         # 1. Token economics
-        input_tokens   = self._count_tokens(prompt + " " + sys_prompt + " " + self._history_text(history))
-        task_type, _   = self._detect_task_type(request)
-        output_tokens  = self._estimate_output_tokens(task_type, input_tokens)
+        input_tokens = self._count_tokens(
+            prompt + " " + sys_prompt + " " + self._history_text(history)
+        )
+        task_type, _ = self._detect_task_type(request)
+        output_tokens = self._estimate_output_tokens(task_type, input_tokens)
         history_tokens = self._count_tokens(self._history_text(history))
-        sys_tokens     = self._count_tokens(sys_prompt)
-        total_context  = input_tokens + output_tokens + sys_tokens  # history already in input_tokens
+        sys_tokens = self._count_tokens(sys_prompt)
+        total_context = input_tokens + output_tokens + sys_tokens  # history already in input_tokens
 
         # 2. Boolean signal extraction
         signals = self._extract_signals(request, input_tokens, history_tokens, sys_tokens)
@@ -235,7 +288,11 @@ class RequestClassifier:
             or signals.get("math_symbols_present", False)
         )
         requires_creativity = task_type == "creative_writing"
-        requires_precision  = task_type in ("code_generation", "code_review", "extraction") or signals.get("requires_structured_output", False)
+        requires_precision = task_type in (
+            "code_generation",
+            "code_review",
+            "extraction",
+        ) or signals.get("requires_structured_output", False)
 
         # 5. Sensitivity
         sensitivity = self._detect_sensitivity(request)
@@ -245,23 +302,23 @@ class RequestClassifier:
         fp = fingerprint(prompt, request.system_prompt, history, request.temperature)
 
         return TaskAnalysis(
-            complexity_score       = complexity,
-            estimated_input_tokens = input_tokens,
-            estimated_output_tokens= output_tokens,
-            total_context_needed   = total_context,
-            task_type              = task_type,
-            requires_reasoning     = requires_reasoning,
-            requires_creativity    = requires_creativity,
-            requires_precision     = requires_precision,
-            requires_multilingual  = signals.get("multilingual", False),
-            requires_streaming     = request.prefer_streaming,
-            is_multi_turn          = len(history) > 0,
-            question_count         = len(_QUESTION_RE.findall(prompt)),
-            has_code_fences        = bool(_CODE_FENCE_RE.search(prompt)),
-            has_math_symbols       = signals.get("math_symbols_present", False),
-            sensitivity_level      = sensitivity,
-            cache_eligible         = cache_eligible,
-            prompt_fingerprint     = fp,
+            complexity_score=complexity,
+            estimated_input_tokens=input_tokens,
+            estimated_output_tokens=output_tokens,
+            total_context_needed=total_context,
+            task_type=task_type,
+            requires_reasoning=requires_reasoning,
+            requires_creativity=requires_creativity,
+            requires_precision=requires_precision,
+            requires_multilingual=signals.get("multilingual", False),
+            requires_streaming=request.prefer_streaming,
+            is_multi_turn=len(history) > 0,
+            question_count=len(_QUESTION_RE.findall(prompt)),
+            has_code_fences=bool(_CODE_FENCE_RE.search(prompt)),
+            has_math_symbols=signals.get("math_symbols_present", False),
+            sensitivity_level=sensitivity,
+            cache_eligible=cache_eligible,
+            prompt_fingerprint=fp,
         )
 
     # ── Private helpers ─────────────────────────────────────────────────────
@@ -296,16 +353,16 @@ class RequestClassifier:
         Deliberately conservative — actual model output may differ.
         """
         _output_map = {
-            "simple_qa":        150,
-            "conversation":     150,
-            "classification":   50,
-            "code_generation":  1000,
-            "code_review":      600,
+            "simple_qa": 150,
+            "conversation": 150,
+            "classification": 50,
+            "code_generation": 1000,
+            "code_review": 600,
             "creative_writing": 1500,
-            "analysis":         800,
-            "reasoning":        1200,
+            "analysis": 800,
+            "reasoning": 1200,
             "function_calling": 400,
-            "vision":           400,
+            "vision": 400,
         }
         if task_type in _output_map:
             return _output_map[task_type]
@@ -325,9 +382,9 @@ class RequestClassifier:
         Returns (task_type, confidence). Ordering matters: more specific patterns first.
         Falls back to keyword scoring, then "general" when confidence < 0.5.
         """
-        prompt  = request.raw_prompt
+        prompt = request.raw_prompt
         history = request.message_history
-        meta    = request.metadata
+        meta = request.metadata
 
         # Vision: images in message content
         if "vision" in request.required_capabilities:
@@ -335,7 +392,9 @@ class RequestClassifier:
         for msg in history + [{"role": "user", "content": prompt}]:
             content = msg.get("content", "")
             if isinstance(content, list):
-                if any(isinstance(b, dict) and b.get("type") in ("image_url", "image") for b in content):
+                if any(
+                    isinstance(b, dict) and b.get("type") in ("image_url", "image") for b in content
+                ):
                     return "vision", 0.9
 
         # Function calling: explicit in metadata or capabilities
@@ -350,13 +409,33 @@ class RequestClassifier:
         # Conversation: trivially short, casual, greeting-like
         stripped = prompt.strip()
         if len(stripped) < 50 and not _QUESTION_RE.search(stripped):
-            casual_words = {"hi", "hello", "hey", "thanks", "thank you", "ok", "okay",
-                            "sure", "yes", "no", "great", "cool", "bye", "goodbye", "lol"}
-            if any(w in stripped.lower().split() for w in casual_words) or len(stripped.split()) <= 3:
+            casual_words = {
+                "hi",
+                "hello",
+                "hey",
+                "thanks",
+                "thank you",
+                "ok",
+                "okay",
+                "sure",
+                "yes",
+                "no",
+                "great",
+                "cool",
+                "bye",
+                "goodbye",
+                "lol",
+            }
+            if (
+                any(w in stripped.lower().split() for w in casual_words)
+                or len(stripped.split()) <= 3
+            ):
                 return "conversation", 0.6
 
         # Unit / currency conversion → route as simple_qa (fast, deterministic answer)
-        if re.search(r"\bconvert\b", prompt, re.IGNORECASE) and re.search(r"\bto\b", prompt, re.IGNORECASE):
+        if re.search(r"\bconvert\b", prompt, re.IGNORECASE) and re.search(
+            r"\bto\b", prompt, re.IGNORECASE
+        ):
             return "simple_qa", 0.7
 
         # Architecture / system design
@@ -370,13 +449,16 @@ class RequestClassifier:
 
         # Code generation: explicit patterns or language name + action verb
         if _CODE_GEN_RE.search(prompt) or (
-            _LANG_NAME_RE.search(prompt) and re.search(r"\b(write|implement|build|create|generate)\b", prompt, re.IGNORECASE)
+            _LANG_NAME_RE.search(prompt)
+            and re.search(r"\b(write|implement|build|create|generate)\b", prompt, re.IGNORECASE)
         ):
             return "code_generation", 0.8
 
         # Reasoning: proof / step-by-step / heavy math
         if _REASONING_RE.search(prompt) or _STEP_BY_STEP_RE.search(prompt):
-            if _MATH_SYM_RE.search(prompt) or re.search(r"\b(proof|theorem|derive|solve)\b", prompt, re.IGNORECASE):
+            if _MATH_SYM_RE.search(prompt) or re.search(
+                r"\b(proof|theorem|derive|solve)\b", prompt, re.IGNORECASE
+            ):
                 return "reasoning", 0.8
 
         # Extended reasoning patterns
@@ -416,7 +498,9 @@ class RequestClassifier:
             return "reasoning", 0.7
 
         # Simple Q&A: short, starts with question word
-        if _SIMPLE_QA_RE.match(prompt.strip()) or (len(prompt.strip()) < 120 and prompt.strip().endswith("?")):
+        if _SIMPLE_QA_RE.match(prompt.strip()) or (
+            len(prompt.strip()) < 120 and prompt.strip().endswith("?")
+        ):
             return "simple_qa", 0.6
 
         # Code review without explicit review keyword (just code fences)
@@ -456,9 +540,9 @@ class RequestClassifier:
     ) -> dict[str, bool]:
         """Extract the boolean modifier signals defined in config.COMPLEXITY_MODIFIERS."""
         prompt = request.raw_prompt
-        turns  = len(request.message_history)
+        turns = len(request.message_history)
         fences = len(_CODE_FENCE_RE.findall(prompt))
-        lines  = prompt.splitlines() or [""]
+        lines = prompt.splitlines() or [""]
 
         bullet_lines = sum(1 for ln in lines if _BULLET_RE.match(ln))
         bullet_density = bullet_lines / max(len(lines), 1)
@@ -480,20 +564,22 @@ class RequestClassifier:
         complex_sys = sys_tokens > 200 or sys.count("\n") > 5
 
         return {
-            "input_tokens_gt_2000":        input_tokens > 2000,
-            "input_tokens_gt_8000":        input_tokens > 8000,
-            "conversation_turns_gt_5":     turns > 5,
-            "requires_structured_output":  structured,
-            "requires_reasoning":          bool(_REASONING_RE.search(prompt) or _STEP_BY_STEP_RE.search(prompt)),
-            "multilingual":                bool(_LANG_RE.search(prompt)),
-            "domain_specific":             domain_specific,
-            "complex_system_prompt":       complex_sys,
+            "input_tokens_gt_2000": input_tokens > 2000,
+            "input_tokens_gt_8000": input_tokens > 8000,
+            "conversation_turns_gt_5": turns > 5,
+            "requires_structured_output": structured,
+            "requires_reasoning": bool(
+                _REASONING_RE.search(prompt) or _STEP_BY_STEP_RE.search(prompt)
+            ),
+            "multilingual": bool(_LANG_RE.search(prompt)),
+            "domain_specific": domain_specific,
+            "complex_system_prompt": complex_sys,
             "multiple_questions_detected": question_count > 1,
-            "math_symbols_present":        bool(_MATH_SYM_RE.search(prompt)),
-            "high_code_fence_density":     fences >= 2,
-            "high_bullet_density":         bullet_density > 0.25,
-            "repetitive_templated":        self._is_templated(prompt),
-            "expected_short_response":     len(prompt.split()) < 15 and question_count <= 1,
+            "math_symbols_present": bool(_MATH_SYM_RE.search(prompt)),
+            "high_code_fence_density": fences >= 2,
+            "high_bullet_density": bullet_density > 0.25,
+            "repetitive_templated": self._is_templated(prompt),
+            "expected_short_response": len(prompt.split()) < 15 and question_count <= 1,
         }
 
     @staticmethod
@@ -510,8 +596,7 @@ class RequestClassifier:
         lengths = [len(ln) for ln in lines]
         avg = sum(lengths) / len(lengths)
         similar = sum(
-            1 for ln in lengths
-            if abs(ln - avg) / max(avg, 1) < TEMPLATE_LINE_VARIATION_THRESHOLD
+            1 for ln in lengths if abs(ln - avg) / max(avg, 1) < TEMPLATE_LINE_VARIATION_THRESHOLD
         )
         return similar / len(lines) > TEMPLATE_SIMILARITY_RATIO
 

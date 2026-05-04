@@ -30,13 +30,13 @@ log = structlog.get_logger(__name__)
 #        (3) call it in score_response() and include it in the weighted sum,
 #        (4) add the field to QualityScore in schemas.py.
 _WEIGHTS = {
-    "length":      0.20,
-    "format":      0.20,
-    "refusal":     0.15,
+    "length": 0.20,
+    "format": 0.20,
+    "refusal": 0.15,
     "hallucination": 0.15,
-    "repetition":  0.10,
-    "cutoff":      0.10,
-    "latency":     0.10,
+    "repetition": 0.10,
+    "cutoff": 0.10,
+    "latency": 0.10,
 }
 
 # Refusal phrases that indicate the model under-served the request
@@ -48,8 +48,8 @@ _REFUSAL_PHRASES = re.compile(
 )
 
 # Hallucination risk signals
-_URL_RE       = re.compile(r"https?://\S+")
-_CITATION_RE  = re.compile(r"\[\d+\]|\((?:Smith|Jones|Wang|et al)[^)]*\d{4}\)")
+_URL_RE = re.compile(r"https?://\S+")
+_CITATION_RE = re.compile(r"\[\d+\]|\((?:Smith|Jones|Wang|et al)[^)]*\d{4}\)")
 _OVERCONFIDENT_RE = re.compile(
     r"\b(definitely|absolutely|certainly|guaranteed|100%|without a doubt)\b",
     re.IGNORECASE,
@@ -62,21 +62,21 @@ _OPEN_FENCE_RE = re.compile(r"```[^\n]*\n(?:(?!```).)*$", re.DOTALL)  # unclosed
 # Expected output length ranges (in words) per task type.
 # Used for length_appropriateness scoring.
 _EXPECTED_WORDS: dict[str, tuple[int, int]] = {
-    "simple_qa":        (10,  200),
-    "conversation":     (5,   200),
-    "translation":      (1,   9999),   # proportional — checked separately
-    "classification":   (1,    50),
-    "extraction":       (20,  500),
-    "summarization":    (50,  600),
-    "code_generation":  (50, 2000),
-    "code_review":      (30,  800),
+    "simple_qa": (10, 200),
+    "conversation": (5, 200),
+    "translation": (1, 9999),  # proportional — checked separately
+    "classification": (1, 50),
+    "extraction": (20, 500),
+    "summarization": (50, 600),
+    "code_generation": (50, 2000),
+    "code_review": (30, 800),
     "creative_writing": (100, 3000),
-    "analysis":         (100, 1500),
-    "reasoning":        (100, 2000),
-    "function_calling": (20,  500),
-    "vision":           (20,  600),
-    "long_document":    (100, 3000),
-    "unknown":          (10, 1000),
+    "analysis": (100, 1500),
+    "reasoning": (100, 2000),
+    "function_calling": (20, 500),
+    "vision": (20, 600),
+    "long_document": (100, 3000),
+    "unknown": (10, 1000),
 }
 
 
@@ -103,27 +103,27 @@ class QualityScorer:
         """
         words = response_text.split()
         word_count = len(words)
-        task_type  = analysis.task_type
+        task_type = analysis.task_type
 
-        length_score     = self._score_length(task_type, word_count, analysis.estimated_output_tokens)
-        format_score     = self._score_format(request, response_text, task_type)
+        length_score = self._score_length(task_type, word_count, analysis.estimated_output_tokens)
+        format_score = self._score_format(request, response_text, task_type)
         refusal_detected = bool(_REFUSAL_PHRASES.search(response_text))
-        refusal_score    = 0.0 if refusal_detected else 1.0
-        hallucination    = self._score_hallucination(response_text)
-        repetition_det   = self._detect_repetition(response_text)
+        refusal_score = 0.0 if refusal_detected else 1.0
+        hallucination = self._score_hallucination(response_text)
+        repetition_det = self._detect_repetition(response_text)
         repetition_score = 0.2 if repetition_det else 1.0
-        cutoff_detected  = self._detect_cutoff(response_text)
-        cutoff_score     = 0.2 if cutoff_detected else 1.0
-        latency_score    = self._score_latency(latency_ms)
+        cutoff_detected = self._detect_cutoff(response_text)
+        cutoff_score = 0.2 if cutoff_detected else 1.0
+        latency_score = self._score_latency(latency_ms)
 
         overall = (
-            length_score          * _WEIGHTS["length"]
-            + format_score        * _WEIGHTS["format"]
-            + refusal_score       * _WEIGHTS["refusal"]
+            length_score * _WEIGHTS["length"]
+            + format_score * _WEIGHTS["format"]
+            + refusal_score * _WEIGHTS["refusal"]
             + (1.0 - hallucination) * _WEIGHTS["hallucination"]
-            + repetition_score    * _WEIGHTS["repetition"]
-            + cutoff_score        * _WEIGHTS["cutoff"]
-            + latency_score       * _WEIGHTS["latency"]
+            + repetition_score * _WEIGHTS["repetition"]
+            + cutoff_score * _WEIGHTS["cutoff"]
+            + latency_score * _WEIGHTS["latency"]
         )
         overall = round(max(0.0, min(1.0, overall)), 4)
 
@@ -141,14 +141,14 @@ class QualityScorer:
         )
 
         return QualityScore(
-            overall                 = overall,
-            length_appropriateness  = length_score,
-            format_compliance       = format_score,
-            refusal_detected        = refusal_detected,
-            hallucination_risk      = hallucination,
-            repetition_detected     = repetition_det,
-            latency_rating          = latency_score,
-            cut_off_detected        = cutoff_detected,
+            overall=overall,
+            length_appropriateness=length_score,
+            format_compliance=format_score,
+            refusal_detected=refusal_detected,
+            hallucination_risk=hallucination,
+            repetition_detected=repetition_det,
+            latency_rating=latency_score,
+            cut_off_detected=cutoff_detected,
         )
 
     # ── Dimension scorers ───────────────────────────────────────────────────
@@ -165,13 +165,13 @@ class QualityScorer:
         # For translation we compare to estimated output tokens (proportional to input)
         if task_type == "translation":
             expected_words = max(10, int(expected_output_tokens / 1.3))
-            low  = max(1, int(expected_words * 0.5))
+            low = max(1, int(expected_words * 0.5))
             high = int(expected_words * 1.8)
 
         if word_count < low * 0.20:
-            return 0.2   # critically short
+            return 0.2  # critically short
         if word_count > high * 3.0:
-            return 0.5   # excessively long
+            return 0.5  # excessively long
         if low <= word_count <= high:
             return 1.0
         # Partial credit for being outside range but not extreme
@@ -194,17 +194,17 @@ class QualityScorer:
             try:
                 # Extract first JSON-like block
                 start = text.find("{")
-                end   = text.rfind("}") + 1
+                end = text.rfind("}") + 1
                 if start != -1 and end > start:
                     json.loads(text[start:end])
                     return 1.0
             except (json.JSONDecodeError, ValueError):
                 pass
-            return 0.4   # JSON was requested but response is not valid JSON
+            return 0.4  # JSON was requested but response is not valid JSON
         if task_type in ("code_generation", "code_review") and "```" in text:
             return 1.0
         if task_type in ("code_generation",) and "```" not in text:
-            return 0.6   # code requested but no fence
+            return 0.6  # code requested but no fence
         return 1.0
 
     @staticmethod
@@ -218,7 +218,10 @@ class QualityScorer:
         urls = _URL_RE.findall(text)
         # Penalise clearly made-up URLs (not wikipedia, github, etc.)
         for url in urls:
-            if not any(d in url for d in ("wikipedia.org", "github.com", "arxiv.org", "openai.com", "anthropic.com")):
+            if not any(
+                d in url
+                for d in ("wikipedia.org", "github.com", "arxiv.org", "openai.com", "anthropic.com")
+            ):
                 risk += 0.05
         risk += min(0.15, len(_CITATION_RE.findall(text)) * 0.05)
         risk += min(0.10, len(_OVERCONFIDENT_RE.findall(text)) * 0.03)

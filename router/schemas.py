@@ -121,9 +121,9 @@ class RoutingRequest(BaseModel):
     #   quality-first   → weights quality=0.70, cost=0.20, latency=0.10
     #   balanced        → default behavior (current logic, no change)
     #   cost-optimized  → weights quality=0.30, cost=0.60, latency=0.10
-    routing_priority: Literal[
-        "always-premium", "quality-first", "balanced", "cost-optimized"
-    ] = "balanced"
+    routing_priority: Literal["always-premium", "quality-first", "balanced", "cost-optimized"] = (
+        "balanced"
+    )
 
     # ── Change 3: Per-customer adaptive memory ──────────────────────────────────
     # When provided, per-customer adaptive quality scores are used after 20+ samples.

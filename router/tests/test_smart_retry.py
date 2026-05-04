@@ -32,9 +32,7 @@ Test classes:
 from __future__ import annotations
 
 import asyncio
-import uuid
 from typing import Any
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -55,17 +53,16 @@ from router.errors import (
 from router.flux import Flux, FluxResponse
 from router.model_registry import ModelRegistry
 from router.routing_engine import RoutingEngine
-from router.schemas import RoutingRequest
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _engine() -> RoutingEngine:
-    registry   = ModelRegistry()
-    cache      = ResponseCache(enabled=False)
-    adaptive   = AdaptiveWeights(state_file=None)
-    analytics  = RoutingAnalytics(log_path=None)
-    budget     = BudgetTracker()
+    registry = ModelRegistry()
+    cache = ResponseCache(enabled=False)
+    adaptive = AdaptiveWeights(state_file=None)
+    analytics = RoutingAnalytics(log_path=None)
+    budget = BudgetTracker()
     compressor = ContextCompressor()
     classifier = RequestClassifier(cache)
     return RoutingEngine(registry, classifier, cache, budget, adaptive, compressor, analytics)
@@ -84,6 +81,7 @@ _KWARGS: dict[str, Any] = {"user_id": "u_retry", "plan": "business_plan", "explo
 
 
 # ── Successful path ───────────────────────────────────────────────────────────
+
 
 class TestSuccessPath:
     def test_first_call_succeeds(self):
@@ -113,9 +111,10 @@ class TestSuccessPath:
 
 # ── Rate limit retry ──────────────────────────────────────────────────────────
 
+
 class TestRetryOnRateLimit:
     def test_retry_on_rate_limit(self):
-        flux   = _flux()
+        flux = _flux()
         calls: list[str] = []
 
         async def mock_call(model, request):
@@ -132,7 +131,7 @@ class TestRetryOnRateLimit:
         assert len(calls) >= 2
 
     def test_rate_limit_uses_different_model_on_retry(self):
-        flux  = _flux()
+        flux = _flux()
         calls: list[str] = []
 
         async def mock_call(model, request):
@@ -150,9 +149,10 @@ class TestRetryOnRateLimit:
 
 # ── Timeout retry ─────────────────────────────────────────────────────────────
 
+
 class TestRetryOnTimeout:
     def test_retry_on_timeout(self):
-        flux  = _flux()
+        flux = _flux()
         calls: list[str] = []
 
         async def mock_call(model, request):
@@ -168,7 +168,7 @@ class TestRetryOnTimeout:
 
     def test_timeout_uses_fastest_fallback(self):
         """Timeout fallback chain is sorted by latency — verify no exception."""
-        flux  = _flux()
+        flux = _flux()
 
         async def mock_call(model, request):
             raise TimeoutError("timeout")
@@ -180,9 +180,10 @@ class TestRetryOnTimeout:
 
 # ── Content filter retry ──────────────────────────────────────────────────────
 
+
 class TestRetryOnContentFilter:
     def test_retry_on_content_filter(self):
-        flux  = _flux()
+        flux = _flux()
         calls: list[str] = []
 
         async def mock_call(model, request):
@@ -201,7 +202,7 @@ class TestRetryOnContentFilter:
         Content-safety chain contains higher-tier models.
         We verify the route succeeds even when primary fails on content filter.
         """
-        flux  = _flux()
+        flux = _flux()
         count = [0]
 
         async def mock_call(model, request):
@@ -217,9 +218,10 @@ class TestRetryOnContentFilter:
 
 # ── Provider down ─────────────────────────────────────────────────────────────
 
+
 class TestRetryOnProviderDown:
     def test_provider_down_uses_rate_limit_chain(self):
-        flux  = _flux()
+        flux = _flux()
         calls: list[str] = []
 
         async def mock_call(model, request):
@@ -236,9 +238,10 @@ class TestRetryOnProviderDown:
 
 # ── Auth error ────────────────────────────────────────────────────────────────
 
+
 class TestNoRetryOnAuthError:
     def test_auth_error_raises_immediately(self):
-        flux  = _flux()
+        flux = _flux()
         calls = [0]
 
         async def mock_call(model, request):
@@ -252,7 +255,7 @@ class TestNoRetryOnAuthError:
         assert calls[0] == 1
 
     def test_auth_error_not_wrapped_in_flux_api_error(self):
-        flux  = _flux()
+        flux = _flux()
 
         async def mock_call(model, request):
             raise AuthenticationError("bad key")
@@ -264,9 +267,10 @@ class TestNoRetryOnAuthError:
 
 # ── max_retries limit ─────────────────────────────────────────────────────────
 
+
 class TestMaxRetriesRespected:
     def test_max_retries_zero_means_one_attempt(self):
-        flux  = _flux()
+        flux = _flux()
         calls = [0]
 
         async def mock_call(model, request):
@@ -279,7 +283,7 @@ class TestMaxRetriesRespected:
         assert calls[0] == 1
 
     def test_max_retries_two_allows_three_attempts(self):
-        flux  = _flux()
+        flux = _flux()
         calls = [0]
 
         async def mock_call(model, request):
@@ -295,7 +299,7 @@ class TestMaxRetriesRespected:
         assert calls[0] <= 3
 
     def test_max_retries_custom(self):
-        flux  = _flux()
+        flux = _flux()
         calls = [0]
 
         async def mock_call(model, request):
@@ -309,6 +313,7 @@ class TestMaxRetriesRespected:
 
 
 # ── All-fail raises FluxAPIError ──────────────────────────────────────────────
+
 
 class TestAllFailRaisesError:
     def test_all_models_fail_raises_flux_error(self):
@@ -337,9 +342,10 @@ class TestAllFailRaisesError:
 
 # ── Fallback marked on response ───────────────────────────────────────────────
 
+
 class TestFallbackMarkedOnResponse:
     def test_fallback_used_true_when_primary_fails(self):
-        flux  = _flux()
+        flux = _flux()
         first = [True]
 
         async def mock_call(model, request):
@@ -353,7 +359,7 @@ class TestFallbackMarkedOnResponse:
         assert resp.fallback_used is True
 
     def test_fallback_reason_matches_error_type(self):
-        flux  = _flux()
+        flux = _flux()
         first = [True]
 
         async def mock_call(model, request):
@@ -379,6 +385,7 @@ class TestFallbackMarkedOnResponse:
 
 
 # ── Model deduplication ───────────────────────────────────────────────────────
+
 
 class TestModelDeduplication:
     def test_same_model_not_tried_twice(self):

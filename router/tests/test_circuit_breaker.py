@@ -37,9 +37,6 @@ import asyncio
 import time
 import uuid
 from typing import Any
-from unittest.mock import patch
-
-import pytest
 
 from router.adaptive_weights import AdaptiveWeights
 from router.analytics import RoutingAnalytics
@@ -52,15 +49,15 @@ from router.model_registry import ModelRegistry
 from router.routing_engine import RoutingEngine
 from router.schemas import RoutingRequest
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _engine() -> RoutingEngine:
-    registry   = ModelRegistry()
-    cache      = ResponseCache(enabled=False)
-    adaptive   = AdaptiveWeights(state_file=None)
-    analytics  = RoutingAnalytics(log_path=None)
-    budget     = BudgetTracker()
+    registry = ModelRegistry()
+    cache = ResponseCache(enabled=False)
+    adaptive = AdaptiveWeights(state_file=None)
+    analytics = RoutingAnalytics(log_path=None)
+    budget = BudgetTracker()
     compressor = ContextCompressor()
     classifier = RequestClassifier(cache)
     return RoutingEngine(registry, classifier, cache, budget, adaptive, compressor, analytics)
@@ -68,15 +65,15 @@ def _engine() -> RoutingEngine:
 
 def _req(prompt: str, **kw: Any) -> RoutingRequest:
     defaults: dict[str, Any] = {
-        "user_id":        "u_cb",
-        "plan":           "business_plan",
-        "priority":       "normal",
+        "user_id": "u_cb",
+        "plan": "business_plan",
+        "priority": "normal",
         "exploration_rate": 0.0,
     }
     defaults.update(kw)
     return RoutingRequest(
-        raw_prompt     = prompt,
-        correlation_id = str(uuid.uuid4()),
+        raw_prompt=prompt,
+        correlation_id=str(uuid.uuid4()),
         **defaults,
     )
 
@@ -88,6 +85,7 @@ def rr(coro):
 # ═══════════════════════════════════════════════════════════════════════════════
 # CircuitBreaker unit tests
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class TestCircuitBreakerUnit:
     def _cb(self, threshold: int = 5, timeout: float = 60.0) -> CircuitBreaker:
@@ -129,7 +127,7 @@ class TestCircuitBreakerUnit:
 
     def test_failure_count_tracked(self):
         cb = self._cb(threshold=10)
-        for i in range(7):
+        for _ in range(7):
             cb.record_failure("anthropic")
         assert cb.get_failure_count("anthropic") == 7
 
@@ -172,7 +170,7 @@ class TestCircuitBreakerUnit:
         cb.record_failure("openai")
         cb.record_failure("openai")
         time.sleep(0.02)
-        cb.is_available("openai")   # triggers half-open
+        cb.is_available("openai")  # triggers half-open
         cb.record_success("openai")
         assert cb.get_state("openai") == "closed"
         assert cb.is_available("openai") is True
@@ -182,7 +180,7 @@ class TestCircuitBreakerUnit:
         cb.record_failure("openai")
         cb.record_failure("openai")
         time.sleep(0.02)
-        cb.is_available("openai")   # triggers half-open
+        cb.is_available("openai")  # triggers half-open
         cb.record_failure("openai")  # probe fails → reopen
         assert cb.get_state("openai") == "open"
         assert cb.is_available("openai") is False
@@ -193,9 +191,9 @@ class TestCircuitBreakerUnit:
         cb.record_failure("openai")
         cb.record_failure("openai")
         time.sleep(0.02)
-        first  = cb.is_available("openai")  # True — probe granted
+        first = cb.is_available("openai")  # True — probe granted
         second = cb.is_available("openai")  # False — probe already in flight
-        assert first  is True
+        assert first is True
         assert second is False
 
     # ── Independent providers ─────────────────────────────────────────────
@@ -204,7 +202,7 @@ class TestCircuitBreakerUnit:
         cb = self._cb(threshold=3)
         for _ in range(3):
             cb.record_failure("openai")
-        assert cb.is_available("openai")    is False
+        assert cb.is_available("openai") is False
         assert cb.is_available("anthropic") is True
 
     def test_multiple_providers_can_open_independently(self):
@@ -212,13 +210,14 @@ class TestCircuitBreakerUnit:
         cb.record_failure("openai")
         cb.record_failure("openai")
         cb.record_failure("anthropic")
-        assert cb.is_available("openai")    is False
+        assert cb.is_available("openai") is False
         assert cb.is_available("anthropic") is True  # only 1 failure
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Integration: circuit breaker filters models in routing
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class TestCircuitBreakerFiltersModels:
     def setup_method(self):
@@ -269,13 +268,17 @@ class TestCircuitBreakerFiltersModels:
         # Open the circuit for anthropic.
         for _ in range(5):
             cb.record_failure("anthropic")
-        d1 = rr(self.engine.route(_req("Write a complex algorithm", routing_priority="always-premium")))
+        d1 = rr(
+            self.engine.route(_req("Write a complex algorithm", routing_priority="always-premium"))
+        )
         assert d1.chosen_model is not None
         assert d1.chosen_model.provider != "anthropic"
 
         # Close it again.
         cb.record_success("anthropic")
-        d2 = rr(self.engine.route(_req("Write a complex algorithm", routing_priority="always-premium")))
+        d2 = rr(
+            self.engine.route(_req("Write a complex algorithm", routing_priority="always-premium"))
+        )
         assert d2.chosen_model is not None
         # Now anthropic is available again — router may choose it.
         # (It might not be chosen if another premium model scores higher; that's OK.)

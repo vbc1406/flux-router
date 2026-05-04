@@ -19,8 +19,8 @@ import structlog
 
 log = structlog.get_logger(__name__)
 
-_CLOSED   = "closed"
-_OPEN     = "open"
+_CLOSED = "closed"
+_OPEN = "open"
 _HALFOPEN = "half-open"
 
 
@@ -37,11 +37,11 @@ class CircuitBreaker:
 
     def __init__(
         self,
-        failure_threshold: int   = 5,
-        recovery_timeout:  float = 60.0,
+        failure_threshold: int = 5,
+        recovery_timeout: float = 60.0,
     ) -> None:
         self.failure_threshold = failure_threshold
-        self.recovery_timeout  = recovery_timeout
+        self.recovery_timeout = recovery_timeout
         # provider → {"failures": int, "state": str, "opened_at": float|None,
         #              "probe_in_flight": bool}
         self._providers: dict[str, dict] = {}
@@ -64,7 +64,7 @@ class CircuitBreaker:
                 if elapsed >= self.recovery_timeout:
                     # Transition to half-open; allow exactly one probe.
                     if not entry["probe_in_flight"]:
-                        entry["state"]           = _HALFOPEN
+                        entry["state"] = _HALFOPEN
                         entry["probe_in_flight"] = True
                         log.info(
                             "circuit_half_open",
@@ -87,28 +87,31 @@ class CircuitBreaker:
             if entry and entry["state"] != _CLOSED:
                 log.info("circuit_closed", provider=provider)
             self._providers[provider] = {
-                "failures":        0,
-                "state":           _CLOSED,
-                "opened_at":       None,
+                "failures": 0,
+                "state": _CLOSED,
+                "opened_at": None,
                 "probe_in_flight": False,
             }
 
     def record_failure(self, provider: str) -> None:
         """A call to this provider failed — increment failure count and maybe open."""
         with self._lock:
-            entry = self._providers.get(provider, {
-                "failures":        0,
-                "state":           _CLOSED,
-                "opened_at":       None,
-                "probe_in_flight": False,
-            })
+            entry = self._providers.get(
+                provider,
+                {
+                    "failures": 0,
+                    "state": _CLOSED,
+                    "opened_at": None,
+                    "probe_in_flight": False,
+                },
+            )
 
             # Probe failed → reopen immediately.
             if entry["state"] == _HALFOPEN:
-                entry["state"]           = _OPEN
-                entry["opened_at"]       = time.monotonic()
+                entry["state"] = _OPEN
+                entry["opened_at"] = time.monotonic()
                 entry["probe_in_flight"] = False
-                entry["failures"]        += 1
+                entry["failures"] += 1
                 self._providers[provider] = entry
                 log.warning(
                     "circuit_reopened_after_probe_failure",
@@ -119,7 +122,7 @@ class CircuitBreaker:
 
             entry["failures"] += 1
             if entry["failures"] >= self.failure_threshold and entry["state"] == _CLOSED:
-                entry["state"]     = _OPEN
+                entry["state"] = _OPEN
                 entry["opened_at"] = time.monotonic()
                 log.warning(
                     "circuit_opened",

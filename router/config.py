@@ -29,22 +29,22 @@ import os
 # What breaks if changed: every request of that task type shifts tier, which
 # affects cost and quality across all users.
 COMPLEXITY_BASE_SCORES: dict[str, float] = {
-    "simple_qa":        0.08,   # fact lookups, definitions — free tier
-    "conversation":     0.05,   # casual chat — free tier
-    "translation":      0.12,   # language translation — free tier
-    "classification":   0.15,   # sentiment/category labelling — cheap tier
-    "extraction":       0.25,   # structured data extraction — cheap tier
-    "summarization":    0.30,   # document summarisation — cheap/mid tier
-    "code_generation":  0.55,   # write new code — mid tier
-    "code_review":      0.60,   # review/debug existing code — mid/premium tier
-    "creative_writing": 0.45,   # stories, poems, essays — mid tier
-    "analysis":         0.55,   # compare, evaluate, assess — mid tier
-    "reasoning":        0.70,   # proofs, derivations, step-by-step — premium tier
-    "function_calling": 0.40,   # structured tool use — mid tier
-    "vision":           0.50,   # image understanding — mid tier
-    "long_document":    0.50,   # large document processing — mid tier
-    "unknown":          0.40,   # fallback when classifier is uncertain — mid tier
-    "general":          0.40,   # broad catch-all — mid tier
+    "simple_qa": 0.08,  # fact lookups, definitions — free tier
+    "conversation": 0.05,  # casual chat — free tier
+    "translation": 0.12,  # language translation — free tier
+    "classification": 0.15,  # sentiment/category labelling — cheap tier
+    "extraction": 0.25,  # structured data extraction — cheap tier
+    "summarization": 0.30,  # document summarisation — cheap/mid tier
+    "code_generation": 0.55,  # write new code — mid tier
+    "code_review": 0.60,  # review/debug existing code — mid/premium tier
+    "creative_writing": 0.45,  # stories, poems, essays — mid tier
+    "analysis": 0.55,  # compare, evaluate, assess — mid tier
+    "reasoning": 0.70,  # proofs, derivations, step-by-step — premium tier
+    "function_calling": 0.40,  # structured tool use — mid tier
+    "vision": 0.50,  # image understanding — mid tier
+    "long_document": 0.50,  # large document processing — mid tier
+    "unknown": 0.40,  # fallback when classifier is uncertain — mid tier
+    "general": 0.40,  # broad catch-all — mid tier
 }
 
 # Additive modifiers applied on top of the base score when a signal is detected.
@@ -53,20 +53,20 @@ COMPLEXITY_BASE_SCORES: dict[str, float] = {
 # to see which modifiers are firing for a given prompt, then adjust.
 # What breaks if changed: global complexity distribution shifts for all affected prompts.
 COMPLEXITY_MODIFIERS: dict[str, float] = {
-    "input_tokens_gt_2000":       +0.10,  # large context → more demanding
-    "input_tokens_gt_8000":       +0.20,  # very large context → probably needs premium
-    "conversation_turns_gt_5":    +0.10,  # long conversation → more context to handle
+    "input_tokens_gt_2000": +0.10,  # large context → more demanding
+    "input_tokens_gt_8000": +0.20,  # very large context → probably needs premium
+    "conversation_turns_gt_5": +0.10,  # long conversation → more context to handle
     "requires_structured_output": +0.10,  # JSON/YAML output → precision required
-    "requires_reasoning":         +0.20,  # explicit step-by-step / proof → high reasoning
-    "multilingual":               +0.10,  # cross-language content → harder
-    "domain_specific":            +0.15,  # technical/legal/medical jargon → harder
-    "complex_system_prompt":      +0.10,  # long or detailed system prompt → more context
-    "multiple_questions_detected":+0.12,  # compound questions → more to address
-    "math_symbols_present":       +0.15,  # mathematical notation → reasoning required
-    "high_code_fence_density":    +0.10,  # lots of code → technical precision needed
-    "high_bullet_density":        +0.05,  # structured list → mild complexity signal
-    "repetitive_templated":       -0.10,  # fill-in-the-blank → lower complexity
-    "expected_short_response":    -0.10,  # short prompt, likely short answer → simpler
+    "requires_reasoning": +0.20,  # explicit step-by-step / proof → high reasoning
+    "multilingual": +0.10,  # cross-language content → harder
+    "domain_specific": +0.15,  # technical/legal/medical jargon → harder
+    "complex_system_prompt": +0.10,  # long or detailed system prompt → more context
+    "multiple_questions_detected": +0.12,  # compound questions → more to address
+    "math_symbols_present": +0.15,  # mathematical notation → reasoning required
+    "high_code_fence_density": +0.10,  # lots of code → technical precision needed
+    "high_bullet_density": +0.05,  # structured list → mild complexity signal
+    "repetitive_templated": -0.10,  # fill-in-the-blank → lower complexity
+    "expected_short_response": -0.10,  # short prompt, likely short answer → simpler
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -81,10 +81,10 @@ COMPLEXITY_MODIFIERS: dict[str, float] = {
 #   Changing tier boundaries is a breaking change — discuss with the team first.
 # Note: "ultra" tier was merged into "premium" (Change 8).  Do not re-add "ultra".
 TIER_BOUNDARIES: dict[str, tuple[float, float]] = {
-    "free":    (0.00, 0.15),   # simple Q&A, casual conversation
-    "cheap":   (0.15, 0.30),   # classification, extraction, summarisation
-    "mid":     (0.30, 0.60),   # code generation, analysis, creative writing
-    "premium": (0.60, 1.01),   # reasoning, complex code review, domain-expert tasks
+    "free": (0.00, 0.15),  # simple Q&A, casual conversation
+    "cheap": (0.15, 0.30),  # classification, extraction, summarisation
+    "mid": (0.30, 0.60),  # code generation, analysis, creative writing
+    "premium": (0.60, 1.01),  # reasoning, complex code review, domain-expert tasks
 }
 
 # Canonical tier ordering from cheapest to most capable.
@@ -103,8 +103,8 @@ TIER_ORDER: list[str] = ["free", "cheap", "mid", "premium"]
 # What breaks if changed: users on affected plans may be downgraded more or less
 #   aggressively, impacting response quality and cost recovery.
 BUDGET_LIMITS: dict[str, dict[str, float]] = {
-    "free_plan":     {"daily":  5.00,  "monthly":   100.00},
-    "pro_plan":      {"daily": 50.00,  "monthly":  1000.00},
+    "free_plan": {"daily": 5.00, "monthly": 100.00},
+    "pro_plan": {"daily": 50.00, "monthly": 1000.00},
     "business_plan": {"daily": 500.00, "monthly": 10000.00},
 }
 
@@ -148,9 +148,7 @@ MIN_QUALITY_THRESHOLD: float = 0.35
 #   model mix; raise (e.g., 0.70) for stricter quality guarantees.
 # Configurable at runtime via the MIN_CONFIDENCE_THRESHOLD environment variable.
 # What breaks if changed: higher value → more requests fall back to premium → higher cost.
-MIN_CONFIDENCE_THRESHOLD: float = float(
-    os.environ.get("MIN_CONFIDENCE_THRESHOLD", "0.60")
-)
+MIN_CONFIDENCE_THRESHOLD: float = float(os.environ.get("MIN_CONFIDENCE_THRESHOLD", "0.60"))
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CACHE
@@ -159,7 +157,7 @@ MIN_CONFIDENCE_THRESHOLD: float = float(
 # Response cache TTL in seconds.  Cached entries expire after this time.
 # How to tune: raise for stable factual tasks (translations, simple Q&A);
 #   lower if freshness matters more than cache hit rate.
-CACHE_TTL_SECONDS: int = 3600   # 1 hour
+CACHE_TTL_SECONDS: int = 3600  # 1 hour
 
 # Maximum number of entries in the in-memory LRU cache.
 # When full, the least-recently-used entry is evicted.
@@ -175,13 +173,20 @@ CACHE_ENABLED: bool = True
 # Task types that MAY be cached (subject to temperature and other conditions).
 # How to tune: add a task type here when its responses are deterministic and reusable.
 CACHEABLE_TASK_TYPES: set[str] = {
-    "simple_qa", "translation", "classification", "extraction", "summarization"
+    "simple_qa",
+    "translation",
+    "classification",
+    "extraction",
+    "summarization",
 }
 
 # Task types that must NEVER be cached — outputs are expected to vary per request.
 # How to tune: add a task type here when users expect fresh results every time.
 NON_CACHEABLE_TASK_TYPES: set[str] = {
-    "creative_writing", "conversation", "vision", "function_calling"
+    "creative_writing",
+    "conversation",
+    "vision",
+    "function_calling",
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -315,10 +320,10 @@ ADAPTIVE_WEIGHT_FILE: str = "router/adaptive_state.json"
 # new keys are rejected with a structured warning; existing keys continue to
 # update normally.
 
-MAX_CUSTOMERS: int                  = 100_000   # _customer_state size cap
-MAX_ADAPTIVE_KEYS: int              = 50_000    # _state and _signal_stats size cap
-MAX_DECAY_OVERRIDES: int            = 1_000     # _decay_overrides size cap
-RECORD_RATE_PER_CUSTOMER_PER_S: int = 100       # adaptive record() rate-limit budget
+MAX_CUSTOMERS: int = 100_000  # _customer_state size cap
+MAX_ADAPTIVE_KEYS: int = 50_000  # _state and _signal_stats size cap
+MAX_DECAY_OVERRIDES: int = 1_000  # _decay_overrides size cap
+RECORD_RATE_PER_CUSTOMER_PER_S: int = 100  # adaptive record() rate-limit budget
 
 # Hard cap on persisted state-file size at load time. A malformed, corrupted, or
 # adversarially-large state/log file would otherwise be slurped into memory and
@@ -336,10 +341,10 @@ MAX_STATE_FILE_BYTES: int = 100_000_000
 # "prefer_quality" → quality-heavy weights; "prefer_speed" → latency-heavy weights.
 # How to tune: change the mapping if your latency expectations per priority differ.
 LATENCY_PRIORITY_MAP: dict[str, str] = {
-    "low":      "prefer_quality",   # low-priority requests can take their time
-    "normal":   "balanced",         # default balanced weighting
-    "high":     "prefer_speed",     # high-priority requests want fast responses
-    "critical": "prefer_speed",     # critical requests need the fastest available model
+    "low": "prefer_quality",  # low-priority requests can take their time
+    "normal": "balanced",  # default balanced weighting
+    "high": "prefer_speed",  # high-priority requests want fast responses
+    "critical": "prefer_speed",  # critical requests need the fastest available model
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -369,10 +374,10 @@ CONTEXT_SUMMARY_TARGET_TOKENS: int = 2000
 SCORING_WEIGHTS: dict[str, dict[str, float]] = {
     # Latency-mode entries (driven by request.priority via LATENCY_PRIORITY_MAP)
     "prefer_quality": {"quality": 0.70, "cost": 0.25, "latency": 0.05},
-    "balanced":       {"quality": 0.50, "cost": 0.30, "latency": 0.20},
-    "prefer_speed":   {"quality": 0.30, "cost": 0.25, "latency": 0.45},
+    "balanced": {"quality": 0.50, "cost": 0.30, "latency": 0.20},
+    "prefer_speed": {"quality": 0.30, "cost": 0.25, "latency": 0.45},
     # routing_priority overrides (Change 1) — these override the latency-mode entry
-    "quality-first":  {"quality": 0.70, "cost": 0.20, "latency": 0.10},
+    "quality-first": {"quality": 0.70, "cost": 0.20, "latency": 0.10},
     "cost-optimized": {"quality": 0.30, "cost": 0.60, "latency": 0.10},
 }
 
@@ -390,7 +395,7 @@ VALID_ROUTING_PRIORITIES: frozenset[str] = frozenset(
 # Kept for reference / rollback only.  The live routing code uses the linear
 # tier walk-down (Change 7) rather than these weighted values.
 BUDGET_DOWNGRADE_QUALITY_WEIGHT: float = 0.65
-BUDGET_DOWNGRADE_COST_WEIGHT: float    = 0.35
+BUDGET_DOWNGRADE_COST_WEIGHT: float = 0.35
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STICKY MODEL BIAS (Fix 1)
@@ -403,7 +408,7 @@ BUDGET_DOWNGRADE_COST_WEIGHT: float    = 0.35
 # How to tune: raise if conversations are switching models too often; lower if you want
 #   the router to be more willing to upgrade/downgrade mid-conversation.
 CONVERSATION_STICKY_BIAS_SHALLOW: float = 0.15
-CONVERSATION_STICKY_BIAS_DEEP: float    = 0.20
+CONVERSATION_STICKY_BIAS_DEEP: float = 0.20
 
 # Messages before the "deep" bias applies.
 CONVERSATION_DEPTH_THRESHOLD: int = 6
@@ -427,12 +432,12 @@ CONTEXT_PENALTY_HARD_CUTOFF: float = 0.90
 
 # Above this fill ratio, a severe penalty is applied to the routing score.
 # Models are not dropped but their score is reduced to discourage selection.
-CONTEXT_PENALTY_HIGH_RATIO: float  = 0.50
-CONTEXT_PENALTY_HIGH_FACTOR: float = 0.40   # score -= (ratio - HIGH_RATIO) * this
+CONTEXT_PENALTY_HIGH_RATIO: float = 0.50
+CONTEXT_PENALTY_HIGH_FACTOR: float = 0.40  # score -= (ratio - HIGH_RATIO) * this
 
 # Above this fill ratio but below HIGH_RATIO, a mild penalty applies.
-CONTEXT_PENALTY_MID_RATIO: float   = 0.30
-CONTEXT_PENALTY_MID_FACTOR: float  = 0.15   # score -= (ratio - MID_RATIO) * this
+CONTEXT_PENALTY_MID_RATIO: float = 0.30
+CONTEXT_PENALTY_MID_FACTOR: float = 0.15  # score -= (ratio - MID_RATIO) * this
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CIRCUIT BREAKER (Fix 4)
@@ -461,7 +466,7 @@ CIRCUIT_BREAKER_RECOVERY_TIMEOUT: float = 60.0  # seconds
 # How to tune: raise TEMPLATE_LINE_VARIATION_THRESHOLD to be less strict about what
 #   counts as "similar"; lower to require tighter uniformity.
 TEMPLATE_LINE_VARIATION_THRESHOLD: float = 0.20
-TEMPLATE_SIMILARITY_RATIO: float         = 0.65
+TEMPLATE_SIMILARITY_RATIO: float = 0.65
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ADAPTIVE WEIGHTS CUSTOMER LOG CAP

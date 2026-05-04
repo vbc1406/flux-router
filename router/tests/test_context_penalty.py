@@ -52,20 +52,19 @@ from router.context_compressor import ContextCompressor
 from router.model_registry import ModelRegistry
 from router.routing_engine import (
     RoutingEngine,
-    _estimate_cost,
     _passes_hard_constraints,
 )
 from router.schemas import ModelOption, RoutingRequest, TaskAnalysis
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _engine() -> RoutingEngine:
-    registry   = ModelRegistry()
-    cache      = ResponseCache(enabled=False)
-    adaptive   = AdaptiveWeights(state_file=None)
-    analytics  = RoutingAnalytics(log_path=None)
-    budget     = BudgetTracker()
+    registry = ModelRegistry()
+    cache = ResponseCache(enabled=False)
+    adaptive = AdaptiveWeights(state_file=None)
+    analytics = RoutingAnalytics(log_path=None)
+    budget = BudgetTracker()
     compressor = ContextCompressor()
     classifier = RequestClassifier(cache)
     return RoutingEngine(registry, classifier, cache, budget, adaptive, compressor, analytics)
@@ -73,15 +72,15 @@ def _engine() -> RoutingEngine:
 
 def _req(prompt: str, **kw: Any) -> RoutingRequest:
     defaults: dict[str, Any] = {
-        "user_id":        "u_ctx_penalty",
-        "plan":           "business_plan",
-        "priority":       "normal",
+        "user_id": "u_ctx_penalty",
+        "plan": "business_plan",
+        "priority": "normal",
         "exploration_rate": 0.0,
     }
     defaults.update(kw)
     return RoutingRequest(
-        raw_prompt     = prompt,
-        correlation_id = str(uuid.uuid4()),
+        raw_prompt=prompt,
+        correlation_id=str(uuid.uuid4()),
         **defaults,
     )
 
@@ -97,33 +96,34 @@ def _make_model(
 ) -> ModelOption:
     """Helper: create a ModelOption with a specific context window."""
     return ModelOption(
-        provider               = "openai",
-        model_id               = model_id,
-        display_name           = model_id,
-        tier                   = tier,
-        cost_per_1k_input      = 0.001,
-        cost_per_1k_output     = 0.002,
-        max_context_window     = context_window,
-        max_output_tokens      = 4096,
-        capabilities           = [],
-        adjusted_quality       = 0.8,
-        routing_score          = 0.0,
+        provider="openai",
+        model_id=model_id,
+        display_name=model_id,
+        tier=tier,
+        cost_per_1k_input=0.001,
+        cost_per_1k_output=0.002,
+        max_context_window=context_window,
+        max_output_tokens=4096,
+        capabilities=[],
+        adjusted_quality=0.8,
+        routing_score=0.0,
     )
 
 
 def _make_analysis(estimated_input_tokens: int) -> TaskAnalysis:
     return TaskAnalysis(
-        complexity_score       = 0.5,
-        estimated_input_tokens = estimated_input_tokens,
-        estimated_output_tokens= 500,
-        total_context_needed   = estimated_input_tokens + 500,
-        task_type              = "analysis",
+        complexity_score=0.5,
+        estimated_input_tokens=estimated_input_tokens,
+        estimated_output_tokens=500,
+        total_context_needed=estimated_input_tokens + 500,
+        task_type="analysis",
     )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Unit tests: hard cutoff filter (_passes_hard_constraints)
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class TestContextHardCutoff:
     """Fix 2: Models at/above 90% context fill are dropped in Step 4."""
@@ -136,38 +136,39 @@ class TestContextHardCutoff:
 
     def test_model_dropped_when_input_exceeds_cutoff(self):
         """input_tokens = 92% of context → model filtered out."""
-        model    = _make_model("mid", 10_000, "small-window")
+        model = _make_model("mid", 10_000, "small-window")
         analysis = _make_analysis(estimated_input_tokens=9_200)  # 92% fill
-        req      = self._req_for_constraint()
+        req = self._req_for_constraint()
         assert _passes_hard_constraints(model, req, analysis, self.registry) is False
 
     def test_model_kept_when_input_below_cutoff(self):
         """input_tokens = 80% of context → model passes the hard cutoff."""
-        model    = _make_model("mid", 10_000, "small-window")
+        model = _make_model("mid", 10_000, "small-window")
         analysis = _make_analysis(estimated_input_tokens=8_000)  # 80% fill
-        req      = self._req_for_constraint()
+        req = self._req_for_constraint()
         assert _passes_hard_constraints(model, req, analysis, self.registry) is True
 
     def test_model_dropped_at_exact_cutoff(self):
         """input_tokens = exactly 90% of context → model dropped."""
-        window   = 10_000
+        window = 10_000
         cutoff_tokens = int(window * CONTEXT_PENALTY_HARD_CUTOFF)
-        model    = _make_model("mid", window, "exact-cutoff")
+        model = _make_model("mid", window, "exact-cutoff")
         analysis = _make_analysis(estimated_input_tokens=cutoff_tokens + 1)
-        req      = self._req_for_constraint()
+        req = self._req_for_constraint()
         assert _passes_hard_constraints(model, req, analysis, self.registry) is False
 
     def test_large_window_model_not_dropped_for_same_input(self):
         """A 1M-token context window model is not filtered for a 9K-token input."""
-        model    = _make_model("cheap", 1_048_576, "large-window")
+        model = _make_model("cheap", 1_048_576, "large-window")
         analysis = _make_analysis(estimated_input_tokens=9_200)
-        req      = self._req_for_constraint()
+        req = self._req_for_constraint()
         assert _passes_hard_constraints(model, req, analysis, self.registry) is True
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Integration tests: context penalty via route()
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class TestContextPenaltyRouting:
     """Fix 2: Long context penalises small-window models and avoids very small models."""
@@ -190,16 +191,16 @@ class TestContextPenaltyRouting:
         # Build a 7000-token prompt (word_count ~5384, × 1.3 ≈ 7000).
         long_prompt = " ".join(["word"] * 5400)
         # Override cost ceiling so the worst-case estimate doesn't block routing.
-        d = rr(self.engine.route(_req(
-            long_prompt,
-            plan="business_plan",
-            metadata={"override_cost_ceiling": True},
-        )))
+        d = rr(
+            self.engine.route(
+                _req(
+                    long_prompt,
+                    plan="business_plan",
+                    metadata={"override_cost_ceiling": True},
+                )
+            )
+        )
         assert d.chosen_model is not None
-        # The chosen model should have a large context window.
-        # 7000 tokens in an 8K window = 87.5% → big penalty.  Prefer larger.
-        # We don't mandate a specific model, but the score should reflect penalty.
-        assert d.chosen_model.max_context_window > 8_000 or True  # at minimum, no crash
 
     def test_context_near_limit_drops_model(self):
         """
@@ -209,7 +210,7 @@ class TestContextPenaltyRouting:
         # GPT-4o mini has a 128K window.  We need input > 0.9 × 128K = 115,200 tokens.
         # word_count ÷ 1.3 = ~88,615 words.
         # This is too large to build a string, so we test via the helper directly.
-        model    = _make_model("cheap", 8_192, "tiny-8k")
+        model = _make_model("cheap", 8_192, "tiny-8k")
         analysis = _make_analysis(estimated_input_tokens=7_500)  # 91.5% of 8192
 
         req = _req("test")
@@ -233,6 +234,7 @@ class TestContextPenaltyRouting:
 # ═══════════════════════════════════════════════════════════════════════════════
 # Unit tests: penalty formula correctness
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class TestContextPenaltyFormula:
     """Verify the penalty arithmetic independently of the full engine."""
@@ -269,10 +271,9 @@ class TestContextPenaltyFormula:
         """Penalty grows as the fill ratio increases."""
         window = 100_000
         penalties = [
-            self._compute_penalty(t, window)
-            for t in [10_000, 30_000, 50_000, 70_000, 90_000]
+            self._compute_penalty(t, window) for t in [10_000, 30_000, 50_000, 70_000, 90_000]
         ]
-        for a, b in zip(penalties, penalties[1:]):
+        for a, b in zip(penalties, penalties[1:]):  # noqa: B905 — Python 3.9 lacks strict=, lengths intentionally offset
             assert b >= a
 
     def test_max_penalty_at_full_window(self):
