@@ -71,6 +71,7 @@ from .config import (
     AB_MAX_COMPLEXITY_SCORE,
     AB_MAX_EXPLORATION_RATE,
     CACHE_ENABLED,
+    ENABLE_RESPONSE_CACHE,
     CIRCUIT_BREAKER_FAILURE_THRESHOLD,
     CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
     CONTEXT_COMPRESSION_THRESHOLD,
@@ -258,7 +259,7 @@ class RoutingEngine:
             expl.complexity_score = analysis.complexity_score
 
         # ══ STEP 2: CACHE CHECK ══════════════════════════════════════════════
-        if CACHE_ENABLED and analysis.cache_eligible:
+        if CACHE_ENABLED and ENABLE_RESPONSE_CACHE and analysis.cache_eligible:
             cached = self._cache.get(analysis.prompt_fingerprint)
             if cached:
                 self._analytics.log_cache_hit(cid, cached, user_id=request.user_id)

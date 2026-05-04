@@ -230,6 +230,16 @@ PROVIDER_CALL_TIMEOUT_SECONDS: int = 30
 # layer should emit prompt content; gate any such call with `if LOG_PROMPTS:`.
 LOG_PROMPTS: bool = os.getenv("FLUX_LOG_PROMPTS", "false").lower() == "true"
 
+# Response cache disabled by default for privacy reasons.
+# When enabled, identical prompts return cached responses — but the cache
+# does NOT segment by user_id, plan, required_capabilities, or sensitivity
+# level. Enabling shared cache in multi-tenant deployments can cause
+# cross-tenant response bleed. See SECURITY_ARCHITECTURE.md.
+# Set FLUX_ENABLE_RESPONSE_CACHE=true to opt in.
+ENABLE_RESPONSE_CACHE: bool = (
+    os.getenv("FLUX_ENABLE_RESPONSE_CACHE", "false").lower() == "true"
+)
+
 # ══════════════════════════════════════════════════════════════════════════════
 # RATE LIMIT PRE-EMPTION
 # ══════════════════════════════════════════════════════════════════════════════

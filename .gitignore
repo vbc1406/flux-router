@@ -44,3 +44,12 @@ MANIFEST.in
 
 # Internal docs (not for public repo)
 INTERNAL_README.md
+
+# Review artifacts (never commit)
+flux_for_review.zip
+*.zip
+_internal_reviews/
+
+# macOS metadata
+.DS_Store
+**/.DS_Store

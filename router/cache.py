@@ -37,6 +37,7 @@ import hashlib
 import re
 import threading
 import time
+import warnings
 from collections import OrderedDict
 
 import structlog
@@ -46,11 +47,16 @@ from .config import (
     CACHE_MAX_ENTRIES,
     CACHE_TTL_SECONDS,
     CACHEABLE_TASK_TYPES,
+    ENABLE_RESPONSE_CACHE,
     NON_CACHEABLE_TASK_TYPES,
 )
 from .schemas import CachedResponse, ModelOption
 
 log = structlog.get_logger(__name__)
+
+# Module-level flag so the multi-tenant warning fires at most once per process,
+# not once per ResponseCache instantiation.
+_CACHE_ENABLED_WARNING_EMITTED = False
 
 # Regex patterns compiled once at import time for < 1 ms fingerprinting.
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -173,7 +179,7 @@ class ResponseCache:
         self,
         max_entries: int = CACHE_MAX_ENTRIES,
         ttl_seconds: int = CACHE_TTL_SECONDS,
-        enabled: bool = CACHE_ENABLED,
+        enabled: bool = CACHE_ENABLED and ENABLE_RESPONSE_CACHE,
     ) -> None:
         self._store: OrderedDict[str, _CacheEntry] = OrderedDict()
         self._max = max_entries
@@ -182,6 +188,18 @@ class ResponseCache:
         self._lock = threading.Lock()
         self._hits = 0
         self._misses = 0
+
+        global _CACHE_ENABLED_WARNING_EMITTED
+        if self._enabled and not _CACHE_ENABLED_WARNING_EMITTED:
+            _CACHE_ENABLED_WARNING_EMITTED = True
+            warnings.warn(
+                "Response cache is enabled. The current cache key does not segment "
+                "by user_id, plan, or sensitivity level. Do NOT enable in multi-tenant "
+                "deployments without first reading SECURITY_ARCHITECTURE.md and "
+                "implementing tenant-scoped cache keys.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     # ── Public API ──────────────────────────────────────────────────────────
 

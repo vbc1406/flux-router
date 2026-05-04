@@ -27,10 +27,19 @@ from typing import Any
 
 import structlog
 
-from .config import PROVIDER_CALL_TIMEOUT_SECONDS
+from .config import LOG_PROMPTS, PROVIDER_CALL_TIMEOUT_SECONDS
 from .schemas import ModelOption, RoutingRequest
 
 log = structlog.get_logger(__name__)
+
+
+def _response_shape_keys(data: object) -> list[str]:
+    """Return the top-level keys of a parsed provider response, for diagnostic use only.
+
+    This is safe to put in exception messages — it reveals structure but not content."""
+    if isinstance(data, dict):
+        return sorted(data.keys())
+    return [type(data).__name__]
 
 
 # How we build the messages list from a RoutingRequest
@@ -69,7 +78,13 @@ def _post_json(
 
     Error messages intentionally exclude the URL and response body to avoid
     leaking prompt fragments, partial keys, emails, or org IDs into logs and
-    exception strings. Response bodies are emitted at DEBUG level only.
+    exception strings.
+
+    Response bodies and parsed provider data are NEVER included in exception
+    messages or log statements at INFO/WARN/ERROR level. They are only logged
+    at DEBUG level when LOG_PROMPTS is explicitly enabled (default: False).
+    Exception messages contain only provider name, HTTP status, and response
+    structure metadata (top-level keys).
     """
     # 🔒 SECURITY-CRITICAL: defense-in-depth against B310 / scheme injection
     if not url.startswith("https://"):
@@ -87,12 +102,13 @@ def _post_json(
             # OSError: socket already closed by the time we read.
             # AttributeError: HTTPError without a readable body.
             pass
-        log.debug(
-            "provider_error_body",
-            provider=provider_name,
-            status=exc.code,
-            body=body_text[:200],
-        )
+        if LOG_PROMPTS:
+            log.debug(
+                "provider_error_body",
+                provider=provider_name,
+                status=exc.code,
+                body=body_text[:200],
+            )
         raise ProviderCallError(
             f"HTTP {exc.code} from {provider_name}",
             http_status=exc.code,
@@ -131,7 +147,9 @@ def _call_anthropic_sync(
     try:
         return data["content"][0]["text"]
     except (KeyError, IndexError) as exc:
-        raise ProviderCallError(f"Unexpected Anthropic response shape: {data}") from exc
+        raise ProviderCallError(
+            f"Unexpected Anthropic response shape (keys={_response_shape_keys(data)})"
+        ) from exc
 
 
 def _call_openai_compat_sync(
@@ -162,7 +180,9 @@ def _call_openai_compat_sync(
     try:
         return data["choices"][0]["message"]["content"]
     except (KeyError, IndexError) as exc:
-        raise ProviderCallError(f"Unexpected OpenAI-compat response shape: {data}") from exc
+        raise ProviderCallError(
+            f"Unexpected OpenAI-compat response shape (keys={_response_shape_keys(data)})"
+        ) from exc
 
 
 def _call_google_sync(
@@ -192,7 +212,9 @@ def _call_google_sync(
     try:
         return data["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError) as exc:
-        raise ProviderCallError(f"Unexpected Google response shape: {data}") from exc
+        raise ProviderCallError(
+            f"Unexpected Google response shape (keys={_response_shape_keys(data)})"
+        ) from exc
 
 
 # ── Base URL map ─────────────────────────────────────────────────────────────

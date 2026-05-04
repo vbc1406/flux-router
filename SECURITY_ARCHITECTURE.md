@@ -56,6 +56,23 @@ A `LOG_PROMPTS` config flag (default: False) exists for development debugging. S
 
 Response cache fingerprints use SHA-256 over a normalized prompt. The cache stores hashes, not raw prompts. Cache keys cannot be reversed to reveal prompt content.
 
+## Response Caching
+
+Flux has an optional response cache. It is **disabled by default**.
+
+When disabled (default):
+- Every request goes through full routing logic
+- No prompt fingerprints are computed
+- No responses are stored
+
+When enabled (`FLUX_ENABLE_RESPONSE_CACHE=true`):
+- Identical normalized prompts may return previously generated responses
+- The current cache implementation does NOT segment by user, plan, or sensitivity level
+- This means **enabling the cache in a multi-tenant deployment can cause cross-tenant response bleed**
+- Tenant-scoped caching is planned for a future release
+
+Recommendation: keep the cache disabled until tenant-scoped caching ships.
+
 ### Adaptive Learning Uses Metadata Only
 
 The adaptive weights system records only:

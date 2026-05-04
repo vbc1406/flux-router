@@ -177,6 +177,13 @@ class TestBasicRouting:
 
 class TestCacheIntegration:
     def setup_method(self):
+        # Cache is opt-in (FLUX_ENABLE_RESPONSE_CACHE); flip the routing-engine
+        # gate on for these tests and restore it in teardown.
+        from router import routing_engine as _re
+
+        self._prev_enable = _re.ENABLE_RESPONSE_CACHE
+        _re.ENABLE_RESPONSE_CACHE = True
+
         registry = ModelRegistry()
         self.cache = ResponseCache(enabled=True)
         adaptive = AdaptiveWeights(state_file=None)
@@ -187,6 +194,11 @@ class TestCacheIntegration:
         self.engine = RoutingEngine(
             registry, classifier, self.cache, budget, adaptive, compressor, analytics
         )
+
+    def teardown_method(self):
+        from router import routing_engine as _re
+
+        _re.ENABLE_RESPONSE_CACHE = self._prev_enable
 
     def test_cache_hit_returns_zero_cost(self):
         from router.cache import fingerprint as fp_fn
