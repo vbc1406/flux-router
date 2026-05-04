@@ -30,9 +30,18 @@ htmlcov/
 .env
 .env.*
 
+# Local agent settings (Claude Code, Cursor, etc.)
+.claude/
+.cursor/
+
 # Flux runtime state
 adaptive_state.json
 routing_analytics.jsonl
+*.jsonl
+
+# Generated benchmark outputs (raw data — keep benchmark_report.txt as it's narrative)
+testing/benchmark_results.json
+testing/benchmark_summary.csv
 
 # IDE
 .DS_Store
