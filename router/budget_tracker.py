@@ -120,7 +120,9 @@ class BudgetTracker:
         monthly_remaining = limits["monthly"] - self.get_monthly_spend(user_id)
         return min(daily_remaining, monthly_remaining)
 
-    def would_exceed_budget(self, user_id: str, estimated_cost: float) -> bool:
+    def would_exceed_budget(
+        self, user_id: str, estimated_cost: float, plan: str | None = None
+    ) -> bool:
         """
         Return True if adding estimated_cost would push either the daily or
         monthly spend over the plan limit.
@@ -129,8 +131,10 @@ class BudgetTracker:
         acquisition to avoid TOCTOU races under concurrent routing.
         """
         with self._lock:
-            plan = self._plans.get(user_id, "pro_plan")
-            limits = BUDGET_LIMITS.get(plan, BUDGET_LIMITS["pro_plan"])
+            # Priority: explicitly-passed plan > previously-recorded plan > free_plan default.
+            # Fail-closed (free_plan) for unknown users instead of fail-open (pro_plan).
+            resolved_plan = plan or self._plans.get(user_id, "free_plan")
+            limits = BUDGET_LIMITS.get(resolved_plan, BUDGET_LIMITS["free_plan"])
             now = datetime.utcnow()
             today = now.date()
             records = self._ledger[user_id]

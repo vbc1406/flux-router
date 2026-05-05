@@ -684,9 +684,9 @@ class RoutingEngine:
         estimated_cost = _estimate_cost(analysis, chosen)
         budget_exhausted = False
 
-        if self._budget.would_exceed_budget(request.user_id, estimated_cost):
+        if self._budget.would_exceed_budget(request.user_id, estimated_cost, request.plan):
             chosen, rule, budget_exhausted = _budget_tier_walkdown(
-                chosen, candidates, analysis, request.user_id, self._budget, rule
+                chosen, candidates, analysis, request.user_id, self._budget, rule, request.plan
             )
             estimated_cost = _estimate_cost(analysis, chosen)
             # Rebuild fallback chains after model change
@@ -730,6 +730,17 @@ class RoutingEngine:
                 model_id=decision.chosen_model.model_id,
                 correlation_id=cid,
                 task_type=analysis.task_type,
+            )
+
+        # SS#4: record plan-level spend so BudgetTracker daily/monthly caps actually accumulate.
+        if decision.chosen_model:
+            self._budget.record_spend(
+                user_id=request.user_id,
+                amount=decision.estimated_cost,
+                model_id=decision.chosen_model.model_id,
+                correlation_id=cid,
+                task_type=analysis.task_type,
+                plan=request.plan or "free_plan",
             )
 
         # ══ CHANGE 9: PROXY MODE ════════════════════════════════════════
@@ -983,6 +994,7 @@ def _budget_tier_walkdown(
     user_id: str,
     budget: BudgetTracker,
     rule: str,
+    plan: str | None = None,
 ) -> tuple[ModelOption, str, bool]:
     """
     Change 7: Walk down tiers one step at a time until we find a model that
@@ -992,7 +1004,7 @@ def _budget_tier_walkdown(
     and fully predictable walk-down that is easier to reason about and debug.
     """
     current_cost = _estimate_cost(analysis, chosen)
-    if not budget.would_exceed_budget(user_id, current_cost):
+    if not budget.would_exceed_budget(user_id, current_cost, plan):
         return chosen, rule, False
 
     if chosen.tier not in _TIER_ORDER:
@@ -1010,7 +1022,7 @@ def _budget_tier_walkdown(
         tier_models.sort(key=lambda m: m.adjusted_quality, reverse=True)
         candidate = tier_models[0]
         candidate_cost = _estimate_cost(analysis, candidate)
-        if not budget.would_exceed_budget(user_id, candidate_cost):
+        if not budget.would_exceed_budget(user_id, candidate_cost, plan):
             log.info(
                 "budget_tier_walkdown",
                 user_id=user_id,

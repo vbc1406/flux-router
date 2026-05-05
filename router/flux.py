@@ -130,6 +130,15 @@ class Flux:
                     attempt=attempts,
                     fallback=attempts > 0,
                 )
+                # SS#4: record actual plan-level spend after a successful provider call.
+                self._engine._budget.record_spend(
+                    user_id=request.user_id,
+                    amount=decision.estimated_cost,
+                    model_id=model.model_id,
+                    correlation_id=request.correlation_id,
+                    task_type="unknown",
+                    plan=request.plan or "free_plan",
+                )
                 return FluxResponse(
                     text=text,
                     model=model,
