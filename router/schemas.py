@@ -35,10 +35,35 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, SecretStr, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
+
+from .config import (
+    MAX_MESSAGE_CONTENT_BYTES,
+    MAX_METADATA_DEPTH,
+    MAX_METADATA_LIST_LEN,
+    MAX_REQUEST_BYTES,
+)
 
 _SAFE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_\-:.]+$")
 _MAX_METADATA_BYTES = 10_000
+
+
+def _max_depth(obj, current: int = 0, limit: int = MAX_METADATA_DEPTH) -> int:
+    if current > limit:
+        raise ValueError(f"metadata exceeds max depth {limit}")
+    if isinstance(obj, dict):
+        return max(
+            (_max_depth(v, current + 1, limit) for v in obj.values()),
+            default=current,
+        )
+    if isinstance(obj, list):
+        if len(obj) > MAX_METADATA_LIST_LEN:
+            raise ValueError(f"list exceeds max length {MAX_METADATA_LIST_LEN}")
+        return max(
+            (_max_depth(item, current + 1, limit) for item in obj),
+            default=current,
+        )
+    return current
 
 
 @dataclass
@@ -168,7 +193,46 @@ class RoutingRequest(BaseModel):
     def _metadata_size_limit(cls, v: dict) -> dict:
         if len(json.dumps(v, default=str)) > _MAX_METADATA_BYTES:
             raise ValueError(f"metadata too large (max {_MAX_METADATA_BYTES} bytes)")
+        _max_depth(v)
         return v
+
+    @field_validator("message_history")
+    @classmethod
+    def _message_history_content_limit(cls, v: list[dict]) -> list[dict]:
+        for i, entry in enumerate(v):
+            content = entry.get("content")
+            if isinstance(content, str):
+                if len(content.encode("utf-8")) > MAX_MESSAGE_CONTENT_BYTES:
+                    raise ValueError(
+                        f"message_history[{i}].content exceeds "
+                        f"{MAX_MESSAGE_CONTENT_BYTES} bytes"
+                    )
+            elif isinstance(content, (list, dict)):
+                raise ValueError(
+                    f"message_history[{i}].content: multimodal content not yet supported"
+                )
+        return v
+
+    @field_validator("required_capabilities")
+    @classmethod
+    def _required_capabilities_limit(cls, v: list) -> list:
+        if len(v) > MAX_METADATA_LIST_LEN:
+            raise ValueError(
+                f"required_capabilities exceeds max length {MAX_METADATA_LIST_LEN}"
+            )
+        for i, entry in enumerate(v):
+            if not isinstance(entry, str):
+                raise ValueError(f"required_capabilities[{i}] must be a string")
+        return v
+
+    @model_validator(mode="after")
+    def _total_request_size_limit(self) -> "RoutingRequest":
+        size = len(self.model_dump_json().encode("utf-8"))
+        if size > MAX_REQUEST_BYTES:
+            raise ValueError(
+                f"request exceeds max size {MAX_REQUEST_BYTES} bytes (got {size})"
+            )
+        return self
 
 
 class TaskAnalysis(BaseModel):

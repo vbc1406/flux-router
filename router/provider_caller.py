@@ -27,10 +27,28 @@ from typing import Any
 
 import structlog
 
-from .config import LOG_PROMPTS, PROVIDER_CALL_TIMEOUT_SECONDS
+from .config import (
+    LOG_PROMPTS,
+    MAX_PROVIDER_RESPONSE_BYTES,
+    PROVIDER_CALL_TIMEOUT_SECONDS,
+)
 from .schemas import ModelOption, RoutingRequest
 
 log = structlog.get_logger(__name__)
+
+
+def _bounded_read(stream, limit: int = MAX_PROVIDER_RESPONSE_BYTES) -> bytes:
+    """Read at most `limit` bytes plus one. Raise if exceeded.
+
+    The +1 lets us detect overflow without buffering the entire malicious payload.
+    """
+    data = stream.read(limit + 1)
+    if len(data) > limit:
+        raise ProviderCallError(
+            f"Provider response exceeded {limit} bytes",
+            http_status=None,
+        )
+    return data
 
 
 def _response_shape_keys(data: object) -> list[str]:
@@ -93,14 +111,16 @@ def _post_json(
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=PROVIDER_CALL_TIMEOUT_SECONDS) as resp:  # nosec B310 — scheme validated above
-            return json.loads(resp.read().decode("utf-8"))
+            return json.loads(_bounded_read(resp).decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body_text = ""
         try:
-            body_text = exc.read().decode("utf-8", errors="replace")
-        except (OSError, AttributeError):
+            body_text = _bounded_read(exc).decode("utf-8", errors="replace")
+        except (OSError, AttributeError, ProviderCallError):
             # OSError: socket already closed by the time we read.
             # AttributeError: HTTPError without a readable body.
+            # ProviderCallError: body exceeded MAX_PROVIDER_RESPONSE_BYTES — diagnostic
+            #   only, swallow it so the original HTTP error is what we surface.
             pass
         if LOG_PROMPTS:
             log.debug(

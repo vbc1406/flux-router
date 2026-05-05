@@ -213,6 +213,25 @@ TIMEOUT_SIMPLE_SECONDS: int = 30
 #   long code generation); lower to fail fast and trigger fallback sooner.
 TIMEOUT_COMPLEX_SECONDS: int = 120
 
+# Maximum bytes to read from a provider HTTP response.
+# Protects against OOM if a provider returns malformed/oversized data.
+# 50MB is generous — typical provider responses are <1MB.
+MAX_PROVIDER_RESPONSE_BYTES: int = 50 * 1024 * 1024  # 50MB
+
+# Per-message content size cap. A chat message dict's "content" field
+# (or any string within it) cannot exceed this.
+MAX_MESSAGE_CONTENT_BYTES: int = 1 * 1024 * 1024  # 1MB per message
+
+# Total serialized request size cap (the entire RoutingRequest as JSON).
+# Bigger than this is rejected before we even classify the prompt.
+MAX_REQUEST_BYTES: int = 10 * 1024 * 1024  # 10MB total
+
+# Metadata depth cap. Nested dicts/lists deeper than this are rejected.
+MAX_METADATA_DEPTH: int = 5
+
+# Maximum entries in any list inside metadata or required_capabilities.
+MAX_METADATA_LIST_LEN: int = 100
+
 # Per-HTTP-call timeout for provider_caller (urllib.request.urlopen). This bounds
 # a single outbound call to a provider.
 # Why 30s: Anthropic and OpenAI typically respond in 1–30s. A longer timeout means
