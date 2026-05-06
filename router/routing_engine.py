@@ -722,27 +722,6 @@ class RoutingEngine:
                 cost=decision.estimated_cost,
             )
 
-        # Change 4: record daily spend if customer_id + max_daily_cost
-        if request.max_daily_cost is not None and decision.chosen_model:
-            self._daily_budget.record_spend(
-                customer_id=effective_customer_id,
-                amount=decision.estimated_cost,
-                model_id=decision.chosen_model.model_id,
-                correlation_id=cid,
-                task_type=analysis.task_type,
-            )
-
-        # SS#4: record plan-level spend so BudgetTracker daily/monthly caps actually accumulate.
-        if decision.chosen_model:
-            self._budget.record_spend(
-                user_id=request.user_id,
-                amount=decision.estimated_cost,
-                model_id=decision.chosen_model.model_id,
-                correlation_id=cid,
-                task_type=analysis.task_type,
-                plan=request.plan or "free_plan",
-            )
-
         # ══ CHANGE 9: PROXY MODE ════════════════════════════════════════
         if request.mode == "proxy":
             decision = await self._proxy_execute(decision, request)

@@ -139,6 +139,14 @@ class Flux:
                     task_type="unknown",
                     plan=request.plan or "free_plan",
                 )
+                if request.max_daily_cost is not None:
+                    self._engine._daily_budget.record_spend(
+                        customer_id=request.customer_id or request.user_id,
+                        amount=decision.estimated_cost,
+                        model_id=model.model_id,
+                        correlation_id=request.correlation_id,
+                        task_type="unknown",
+                    )
                 return FluxResponse(
                     text=text,
                     model=model,

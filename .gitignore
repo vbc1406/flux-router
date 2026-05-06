@@ -43,6 +43,9 @@ routing_analytics.jsonl
 testing/benchmark_results.json
 testing/benchmark_summary.csv
 
+# Old unpatched router copies — never commit
+testing/router_core/
+
 # IDE
 .DS_Store
 .idea/
