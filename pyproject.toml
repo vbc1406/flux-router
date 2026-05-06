@@ -40,12 +40,6 @@ dev = [
     "hypothesis>=6.0,<7.0",
 ]
 
-[project.urls]
-Homepage = "https://flux.dev"
-Documentation = "https://flux.dev/docs"
-Repository = "https://github.com/YOUR_USERNAME/flux"
-Issues = "https://github.com/YOUR_USERNAME/flux/issues"
-
 [tool.setuptools.packages.find]
 include = ["router*"]
 exclude = ["testing*", "tests*"]

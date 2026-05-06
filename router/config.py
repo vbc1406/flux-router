@@ -418,15 +418,6 @@ VALID_ROUTING_PRIORITIES: frozenset[str] = frozenset(
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BUDGET DOWNGRADE WEIGHTS (legacy reference)
-# ══════════════════════════════════════════════════════════════════════════════
-
-# Kept for reference / rollback only.  The live routing code uses the linear
-# tier walk-down (Change 7) rather than these weighted values.
-BUDGET_DOWNGRADE_QUALITY_WEIGHT: float = 0.65
-BUDGET_DOWNGRADE_COST_WEIGHT: float = 0.35
-
-# ══════════════════════════════════════════════════════════════════════════════
 # STICKY MODEL BIAS (Fix 1)
 # ══════════════════════════════════════════════════════════════════════════════
 
