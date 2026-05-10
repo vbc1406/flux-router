@@ -26,10 +26,12 @@ _HARDCODED_COUNT = len(_build_hardcoded_registry())
 
 class TestRegistryLoadsFromJson:
     def test_registry_loads_from_json(self):
-        # Default registry (loads from models.json in package dir)
+        # Default registry (loads from models.json in package dir).
+        # JSON is the source of truth and is allowed to grow beyond the
+        # hardcoded fallback as new model SKUs ship.
         reg = ModelRegistry()
         models = reg.all_available_models()
-        assert len(models) == _HARDCODED_COUNT
+        assert len(models) >= _HARDCODED_COUNT
         model_ids = {m.model_id for m in models}
         assert "gpt-4o" in model_ids
         assert "claude-opus-4-20250514" in model_ids
@@ -54,10 +56,10 @@ class TestRegistryLoadsFromJson:
             assert "general" in m.quality_ratings, f"{m.model_id} missing 'general' quality rating"
 
     def test_registry_model_count(self):
-        # JSON and hardcoded registry must agree on model count
+        # JSON is the source of truth; hardcoded is the fallback floor.
+        # JSON must contain at least every model in the hardcoded registry.
         from_json = _load_registry_from_json()
         from_code = _build_hardcoded_registry()
         assert from_json is not None, "models.json not found"
-        assert len(from_json) == len(from_code), (
-            f"JSON has {len(from_json)} models, hardcoded has {len(from_code)}"
-        )
+        missing = set(from_code) - set(from_json)
+        assert not missing, f"models.json missing hardcoded fallback models: {missing}"

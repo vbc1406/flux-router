@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-04-24",
+  "last_updated": "2026-05-10",
   "models": [
     {
       "provider": "google",
@@ -10,17 +10,33 @@
       "cost_per_1k_output": 0.0,
       "max_context_window": 1048576,
       "max_output_tokens": 8192,
-      "capabilities": ["vision"],
+      "capabilities": [
+        "vision"
+      ],
       "supports_streaming": true,
       "avg_latency_ms": 400,
       "rate_limit_rpm": 15,
-      "allowed_sensitivity_levels": ["public", "internal"],
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal"
+      ],
       "quality_ratings": {
-        "simple_qa": 0.75, "conversation": 0.80, "translation": 0.75,
-        "classification": 0.70, "extraction": 0.65, "summarization": 0.65,
-        "code_generation": 0.50, "code_review": 0.45, "creative_writing": 0.55,
-        "analysis": 0.55, "reasoning": 0.45, "function_calling": 0.50,
-        "vision": 0.60, "long_document": 0.60, "unknown": 0.60, "general": 0.60
+        "simple_qa": 0.75,
+        "conversation": 0.8,
+        "translation": 0.75,
+        "classification": 0.7,
+        "extraction": 0.65,
+        "summarization": 0.65,
+        "code_generation": 0.5,
+        "code_review": 0.45,
+        "creative_writing": 0.55,
+        "analysis": 0.55,
+        "reasoning": 0.45,
+        "function_calling": 0.5,
+        "vision": 0.6,
+        "long_document": 0.6,
+        "unknown": 0.6,
+        "general": 0.6
       }
     },
     {
@@ -32,17 +48,33 @@
       "cost_per_1k_output": 0.0,
       "max_context_window": 1048576,
       "max_output_tokens": 8192,
-      "capabilities": ["vision"],
+      "capabilities": [
+        "vision"
+      ],
       "supports_streaming": true,
       "avg_latency_ms": 450,
       "rate_limit_rpm": 15,
-      "allowed_sensitivity_levels": ["public", "internal"],
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal"
+      ],
       "quality_ratings": {
-        "simple_qa": 0.80, "conversation": 0.82, "translation": 0.80,
-        "classification": 0.80, "extraction": 0.78, "summarization": 0.78,
-        "code_generation": 0.72, "code_review": 0.68, "creative_writing": 0.70,
-        "analysis": 0.72, "reasoning": 0.68, "function_calling": 0.70,
-        "vision": 0.80, "long_document": 0.78, "unknown": 0.72, "general": 0.72
+        "simple_qa": 0.8,
+        "conversation": 0.82,
+        "translation": 0.8,
+        "classification": 0.8,
+        "extraction": 0.78,
+        "summarization": 0.78,
+        "code_generation": 0.72,
+        "code_review": 0.68,
+        "creative_writing": 0.7,
+        "analysis": 0.72,
+        "reasoning": 0.68,
+        "function_calling": 0.7,
+        "vision": 0.8,
+        "long_document": 0.78,
+        "unknown": 0.72,
+        "general": 0.72
       }
     },
     {
@@ -58,13 +90,104 @@
       "supports_streaming": true,
       "avg_latency_ms": 250,
       "rate_limit_rpm": 30,
-      "allowed_sensitivity_levels": ["public", "internal"],
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal"
+      ],
       "quality_ratings": {
-        "simple_qa": 0.80, "conversation": 0.82, "translation": 0.78,
-        "classification": 0.82, "extraction": 0.78, "summarization": 0.78,
-        "code_generation": 0.75, "code_review": 0.72, "creative_writing": 0.72,
-        "analysis": 0.75, "reasoning": 0.72, "function_calling": 0.70,
-        "vision": 0.00, "long_document": 0.70, "unknown": 0.72, "general": 0.72
+        "simple_qa": 0.86,
+        "conversation": 0.82,
+        "translation": 0.8,
+        "classification": 0.84,
+        "extraction": 0.8,
+        "summarization": 0.8,
+        "code_generation": 0.84,
+        "code_review": 0.72,
+        "creative_writing": 0.74,
+        "analysis": 0.76,
+        "reasoning": 0.62,
+        "function_calling": 0.78,
+        "vision": 0.0,
+        "long_document": 0.74,
+        "unknown": 0.76,
+        "general": 0.78
+      }
+    },
+    {
+      "provider": "groq",
+      "model_id": "llama-4-scout",
+      "display_name": "Llama 4 Scout (Groq)",
+      "tier": "cheap",
+      "cost_per_1k_input": 0.00011,
+      "cost_per_1k_output": 0.00034,
+      "max_context_window": 1048576,
+      "max_output_tokens": 8192,
+      "capabilities": [
+        "vision"
+      ],
+      "supports_streaming": true,
+      "avg_latency_ms": 200,
+      "rate_limit_rpm": 60,
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal"
+      ],
+      "quality_ratings": {
+        "simple_qa": 0.83,
+        "conversation": 0.82,
+        "translation": 0.8,
+        "classification": 0.83,
+        "extraction": 0.8,
+        "summarization": 0.82,
+        "code_generation": 0.78,
+        "code_review": 0.72,
+        "creative_writing": 0.74,
+        "analysis": 0.78,
+        "reasoning": 0.7,
+        "function_calling": 0.74,
+        "vision": 0.76,
+        "long_document": 0.86,
+        "unknown": 0.76,
+        "general": 0.78
+      }
+    },
+    {
+      "provider": "mistral",
+      "model_id": "mistral-medium-3",
+      "display_name": "Mistral Medium 3",
+      "tier": "mid",
+      "cost_per_1k_input": 0.0004,
+      "cost_per_1k_output": 0.002,
+      "max_context_window": 128000,
+      "max_output_tokens": 32768,
+      "capabilities": [
+        "function_calling"
+      ],
+      "supports_streaming": true,
+      "avg_latency_ms": 1500,
+      "rate_limit_rpm": 200,
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential"
+      ],
+      "quality_ratings": {
+        "simple_qa": 0.84,
+        "conversation": 0.83,
+        "translation": 0.88,
+        "classification": 0.84,
+        "extraction": 0.82,
+        "summarization": 0.82,
+        "code_generation": 0.82,
+        "code_review": 0.78,
+        "creative_writing": 0.78,
+        "analysis": 0.82,
+        "reasoning": 0.78,
+        "function_calling": 0.8,
+        "vision": 0.0,
+        "long_document": 0.78,
+        "unknown": 0.8,
+        "general": 0.82
       }
     },
     {
@@ -80,13 +203,27 @@
       "supports_streaming": true,
       "avg_latency_ms": 500,
       "rate_limit_rpm": 20,
-      "allowed_sensitivity_levels": ["public", "internal"],
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal"
+      ],
       "quality_ratings": {
-        "simple_qa": 0.75, "conversation": 0.78, "translation": 0.82,
-        "classification": 0.78, "extraction": 0.75, "summarization": 0.73,
-        "code_generation": 0.70, "code_review": 0.68, "creative_writing": 0.68,
-        "analysis": 0.70, "reasoning": 0.65, "function_calling": 0.65,
-        "vision": 0.00, "long_document": 0.65, "unknown": 0.68, "general": 0.68
+        "simple_qa": 0.8,
+        "conversation": 0.8,
+        "translation": 0.85,
+        "classification": 0.8,
+        "extraction": 0.76,
+        "summarization": 0.76,
+        "code_generation": 0.72,
+        "code_review": 0.68,
+        "creative_writing": 0.7,
+        "analysis": 0.72,
+        "reasoning": 0.66,
+        "function_calling": 0.7,
+        "vision": 0.0,
+        "long_document": 0.7,
+        "unknown": 0.72,
+        "general": 0.72
       }
     },
     {
@@ -94,21 +231,81 @@
       "model_id": "claude-haiku-4-5-20251001",
       "display_name": "Claude Haiku 4.5",
       "tier": "cheap",
-      "cost_per_1k_input": 0.0008,
-      "cost_per_1k_output": 0.004,
+      "cost_per_1k_input": 0.001,
+      "cost_per_1k_output": 0.005,
       "max_context_window": 200000,
       "max_output_tokens": 8192,
-      "capabilities": ["vision", "function_calling"],
+      "capabilities": [
+        "vision",
+        "function_calling"
+      ],
       "supports_streaming": true,
       "avg_latency_ms": 700,
       "rate_limit_rpm": 1000,
-      "allowed_sensitivity_levels": ["public", "internal", "confidential", "restricted"],
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ],
       "quality_ratings": {
-        "simple_qa": 0.82, "conversation": 0.85, "translation": 0.83,
-        "classification": 0.85, "extraction": 0.83, "summarization": 0.80,
-        "code_generation": 0.75, "code_review": 0.73, "creative_writing": 0.72,
-        "analysis": 0.75, "reasoning": 0.70, "function_calling": 0.78,
-        "vision": 0.75, "long_document": 0.75, "unknown": 0.76, "general": 0.76
+        "simple_qa": 0.85,
+        "conversation": 0.86,
+        "translation": 0.84,
+        "classification": 0.86,
+        "extraction": 0.84,
+        "summarization": 0.83,
+        "code_generation": 0.87,
+        "code_review": 0.85,
+        "creative_writing": 0.78,
+        "analysis": 0.82,
+        "reasoning": 0.78,
+        "function_calling": 0.84,
+        "vision": 0.78,
+        "long_document": 0.8,
+        "unknown": 0.82,
+        "general": 0.82
+      }
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5-mini",
+      "display_name": "GPT-5 Mini",
+      "tier": "cheap",
+      "cost_per_1k_input": 0.00025,
+      "cost_per_1k_output": 0.002,
+      "max_context_window": 400000,
+      "max_output_tokens": 16384,
+      "capabilities": [
+        "vision",
+        "function_calling"
+      ],
+      "supports_streaming": true,
+      "avg_latency_ms": 700,
+      "rate_limit_rpm": 500,
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ],
+      "quality_ratings": {
+        "simple_qa": 0.86,
+        "conversation": 0.86,
+        "translation": 0.82,
+        "classification": 0.86,
+        "extraction": 0.84,
+        "summarization": 0.82,
+        "code_generation": 0.86,
+        "code_review": 0.78,
+        "creative_writing": 0.8,
+        "analysis": 0.84,
+        "reasoning": 0.8,
+        "function_calling": 0.84,
+        "vision": 0.8,
+        "long_document": 0.8,
+        "unknown": 0.82,
+        "general": 0.83
       }
     },
     {
@@ -120,17 +317,75 @@
       "cost_per_1k_output": 0.0006,
       "max_context_window": 128000,
       "max_output_tokens": 16384,
-      "capabilities": ["vision", "function_calling"],
+      "capabilities": [
+        "vision",
+        "function_calling"
+      ],
       "supports_streaming": true,
       "avg_latency_ms": 800,
       "rate_limit_rpm": 500,
-      "allowed_sensitivity_levels": ["public", "internal", "confidential", "restricted"],
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ],
       "quality_ratings": {
-        "simple_qa": 0.83, "conversation": 0.82, "translation": 0.82,
-        "classification": 0.84, "extraction": 0.82, "summarization": 0.80,
-        "code_generation": 0.78, "code_review": 0.76, "creative_writing": 0.74,
-        "analysis": 0.76, "reasoning": 0.72, "function_calling": 0.80,
-        "vision": 0.78, "long_document": 0.74, "unknown": 0.76, "general": 0.76
+        "simple_qa": 0.78,
+        "conversation": 0.82,
+        "translation": 0.78,
+        "classification": 0.8,
+        "extraction": 0.78,
+        "summarization": 0.78,
+        "code_generation": 0.78,
+        "code_review": 0.65,
+        "creative_writing": 0.74,
+        "analysis": 0.72,
+        "reasoning": 0.62,
+        "function_calling": 0.78,
+        "vision": 0.74,
+        "long_document": 0.74,
+        "unknown": 0.74,
+        "general": 0.76
+      }
+    },
+    {
+      "provider": "google",
+      "model_id": "gemini-3.1-flash-lite",
+      "display_name": "Gemini 3.1 Flash Lite",
+      "tier": "cheap",
+      "cost_per_1k_input": 0.00025,
+      "cost_per_1k_output": 0.0015,
+      "max_context_window": 1048576,
+      "max_output_tokens": 8192,
+      "capabilities": [
+        "vision"
+      ],
+      "supports_streaming": true,
+      "avg_latency_ms": 450,
+      "rate_limit_rpm": 2000,
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential"
+      ],
+      "quality_ratings": {
+        "simple_qa": 0.85,
+        "conversation": 0.84,
+        "translation": 0.84,
+        "classification": 0.85,
+        "extraction": 0.82,
+        "summarization": 0.82,
+        "code_generation": 0.8,
+        "code_review": 0.72,
+        "creative_writing": 0.76,
+        "analysis": 0.83,
+        "reasoning": 0.78,
+        "function_calling": 0.8,
+        "vision": 0.8,
+        "long_document": 0.84,
+        "unknown": 0.8,
+        "general": 0.82
       }
     },
     {
@@ -142,17 +397,75 @@
       "cost_per_1k_output": 0.0004,
       "max_context_window": 1048576,
       "max_output_tokens": 8192,
-      "capabilities": ["vision"],
+      "capabilities": [
+        "vision"
+      ],
       "supports_streaming": true,
       "avg_latency_ms": 500,
       "rate_limit_rpm": 2000,
-      "allowed_sensitivity_levels": ["public", "internal", "confidential"],
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential"
+      ],
       "quality_ratings": {
-        "simple_qa": 0.82, "conversation": 0.82, "translation": 0.83,
-        "classification": 0.82, "extraction": 0.80, "summarization": 0.80,
-        "code_generation": 0.76, "code_review": 0.74, "creative_writing": 0.74,
-        "analysis": 0.76, "reasoning": 0.72, "function_calling": 0.76,
-        "vision": 0.85, "long_document": 0.83, "unknown": 0.78, "general": 0.78
+        "simple_qa": 0.82,
+        "conversation": 0.84,
+        "translation": 0.82,
+        "classification": 0.82,
+        "extraction": 0.8,
+        "summarization": 0.8,
+        "code_generation": 0.75,
+        "code_review": 0.7,
+        "creative_writing": 0.74,
+        "analysis": 0.78,
+        "reasoning": 0.72,
+        "function_calling": 0.76,
+        "vision": 0.82,
+        "long_document": 0.82,
+        "unknown": 0.76,
+        "general": 0.78
+      }
+    },
+    {
+      "provider": "anthropic",
+      "model_id": "claude-sonnet-4-6",
+      "display_name": "Claude Sonnet 4.6",
+      "tier": "mid",
+      "cost_per_1k_input": 0.003,
+      "cost_per_1k_output": 0.015,
+      "max_context_window": 1000000,
+      "max_output_tokens": 8192,
+      "capabilities": [
+        "vision",
+        "function_calling"
+      ],
+      "supports_streaming": true,
+      "avg_latency_ms": 1800,
+      "rate_limit_rpm": 500,
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ],
+      "quality_ratings": {
+        "simple_qa": 0.88,
+        "conversation": 0.9,
+        "translation": 0.86,
+        "classification": 0.88,
+        "extraction": 0.87,
+        "summarization": 0.88,
+        "code_generation": 0.95,
+        "code_review": 0.92,
+        "creative_writing": 0.9,
+        "analysis": 0.88,
+        "reasoning": 0.84,
+        "function_calling": 0.88,
+        "vision": 0.84,
+        "long_document": 0.86,
+        "unknown": 0.86,
+        "general": 0.88
       }
     },
     {
@@ -164,17 +477,77 @@
       "cost_per_1k_output": 0.015,
       "max_context_window": 200000,
       "max_output_tokens": 8192,
-      "capabilities": ["vision", "function_calling"],
+      "capabilities": [
+        "vision",
+        "function_calling"
+      ],
       "supports_streaming": true,
       "avg_latency_ms": 2000,
       "rate_limit_rpm": 500,
-      "allowed_sensitivity_levels": ["public", "internal", "confidential", "restricted"],
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ],
       "quality_ratings": {
-        "simple_qa": 0.90, "conversation": 0.88, "translation": 0.88,
-        "classification": 0.90, "extraction": 0.90, "summarization": 0.88,
-        "code_generation": 0.92, "code_review": 0.90, "creative_writing": 0.87,
-        "analysis": 0.90, "reasoning": 0.88, "function_calling": 0.90,
-        "vision": 0.85, "long_document": 0.88, "unknown": 0.88, "general": 0.88
+        "simple_qa": 0.85,
+        "conversation": 0.87,
+        "translation": 0.84,
+        "classification": 0.86,
+        "extraction": 0.84,
+        "summarization": 0.84,
+        "code_generation": 0.9,
+        "code_review": 0.86,
+        "creative_writing": 0.86,
+        "analysis": 0.84,
+        "reasoning": 0.78,
+        "function_calling": 0.84,
+        "vision": 0.8,
+        "long_document": 0.82,
+        "unknown": 0.82,
+        "general": 0.84
+      }
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5",
+      "display_name": "GPT-5",
+      "tier": "mid",
+      "cost_per_1k_input": 0.00125,
+      "cost_per_1k_output": 0.01,
+      "max_context_window": 400000,
+      "max_output_tokens": 16384,
+      "capabilities": [
+        "vision",
+        "function_calling"
+      ],
+      "supports_streaming": true,
+      "avg_latency_ms": 2200,
+      "rate_limit_rpm": 500,
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ],
+      "quality_ratings": {
+        "simple_qa": 0.91,
+        "conversation": 0.9,
+        "translation": 0.88,
+        "classification": 0.9,
+        "extraction": 0.88,
+        "summarization": 0.88,
+        "code_generation": 0.92,
+        "code_review": 0.86,
+        "creative_writing": 0.88,
+        "analysis": 0.9,
+        "reasoning": 0.9,
+        "function_calling": 0.9,
+        "vision": 0.86,
+        "long_document": 0.86,
+        "unknown": 0.88,
+        "general": 0.9
       }
     },
     {
@@ -186,17 +559,76 @@
       "cost_per_1k_output": 0.01,
       "max_context_window": 128000,
       "max_output_tokens": 16384,
-      "capabilities": ["vision", "function_calling"],
+      "capabilities": [
+        "vision",
+        "function_calling"
+      ],
       "supports_streaming": true,
       "avg_latency_ms": 2500,
       "rate_limit_rpm": 500,
-      "allowed_sensitivity_levels": ["public", "internal", "confidential", "restricted"],
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ],
       "quality_ratings": {
-        "simple_qa": 0.88, "conversation": 0.87, "translation": 0.87,
-        "classification": 0.88, "extraction": 0.88, "summarization": 0.87,
-        "code_generation": 0.88, "code_review": 0.87, "creative_writing": 0.85,
-        "analysis": 0.88, "reasoning": 0.87, "function_calling": 0.92,
-        "vision": 0.90, "long_document": 0.86, "unknown": 0.87, "general": 0.87
+        "simple_qa": 0.88,
+        "conversation": 0.88,
+        "translation": 0.86,
+        "classification": 0.88,
+        "extraction": 0.84,
+        "summarization": 0.84,
+        "code_generation": 0.85,
+        "code_review": 0.78,
+        "creative_writing": 0.84,
+        "analysis": 0.82,
+        "reasoning": 0.74,
+        "function_calling": 0.86,
+        "vision": 0.84,
+        "long_document": 0.82,
+        "unknown": 0.82,
+        "general": 0.84
+      }
+    },
+    {
+      "provider": "google",
+      "model_id": "gemini-3-flash-preview",
+      "display_name": "Gemini 3 Flash",
+      "tier": "mid",
+      "cost_per_1k_input": 0.0005,
+      "cost_per_1k_output": 0.003,
+      "max_context_window": 1048576,
+      "max_output_tokens": 8192,
+      "capabilities": [
+        "vision",
+        "function_calling"
+      ],
+      "supports_streaming": true,
+      "avg_latency_ms": 800,
+      "rate_limit_rpm": 1000,
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential"
+      ],
+      "quality_ratings": {
+        "simple_qa": 0.88,
+        "conversation": 0.88,
+        "translation": 0.86,
+        "classification": 0.88,
+        "extraction": 0.86,
+        "summarization": 0.86,
+        "code_generation": 0.86,
+        "code_review": 0.8,
+        "creative_writing": 0.82,
+        "analysis": 0.88,
+        "reasoning": 0.9,
+        "function_calling": 0.86,
+        "vision": 0.88,
+        "long_document": 0.88,
+        "unknown": 0.86,
+        "general": 0.88
       }
     },
     {
@@ -208,17 +640,76 @@
       "cost_per_1k_output": 0.01,
       "max_context_window": 1048576,
       "max_output_tokens": 8192,
-      "capabilities": ["vision", "function_calling"],
+      "capabilities": [
+        "vision",
+        "function_calling"
+      ],
       "supports_streaming": true,
       "avg_latency_ms": 3000,
       "rate_limit_rpm": 360,
-      "allowed_sensitivity_levels": ["public", "internal", "confidential"],
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential"
+      ],
       "quality_ratings": {
-        "simple_qa": 0.87, "conversation": 0.85, "translation": 0.87,
-        "classification": 0.87, "extraction": 0.87, "summarization": 0.88,
-        "code_generation": 0.87, "code_review": 0.86, "creative_writing": 0.83,
-        "analysis": 0.88, "reasoning": 0.90, "function_calling": 0.86,
-        "vision": 0.88, "long_document": 0.92, "unknown": 0.87, "general": 0.87
+        "simple_qa": 0.9,
+        "conversation": 0.88,
+        "translation": 0.88,
+        "classification": 0.9,
+        "extraction": 0.86,
+        "summarization": 0.88,
+        "code_generation": 0.86,
+        "code_review": 0.82,
+        "creative_writing": 0.85,
+        "analysis": 0.88,
+        "reasoning": 0.84,
+        "function_calling": 0.84,
+        "vision": 0.86,
+        "long_document": 0.92,
+        "unknown": 0.85,
+        "general": 0.88
+      }
+    },
+    {
+      "provider": "anthropic",
+      "model_id": "claude-opus-4-7",
+      "display_name": "Claude Opus 4.7",
+      "tier": "premium",
+      "cost_per_1k_input": 0.005,
+      "cost_per_1k_output": 0.025,
+      "max_context_window": 200000,
+      "max_output_tokens": 16000,
+      "capabilities": [
+        "vision",
+        "function_calling"
+      ],
+      "supports_streaming": true,
+      "avg_latency_ms": 3500,
+      "rate_limit_rpm": 200,
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ],
+      "quality_ratings": {
+        "simple_qa": 0.92,
+        "conversation": 0.93,
+        "translation": 0.9,
+        "classification": 0.92,
+        "extraction": 0.92,
+        "summarization": 0.93,
+        "code_generation": 0.96,
+        "code_review": 0.95,
+        "creative_writing": 0.95,
+        "analysis": 0.94,
+        "reasoning": 0.94,
+        "function_calling": 0.92,
+        "vision": 0.94,
+        "long_document": 0.92,
+        "unknown": 0.92,
+        "general": 0.94
       }
     },
     {
@@ -230,17 +721,77 @@
       "cost_per_1k_output": 0.075,
       "max_context_window": 200000,
       "max_output_tokens": 8192,
-      "capabilities": ["vision", "function_calling"],
+      "capabilities": [
+        "vision",
+        "function_calling"
+      ],
       "supports_streaming": true,
       "avg_latency_ms": 4000,
       "rate_limit_rpm": 200,
-      "allowed_sensitivity_levels": ["public", "internal", "confidential", "restricted"],
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ],
       "quality_ratings": {
-        "simple_qa": 0.93, "conversation": 0.93, "translation": 0.92,
-        "classification": 0.93, "extraction": 0.93, "summarization": 0.93,
-        "code_generation": 0.95, "code_review": 0.95, "creative_writing": 0.92,
-        "analysis": 0.95, "reasoning": 0.93, "function_calling": 0.92,
-        "vision": 0.90, "long_document": 0.93, "unknown": 0.92, "general": 0.92
+        "simple_qa": 0.9,
+        "conversation": 0.91,
+        "translation": 0.88,
+        "classification": 0.9,
+        "extraction": 0.9,
+        "summarization": 0.91,
+        "code_generation": 0.92,
+        "code_review": 0.9,
+        "creative_writing": 0.92,
+        "analysis": 0.9,
+        "reasoning": 0.91,
+        "function_calling": 0.88,
+        "vision": 0.86,
+        "long_document": 0.88,
+        "unknown": 0.88,
+        "general": 0.9
+      }
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5.5",
+      "display_name": "GPT-5.5",
+      "tier": "premium",
+      "cost_per_1k_input": 0.0025,
+      "cost_per_1k_output": 0.02,
+      "max_context_window": 1050000,
+      "max_output_tokens": 128000,
+      "capabilities": [
+        "vision",
+        "function_calling"
+      ],
+      "supports_streaming": true,
+      "avg_latency_ms": 4500,
+      "rate_limit_rpm": 200,
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ],
+      "quality_ratings": {
+        "simple_qa": 0.92,
+        "conversation": 0.91,
+        "translation": 0.89,
+        "classification": 0.92,
+        "extraction": 0.9,
+        "summarization": 0.9,
+        "code_generation": 0.94,
+        "code_review": 0.92,
+        "creative_writing": 0.89,
+        "analysis": 0.92,
+        "reasoning": 0.94,
+        "function_calling": 0.92,
+        "vision": 0.88,
+        "long_document": 0.88,
+        "unknown": 0.9,
+        "general": 0.92
       }
     },
     {
@@ -252,17 +803,76 @@
       "cost_per_1k_output": 0.15,
       "max_context_window": 128000,
       "max_output_tokens": 16384,
-      "capabilities": ["vision", "function_calling"],
+      "capabilities": [
+        "vision",
+        "function_calling"
+      ],
       "supports_streaming": true,
       "avg_latency_ms": 5000,
       "rate_limit_rpm": 100,
-      "allowed_sensitivity_levels": ["public", "internal", "confidential", "restricted"],
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ],
       "quality_ratings": {
-        "simple_qa": 0.90, "conversation": 0.92, "translation": 0.90,
-        "classification": 0.90, "extraction": 0.90, "summarization": 0.90,
-        "code_generation": 0.91, "code_review": 0.91, "creative_writing": 0.93,
-        "analysis": 0.92, "reasoning": 0.90, "function_calling": 0.93,
-        "vision": 0.91, "long_document": 0.88, "unknown": 0.90, "general": 0.90
+        "simple_qa": 0.89,
+        "conversation": 0.92,
+        "translation": 0.88,
+        "classification": 0.9,
+        "extraction": 0.88,
+        "summarization": 0.9,
+        "code_generation": 0.86,
+        "code_review": 0.82,
+        "creative_writing": 0.92,
+        "analysis": 0.86,
+        "reasoning": 0.8,
+        "function_calling": 0.86,
+        "vision": 0.84,
+        "long_document": 0.84,
+        "unknown": 0.86,
+        "general": 0.88
+      }
+    },
+    {
+      "provider": "google",
+      "model_id": "gemini-3.1-pro-preview",
+      "display_name": "Gemini 3.1 Pro",
+      "tier": "premium",
+      "cost_per_1k_input": 0.002,
+      "cost_per_1k_output": 0.012,
+      "max_context_window": 2000000,
+      "max_output_tokens": 16384,
+      "capabilities": [
+        "vision",
+        "function_calling"
+      ],
+      "supports_streaming": true,
+      "avg_latency_ms": 5000,
+      "rate_limit_rpm": 100,
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential"
+      ],
+      "quality_ratings": {
+        "simple_qa": 0.92,
+        "conversation": 0.91,
+        "translation": 0.9,
+        "classification": 0.92,
+        "extraction": 0.9,
+        "summarization": 0.9,
+        "code_generation": 0.9,
+        "code_review": 0.86,
+        "creative_writing": 0.88,
+        "analysis": 0.93,
+        "reasoning": 0.94,
+        "function_calling": 0.9,
+        "vision": 0.92,
+        "long_document": 0.94,
+        "unknown": 0.9,
+        "general": 0.92
       }
     },
     {
@@ -274,17 +884,35 @@
       "cost_per_1k_output": 0.015,
       "max_context_window": 1048576,
       "max_output_tokens": 16384,
-      "capabilities": ["vision", "function_calling"],
+      "capabilities": [
+        "vision",
+        "function_calling"
+      ],
       "supports_streaming": true,
       "avg_latency_ms": 6000,
       "rate_limit_rpm": 100,
-      "allowed_sensitivity_levels": ["public", "internal", "confidential"],
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential"
+      ],
       "quality_ratings": {
-        "simple_qa": 0.90, "conversation": 0.87, "translation": 0.88,
-        "classification": 0.90, "extraction": 0.90, "summarization": 0.90,
-        "code_generation": 0.91, "code_review": 0.91, "creative_writing": 0.85,
-        "analysis": 0.93, "reasoning": 0.95, "function_calling": 0.88,
-        "vision": 0.89, "long_document": 0.94, "unknown": 0.90, "general": 0.90
+        "simple_qa": 0.9,
+        "conversation": 0.88,
+        "translation": 0.88,
+        "classification": 0.9,
+        "extraction": 0.88,
+        "summarization": 0.88,
+        "code_generation": 0.88,
+        "code_review": 0.84,
+        "creative_writing": 0.86,
+        "analysis": 0.92,
+        "reasoning": 0.92,
+        "function_calling": 0.86,
+        "vision": 0.86,
+        "long_document": 0.92,
+        "unknown": 0.88,
+        "general": 0.9
       }
     },
     {
@@ -296,17 +924,36 @@
       "cost_per_1k_output": 0.04,
       "max_context_window": 200000,
       "max_output_tokens": 100000,
-      "capabilities": ["vision", "function_calling"],
+      "capabilities": [
+        "vision",
+        "function_calling"
+      ],
       "supports_streaming": true,
       "avg_latency_ms": 15000,
       "rate_limit_rpm": 50,
-      "allowed_sensitivity_levels": ["public", "internal", "confidential", "restricted"],
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ],
       "quality_ratings": {
-        "simple_qa": 0.88, "conversation": 0.80, "translation": 0.85,
-        "classification": 0.88, "extraction": 0.87, "summarization": 0.87,
-        "code_generation": 0.93, "code_review": 0.94, "creative_writing": 0.75,
-        "analysis": 0.95, "reasoning": 0.98, "function_calling": 0.90,
-        "vision": 0.90, "long_document": 0.90, "unknown": 0.88, "general": 0.88
+        "simple_qa": 0.91,
+        "conversation": 0.86,
+        "translation": 0.86,
+        "classification": 0.9,
+        "extraction": 0.88,
+        "summarization": 0.86,
+        "code_generation": 0.9,
+        "code_review": 0.86,
+        "creative_writing": 0.82,
+        "analysis": 0.92,
+        "reasoning": 0.94,
+        "function_calling": 0.86,
+        "vision": 0.84,
+        "long_document": 0.84,
+        "unknown": 0.88,
+        "general": 0.9
       }
     },
     {
@@ -318,17 +965,36 @@
       "cost_per_1k_output": 0.0044,
       "max_context_window": 200000,
       "max_output_tokens": 100000,
-      "capabilities": ["vision", "function_calling"],
+      "capabilities": [
+        "vision",
+        "function_calling"
+      ],
       "supports_streaming": true,
       "avg_latency_ms": 8000,
       "rate_limit_rpm": 100,
-      "allowed_sensitivity_levels": ["public", "internal", "confidential", "restricted"],
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ],
       "quality_ratings": {
-        "simple_qa": 0.85, "conversation": 0.78, "translation": 0.83,
-        "classification": 0.86, "extraction": 0.85, "summarization": 0.85,
-        "code_generation": 0.90, "code_review": 0.90, "creative_writing": 0.73,
-        "analysis": 0.90, "reasoning": 0.94, "function_calling": 0.88,
-        "vision": 0.85, "long_document": 0.87, "unknown": 0.85, "general": 0.85
+        "simple_qa": 0.86,
+        "conversation": 0.84,
+        "translation": 0.82,
+        "classification": 0.86,
+        "extraction": 0.84,
+        "summarization": 0.82,
+        "code_generation": 0.94,
+        "code_review": 0.86,
+        "creative_writing": 0.78,
+        "analysis": 0.88,
+        "reasoning": 0.9,
+        "function_calling": 0.84,
+        "vision": 0.8,
+        "long_document": 0.8,
+        "unknown": 0.84,
+        "general": 0.86
       }
     },
     {
@@ -340,17 +1006,36 @@
       "cost_per_1k_output": 0.075,
       "max_context_window": 200000,
       "max_output_tokens": 16000,
-      "capabilities": ["vision", "function_calling"],
+      "capabilities": [
+        "vision",
+        "function_calling"
+      ],
       "supports_streaming": true,
       "avg_latency_ms": 20000,
       "rate_limit_rpm": 50,
-      "allowed_sensitivity_levels": ["public", "internal", "confidential", "restricted"],
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ],
       "quality_ratings": {
-        "simple_qa": 0.92, "conversation": 0.90, "translation": 0.92,
-        "classification": 0.94, "extraction": 0.94, "summarization": 0.94,
-        "code_generation": 0.97, "code_review": 0.97, "creative_writing": 0.93,
-        "analysis": 0.97, "reasoning": 0.99, "function_calling": 0.93,
-        "vision": 0.91, "long_document": 0.95, "unknown": 0.93, "general": 0.93
+        "simple_qa": 0.9,
+        "conversation": 0.91,
+        "translation": 0.88,
+        "classification": 0.9,
+        "extraction": 0.9,
+        "summarization": 0.92,
+        "code_generation": 0.93,
+        "code_review": 0.92,
+        "creative_writing": 0.92,
+        "analysis": 0.92,
+        "reasoning": 0.94,
+        "function_calling": 0.88,
+        "vision": 0.86,
+        "long_document": 0.9,
+        "unknown": 0.9,
+        "general": 0.92
       }
     }
   ]
