@@ -74,6 +74,7 @@ from .config import (
     ENABLE_RESPONSE_CACHE,
     CIRCUIT_BREAKER_FAILURE_THRESHOLD,
     CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
+    COMPLEXITY_QUALITY_FLOOR,
     CONTEXT_COMPRESSION_THRESHOLD,
     CONTEXT_PENALTY_HARD_CUTOFF,
     CONTEXT_PENALTY_HIGH_FACTOR,
@@ -543,16 +544,30 @@ class RoutingEngine:
         if quality_filtered:
             candidates = quality_filtered
 
-        # ══ STEP 9: TIER SELECTION + SCORING ════════════════════════════════
+        # ══ STEP 9: GLOBAL SCORING (Change 10) ══════════════════════════════
+        # Tier-based filtering replaced with a complexity-driven quality floor.
+        # Models are filtered by per-task-type quality (not tier), then scored
+        # globally so a "mid" model that beats some "premium" models on a task
+        # can win on cost.  Tier still gates plan permissions, budget walk-down,
+        # and anti-gaming — but no longer the quality decision.
         # 🔧 EXTENSION POINT: add new scoring dimensions here (e.g., provider
-        # preference, model cooldown penalty, geographic latency).  Add the new
-        # weight to SCORING_WEIGHTS in config.py and apply it to m.routing_score.
-        target_tier = _get_tier_for_score(analysis.complexity_score)
-        tier_candidates = [m for m in candidates if m.tier == target_tier]
+        # preference, model cooldown penalty, geographic latency).
+        target_tier = _get_tier_for_score(analysis.complexity_score)  # kept for logs/explanation
+        quality_floor = _quality_floor_for_complexity(analysis.complexity_score)
+        tier_candidates = [
+            m
+            for m in candidates
+            if m.quality_ratings.get(analysis.task_type, 0.5) >= quality_floor
+        ]
         if not tier_candidates:
-            tier_candidates = _get_adjacent_tier_models(candidates, target_tier)
-        if not tier_candidates:
+            # Floor too strict — fall back to all candidates so we always return something.
             tier_candidates = candidates
+            log.debug(
+                "quality_floor_relaxed",
+                cid=cid,
+                floor=quality_floor,
+                task=analysis.task_type,
+            )
 
         # Change 1: routing_priority overrides the weight preset when set.
         weights = _get_weights_for_priority(request.routing_priority, request.priority)
@@ -1061,6 +1076,17 @@ def _get_tier_for_score(score: float) -> str:
             return tier
     # Change 8: no more "ultra" edge case — premium now covers up to 1.01
     return "premium"
+
+
+def _quality_floor_for_complexity(score: float) -> float:
+    """
+    Change 10: Map a complexity score to the minimum per-task quality_rating
+    required to be a candidate in Step 9.  Replaces tier-based filtering.
+    """
+    for max_complexity, min_quality in COMPLEXITY_QUALITY_FLOOR:
+        if score < max_complexity:
+            return min_quality
+    return COMPLEXITY_QUALITY_FLOOR[-1][1]
 
 
 def _get_adjacent_tier_models(candidates: list[ModelOption], target_tier: str) -> list[ModelOption]:

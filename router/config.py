@@ -94,6 +94,30 @@ TIER_BOUNDARIES: dict[str, tuple[float, float]] = {
 TIER_ORDER: list[str] = ["free", "cheap", "mid", "premium"]
 
 # ══════════════════════════════════════════════════════════════════════════════
+# COMPLEXITY → QUALITY FLOOR (Change 10: global scoring)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Replaces tier-based filtering in Step 9.  Maps a complexity score to the
+# minimum per-task-type quality_rating a model must have to be considered.
+#
+# Why: tier labels were assigned by price, but benchmark-grounded quality
+# ratings show some "mid" models match or beat some "premium" models on
+# specific tasks.  Locking selection to tier prevented the scorer from
+# picking a cheaper-but-capable model when one existed.
+#
+# Each entry is (max_complexity, min_quality).  For a request with complexity
+# c, the floor is the min_quality of the first entry whose max_complexity > c.
+# How to tune: raise floors to enforce stricter quality on harder tasks; lower
+# to allow more cost-optimization at the cost of routing quality.
+# What breaks if changed: shifts the candidate pool for every request.
+COMPLEXITY_QUALITY_FLOOR: list[tuple[float, float]] = [
+    (0.15, 0.40),  # trivial:    free-tier-grade quality is enough
+    (0.30, 0.60),  # cheap:      require modestly capable models
+    (0.60, 0.75),  # mid:        require generally capable models
+    (1.01, 0.85),  # premium:    require frontier-grade quality
+]
+
+# ══════════════════════════════════════════════════════════════════════════════
 # BUDGET LIMITS (USD)
 # ══════════════════════════════════════════════════════════════════════════════
 
