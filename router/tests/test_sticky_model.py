@@ -79,7 +79,7 @@ def _req(prompt: str, conv_id: str | None = None, **kw: Any) -> RoutingRequest:
 
 
 def rr(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 # ── Mid-complexity prompt that reliably lands in mid/cheap tier under "balanced"

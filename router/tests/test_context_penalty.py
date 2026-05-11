@@ -86,7 +86,7 @@ def _req(prompt: str, **kw: Any) -> RoutingRequest:
 
 
 def rr(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def _make_model(

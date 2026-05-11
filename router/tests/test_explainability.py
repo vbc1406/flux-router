@@ -55,7 +55,7 @@ def _req(prompt: str, **kw) -> RoutingRequest:
 
 def _route(prompt: str, verbose: bool = True, **kw) -> RoutingDecision:
     engine = _engine()
-    return asyncio.get_event_loop().run_until_complete(
+    return asyncio.run(
         engine.route(_req(prompt, **kw), verbose=verbose)
     )
 

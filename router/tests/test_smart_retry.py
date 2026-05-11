@@ -73,7 +73,7 @@ def _flux() -> Flux:
 
 
 def rr(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 _PROMPT = "Explain async/await in Python"
