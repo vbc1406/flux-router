@@ -48,16 +48,14 @@ from .schemas import RoutingDecision
 
 log = structlog.get_logger(__name__)
 
-_DEFAULT_LOG_PATH = "routing_analytics.jsonl"
-
 
 class RoutingAnalytics:
     """
     Append-only JSONL decision log with in-memory query support.
 
-    The log is written synchronously (fast path — no async I/O) and held in
-    memory for aggregation queries.  On restart the JSONL is replayed to
-    restore the in-memory list.
+    When ``log_path`` is None, analytics are in-memory only (no file is read or
+    written). When an explicit path is provided, the log is written synchronously
+    and replayed on startup to restore the in-memory list.
     """
 
     def __init__(
@@ -65,11 +63,12 @@ class RoutingAnalytics:
         log_path: str | None = None,
         base_dir: str | Path | None = None,
     ) -> None:
-        self._path = safe_resolve(log_path or _DEFAULT_LOG_PATH, base_dir)
+        self._path = safe_resolve(log_path, base_dir) if log_path else None
         self._lock = threading.Lock()
         self._entries: list[dict[str, Any]] = []
         self._index: dict[str, int] = {}  # correlation_id → index in _entries (O(1) updates)
-        self._load_existing()
+        if self._path is not None:
+            self._load_existing()
 
     # ── Write path ──────────────────────────────────────────────────────────
 
@@ -223,6 +222,8 @@ class RoutingAnalytics:
             cid = entry.get("correlation_id")
             if cid:
                 self._index[cid] = idx
+        if self._path is None:
+            return
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with self._path.open("a", encoding="utf-8") as fh:
