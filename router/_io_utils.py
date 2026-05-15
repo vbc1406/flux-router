@@ -8,6 +8,7 @@ Internal I/O helpers shared across router modules. Currently provides
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import tempfile
@@ -67,8 +68,6 @@ def atomic_write_json(path: Path, data: Any, *, indent: int | None = 2) -> None:
         except OSError as chmod_exc:
             log.debug("state_file_chmod_failed", path=str(path), error=str(chmod_exc))
     except Exception:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_path)
-        except OSError:
-            pass
         raise

@@ -301,7 +301,8 @@ class TestRollbackRestoration:
 
         # The outlier (0.50) must be rejected (count unchanged)
         assert count_after_outlier == post_rollback_count, (
-            f"Outlier 0.50 should be rejected post-rollback (count was {post_rollback_count}, now {count_after_outlier})"
+            f"Outlier 0.50 should be rejected post-rollback "
+            f"(count was {post_rollback_count}, now {count_after_outlier})"
         )
         # The normal signal (0.84) must be accepted
         assert count_after_normal == post_rollback_count + 1, (
@@ -404,7 +405,10 @@ class TestSignalStatsPoisoning:
                     "signal_mean_before_poison": round(before_mean, 4),
                     "snapshot_mean": round(snap_mean, 4),
                 },
-                action_description="Corrupt signal_stats.mean=0.05, trip rollback, call _check_for_corruption()",
+                action_description=(
+                    "Corrupt signal_stats.mean=0.05, trip rollback, "
+                    "call _check_for_corruption()"
+                ),
                 final_state={
                     "poisoned_mean": poisoned_mean,
                     "restored_mean": round(restored_mean, 4),
@@ -485,7 +489,10 @@ class TestConfigConstants:
                     "samples_recorded": ADAPTIVE_MIN_SAMPLES - 1,
                     "score_at_N-1": score_before,
                 },
-                action_description=f"Record 1 more signal to reach ADAPTIVE_MIN_SAMPLES={ADAPTIVE_MIN_SAMPLES}",
+                action_description=(
+                    f"Record 1 more signal to reach "
+                    f"ADAPTIVE_MIN_SAMPLES={ADAPTIVE_MIN_SAMPLES}"
+                ),
                 final_state={
                     "samples_recorded": ADAPTIVE_MIN_SAMPLES,
                     "score_at_N": round(score_after, 4),
@@ -674,7 +681,10 @@ class TestSlowDriftDetection:
                     "baseline": round(baseline, 4),
                     "threshold_pct": _ROLLBACK_DROP_THRESHOLD,
                 },
-                action_description=f"Set avg to {_ROLLBACK_DROP_THRESHOLD + 0.01:.0%} of baseline (above threshold)",
+                action_description=(
+                    f"Set avg to {_ROLLBACK_DROP_THRESHOLD + 0.01:.0%} of "
+                    "baseline (above threshold)"
+                ),
                 final_state={"post_check_avg": round(post_avg, 4)},
                 expected_value=safe_degraded,
                 actual_value=post_avg,
@@ -939,7 +949,10 @@ class TestEndToEndIntegration:
 
         _record_metric(
             TestMetrics(
-                test_name="Integration: Full Lifecycle (100 good → 20 outliers → corrupt → rollback → 50 new)",
+                test_name=(
+                    "Integration: Full Lifecycle "
+                    "(100 good → 20 outliers → corrupt → rollback → 50 new)"
+                ),
                 initial_state={"phase1_avg": round(phase1_avg, 4), "phase1_count": phase1_count},
                 action_description="Outlier rejection → corruption → rollback → recovery",
                 final_state={

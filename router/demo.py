@@ -66,11 +66,15 @@ _MOCK_CONTRACT = (
     "1. SERVICES. Provider shall deliver software development services as described in SOW. "
     "2. PAYMENT. Client shall pay $10,000/month net-30. Late payments incur 1.5%/month interest. "
     "3. INTELLECTUAL PROPERTY. All work product is work-for-hire and vests in Client upon payment. "
-    "4. INDEMNIFICATION. Each party indemnifies the other for its own gross negligence or willful misconduct. "
-    "5. LIMITATION OF LIABILITY. In no event shall either party be liable for indirect, consequential, "
+    "4. INDEMNIFICATION. Each party indemnifies the other for its own gross "
+    "negligence or willful misconduct. "
+    "5. LIMITATION OF LIABILITY. In no event shall either party be liable for "
+    "indirect, consequential, "
     "or punitive damages. Provider liability capped at 3 months of fees. "
-    "6. CONFIDENTIALITY. Both parties agree to keep Confidential Information secret for 5 years. "
-    "7. TERMINATION. Either party may terminate with 30-day written notice. Client owes fees through termination. "
+    "6. CONFIDENTIALITY. Both parties agree to keep Confidential Information "
+    "secret for 5 years. "
+    "7. TERMINATION. Either party may terminate with 30-day written notice. "
+    "Client owes fees through termination. "
     "8. GOVERNING LAW. This Agreement is governed by the laws of Delaware. " * 20
 )
 
@@ -119,11 +123,17 @@ _SAMPLES: list[dict] = [
     },
     # PREMIUM tier targets
     {
-        "prompt": "Write a React component for a drag-and-drop kanban board with state management, animations, and persistence",
+        "prompt": (
+            "Write a React component for a drag-and-drop kanban board with "
+            "state management, animations, and persistence"
+        ),
         "priority": "normal",
     },
     {
-        "prompt": "Analyze the legal implications of GDPR Article 17 on cross-border data transfers considering recent ECJ rulings",
+        "prompt": (
+            "Analyze the legal implications of GDPR Article 17 on cross-border "
+            "data transfers considering recent ECJ rulings"
+        ),
         "priority": "normal",
         "sensitivity": "confidential",
     },
@@ -132,20 +142,34 @@ _SAMPLES: list[dict] = [
         "priority": "high",
     },
     {
-        "prompt": "Write a comprehensive REST API with auth, rate limiting, pagination, and WebSocket support in FastAPI",
+        "prompt": (
+            "Write a comprehensive REST API with auth, rate limiting, pagination, "
+            "and WebSocket support in FastAPI"
+        ),
         "priority": "normal",
     },
     {
-        "prompt": "Design a database schema for a multi-tenant SaaS platform with row-level security, audit logging, and soft deletes",
+        "prompt": (
+            "Design a database schema for a multi-tenant SaaS platform with "
+            "row-level security, audit logging, and soft deletes"
+        ),
         "priority": "normal",
     },
     # ULTRA tier targets
     {
-        "prompt": "Prove that the sum of all natural numbers diverges, then explain why Ramanujan's -1/12 result is valid in zeta function regularization. Show all steps with ∑ notation.",
+        "prompt": (
+            "Prove that the sum of all natural numbers diverges, then explain "
+            "why Ramanujan's -1/12 result is valid in zeta function "
+            "regularization. Show all steps with ∑ notation."
+        ),
         "priority": "critical",
     },
     {
-        "prompt": f"Given this contract, identify every liability clause, cross-reference with indemnification sections, and produce a risk matrix:\n{_MOCK_CONTRACT}",
+        "prompt": (
+            "Given this contract, identify every liability clause, "
+            "cross-reference with indemnification sections, and produce a "
+            f"risk matrix:\n{_MOCK_CONTRACT}"
+        ),
         "priority": "high",
     },
     # SPECIAL cases
@@ -160,7 +184,10 @@ _SAMPLES: list[dict] = [
         "capabilities": ["vision"],
     },
     {
-        "prompt": "Solve: minimize f(x,y) = x² + y² subject to x + y ≥ 10, using KKT conditions. Show all derivation steps.",
+        "prompt": (
+            "Solve: minimize f(x,y) = x² + y² subject to x + y ≥ 10, using "
+            "KKT conditions. Show all derivation steps."
+        ),
         "priority": "critical",
     },
 ]

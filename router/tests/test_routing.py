@@ -95,7 +95,7 @@ def _engine() -> RoutingEngine:
 
 
 def _req(prompt: str, **kw) -> RoutingRequest:
-    defaults = dict(user_id="u_test", plan="business_plan", priority="normal")
+    defaults = {"user_id": "u_test", "plan": "business_plan", "priority": "normal"}
     defaults.update(kw)
     # Pull out correlation_id if provided to avoid passing it twice
     cid = defaults.pop("correlation_id", str(uuid.uuid4()))
@@ -202,9 +202,9 @@ class TestCacheIntegration:
 
     def test_cache_hit_returns_zero_cost(self):
         from router.cache import fingerprint as fp_fn
-        from router.model_registry import ModelRegistry as MR
+        from router.model_registry import ModelRegistry
 
-        reg = MR()
+        reg = ModelRegistry()
         model = reg.all_available_models()[0]
         prompt = "What is the capital of Germany?"
         fp = fp_fn(prompt, None, [], None)
@@ -216,9 +216,9 @@ class TestCacheIntegration:
 
     def test_high_temp_skips_cache(self):
         from router.cache import fingerprint as fp_fn
-        from router.model_registry import ModelRegistry as MR
+        from router.model_registry import ModelRegistry
 
-        reg = MR()
+        reg = ModelRegistry()
         model = reg.all_available_models()[0]
         prompt = "What is the capital of Germany?"
         fp = fp_fn(prompt, None, [], None)
@@ -639,7 +639,8 @@ class TestConfidenceThreshold:
             d = rr(engine.route(_req(prompt, exploration_rate=0.25, plan="business_plan")))
             # Every request must have triggered confidence_fallback (threshold=0.99)
             assert d.confidence_fallback, (
-                f"expected confidence_fallback with threshold=0.99, got rule={d.routing_rule_matched!r}"
+                "expected confidence_fallback with threshold=0.99, "
+                f"got rule={d.routing_rule_matched!r}"
             )
             # A/B must be suppressed — safety overrides experimentation
             assert "ab_exploration" not in d.routing_rule_matched, (

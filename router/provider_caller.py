@@ -20,6 +20,7 @@ an http_status attribute so FallbackExecutor can classify the error correctly.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import urllib.error
 import urllib.request
@@ -114,14 +115,12 @@ def _post_json(
             return json.loads(_bounded_read(resp).decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body_text = ""
-        try:
+        # Swallow body-read failures so the original HTTP error is what we surface.
+        # OSError: socket already closed by the time we read.
+        # AttributeError: HTTPError without a readable body.
+        # ProviderCallError: body exceeded MAX_PROVIDER_RESPONSE_BYTES (diagnostic only).
+        with contextlib.suppress(OSError, AttributeError, ProviderCallError):
             body_text = _bounded_read(exc).decode("utf-8", errors="replace")
-        except (OSError, AttributeError, ProviderCallError):
-            # OSError: socket already closed by the time we read.
-            # AttributeError: HTTPError without a readable body.
-            # ProviderCallError: body exceeded MAX_PROVIDER_RESPONSE_BYTES — diagnostic
-            #   only, swallow it so the original HTTP error is what we surface.
-            pass
         if LOG_PROMPTS:
             log.debug(
                 "provider_error_body",
@@ -172,6 +171,19 @@ def _call_anthropic_sync(
         ) from exc
 
 
+def _uses_max_completion_tokens(provider_name: str, model_id: str) -> bool:
+    """Return True if this OpenAI-compat call must use `max_completion_tokens`.
+
+    OpenAI's reasoning models (o-series) and the modern GPT-5 family reject the
+    legacy `max_tokens` parameter and require `max_completion_tokens`. Groq and
+    Mistral still expect `max_tokens`, so the switch is OpenAI-only.
+    """
+    if provider_name != "openai":
+        return False
+    mid = model_id.lower()
+    return mid.startswith(("o1", "o3", "o4", "gpt-5"))
+
+
 def _call_openai_compat_sync(
     model: ModelOption,
     request: RoutingRequest,
@@ -187,8 +199,12 @@ def _call_openai_compat_sync(
     body: dict[str, Any] = {
         "model": model.model_id,
         "messages": messages,
-        "max_tokens": request.max_tokens_requested or 1024,
     }
+    token_limit = request.max_tokens_requested or 1024
+    if _uses_max_completion_tokens(provider_name, model.model_id):
+        body["max_completion_tokens"] = token_limit
+    else:
+        body["max_tokens"] = token_limit
     if request.temperature is not None:
         body["temperature"] = request.temperature
 
@@ -269,12 +285,15 @@ async def call_provider(
     #        (3) add the provider's base URL to _OPENAI_COMPAT_BASES if it's OpenAI-compatible,
     #        (4) add models for that provider to router/models.json.
     if provider == "anthropic":
-        fn = lambda: _call_anthropic_sync(model, request, api_key)
+        def fn() -> str:
+            return _call_anthropic_sync(model, request, api_key)
     elif provider in _OPENAI_COMPAT_BASES:
         base = _OPENAI_COMPAT_BASES[provider]
-        fn = lambda: _call_openai_compat_sync(model, request, api_key, base, provider)
+        def fn() -> str:
+            return _call_openai_compat_sync(model, request, api_key, base, provider)
     elif provider == "google":
-        fn = lambda: _call_google_sync(model, request, api_key)
+        def fn() -> str:
+            return _call_google_sync(model, request, api_key)
     else:
         raise ProviderCallError(
             f"No provider caller implemented for '{provider}'.  "

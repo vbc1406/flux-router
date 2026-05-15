@@ -42,7 +42,13 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = ["router*"]
-exclude = ["testing*", "tests*"]
+exclude = ["testing*", "tests*", "router.tests*"]
+
+[tool.setuptools.package-data]
+router = ["models.json"]
+
+[tool.setuptools.exclude-package-data]
+router = ["tests/*", "tests/**/*"]
 
 [tool.mypy]
 python_version = "3.9"

@@ -71,7 +71,6 @@ from .config import (
     AB_MAX_COMPLEXITY_SCORE,
     AB_MAX_EXPLORATION_RATE,
     CACHE_ENABLED,
-    ENABLE_RESPONSE_CACHE,
     CIRCUIT_BREAKER_FAILURE_THRESHOLD,
     CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
     COMPLEXITY_QUALITY_FLOOR,
@@ -86,6 +85,7 @@ from .config import (
     CONVERSATION_EXPIRY_SECONDS,
     CONVERSATION_STICKY_BIAS_DEEP,
     CONVERSATION_STICKY_BIAS_SHALLOW,
+    ENABLE_RESPONSE_CACHE,
     FREE_TIER_ABUSE_THRESHOLD_RPM,
     LATENCY_PRIORITY_MAP,
     MAX_COST_PER_REQUEST,
@@ -361,58 +361,59 @@ class RoutingEngine:
         # Change 4: If max_daily_cost is set and the customer has already hit
         # it, force routing to free tier.  Fall back to error if free is unavailable.
         effective_customer_id = request.customer_id or request.user_id
-        if request.max_daily_cost is not None:
-            if self._daily_budget.is_cap_exceeded(effective_customer_id, request.max_daily_cost):
-                free_candidates = [m for m in candidates if m.tier == "free"]
-                if free_candidates:
-                    log.info(
-                        "daily_budget_cap_hit_forcing_free",
-                        cid=cid,
-                        customer_id=effective_customer_id,
-                        cap=request.max_daily_cost,
-                    )
-                    best_free = _pick_best(free_candidates, analysis)
-                    chain = build_fallback_chain(best_free, candidates, analysis)
-                    rl, cs, to = build_typed_fallback_chains(best_free, candidates, analysis)
-                    cost = _estimate_cost(analysis, best_free)
-                    decision = self._finalise(
-                        chosen=best_free,
-                        chain=chain,
-                        analysis=analysis,
-                        request=request,
-                        rule="daily_budget_cap_free_tier",
-                        compressed=False,
-                        cost=cost,
-                        priority_applied=request.routing_priority,
-                        confidence_fallback=False,
-                        budget_exhausted=False,
-                        fallback_on_rate_limit=rl,
-                        fallback_on_content_safety=cs,
-                        fallback_on_timeout=to,
-                    )
-                    decision.last_model = conv_entry["last_model"] if conv_entry else None
-                    decision.explanation = expl
-                    self._post_route(decision, request)
-                    return decision
-                else:
-                    log.warning(
-                        "daily_budget_cap_exhausted_no_free_tier",
-                        cid=cid,
-                        customer_id=effective_customer_id,
-                    )
-                    return RoutingDecision(
-                        chosen_model=None,
-                        reasoning=(
-                            f"Daily budget cap of ${request.max_daily_cost:.4f} has been reached "
-                            f"and no free-tier models are available for this request."
-                        ),
-                        routing_rule_matched="daily_budget_exhausted",
-                        correlation_id=cid,
-                        timestamp=datetime.utcnow(),
-                        cost_blocked=True,
-                        budget_exhausted=True,
-                        priority_applied=request.routing_priority,
-                    )
+        if request.max_daily_cost is not None and self._daily_budget.is_cap_exceeded(
+            effective_customer_id, request.max_daily_cost
+        ):
+            free_candidates = [m for m in candidates if m.tier == "free"]
+            if free_candidates:
+                log.info(
+                    "daily_budget_cap_hit_forcing_free",
+                    cid=cid,
+                    customer_id=effective_customer_id,
+                    cap=request.max_daily_cost,
+                )
+                best_free = _pick_best(free_candidates, analysis)
+                chain = build_fallback_chain(best_free, candidates, analysis)
+                rl, cs, to = build_typed_fallback_chains(best_free, candidates, analysis)
+                cost = _estimate_cost(analysis, best_free)
+                decision = self._finalise(
+                    chosen=best_free,
+                    chain=chain,
+                    analysis=analysis,
+                    request=request,
+                    rule="daily_budget_cap_free_tier",
+                    compressed=False,
+                    cost=cost,
+                    priority_applied=request.routing_priority,
+                    confidence_fallback=False,
+                    budget_exhausted=False,
+                    fallback_on_rate_limit=rl,
+                    fallback_on_content_safety=cs,
+                    fallback_on_timeout=to,
+                )
+                decision.last_model = conv_entry["last_model"] if conv_entry else None
+                decision.explanation = expl
+                self._post_route(decision, request)
+                return decision
+            else:
+                log.warning(
+                    "daily_budget_cap_exhausted_no_free_tier",
+                    cid=cid,
+                    customer_id=effective_customer_id,
+                )
+                return RoutingDecision(
+                    chosen_model=None,
+                    reasoning=(
+                        f"Daily budget cap of ${request.max_daily_cost:.4f} has been reached "
+                        f"and no free-tier models are available for this request."
+                    ),
+                    routing_rule_matched="daily_budget_exhausted",
+                    correlation_id=cid,
+                    timestamp=datetime.utcnow(),
+                    cost_blocked=True,
+                    budget_exhausted=True,
+                    priority_applied=request.routing_priority,
+                )
 
         # ══ STEP 5: CONTEXT COMPRESSION ══════════════════════════════════════
         max_window = max(m.max_context_window for m in candidates)

@@ -1,16 +1,16 @@
 # Flux
 
-**Intelligent LLM routing. Save 30–50% on AI costs. Automatically.**
+**Fast, cost-aware heuristic LLM router. Cut spend without sacrificing quality.**
 
-Flux picks the optimal model for each request — cheap models for simple tasks, premium for complex ones — without any LLM calls in the routing path. Pure logic, sub-5ms latency, learns from every response.
+Flux is a heuristic router that picks a low-cost model satisfying configured quality and capability constraints for each request. Routing is pure Python logic — no LLM calls in the decision path. Routing overhead is a few milliseconds or less, and the adaptive weights learn from every response.
 
 ---
 
 ## Why Flux
 
-Most teams default to GPT-4 or Claude Opus for everything. That's expensive and unnecessary. A summarization request doesn't need a $0.01/1k-token model when a $0.001/1k-token model gives the same answer.
+Most teams default to a single premium model for every request. That's expensive and often unnecessary — a short summarization or classification call usually doesn't need a top-tier model.
 
-Flux routes each request to the cheapest model that can handle it, based on:
+Flux routes each request to a low-cost model that satisfies the configured quality/capability constraints, based on:
 
 - **Task classification** — code, summarization, reasoning, creative, etc.
 - **Complexity scoring** — short greeting vs. multi-step proof
@@ -18,13 +18,13 @@ Flux routes each request to the cheapest model that can handle it, based on:
 - **Cost ceilings** — never burn budget on a single request
 - **Fallback chains** — automatic retry on rate limits, timeouts, or content filters
 
-Result: same quality output, half the cost.
+The model registry includes current-generation models from OpenAI, Anthropic, Google, Mistral, and Groq; the router selects per-request based on the configured quality floor and constraints, not a fixed mapping.
 
 ---
 
 ## What Flux Is Not
 
-- Not a hosted API. Flux runs in your infrastructure. Your API keys never leave your environment.
+- Not a hosted API. Flux runs in your infrastructure. Flux never calls an LLM to make routing decisions. In proxy mode, prompts are sent only to the selected provider.
 - Not a community project. Flux is built and maintained by the Flux team. Issues are welcome; pull requests are not currently accepted.
 - Not a free SaaS. AGPL-3.0 licensed for self-hosting. For commercial licensing or hosted offerings, contact licensing@flux.dev.
 

@@ -758,8 +758,8 @@
       "model_id": "gpt-5.5",
       "display_name": "GPT-5.5",
       "tier": "premium",
-      "cost_per_1k_input": 0.0025,
-      "cost_per_1k_output": 0.02,
+      "cost_per_1k_input": 0.005,
+      "cost_per_1k_output": 0.03,
       "max_context_window": 1050000,
       "max_output_tokens": 128000,
       "capabilities": [
@@ -799,6 +799,7 @@
       "model_id": "gpt-4.5-preview",
       "display_name": "GPT-4.5 Preview",
       "tier": "premium",
+      "is_available": false,
       "cost_per_1k_input": 0.075,
       "cost_per_1k_output": 0.15,
       "max_context_window": 128000,

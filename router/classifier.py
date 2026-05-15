@@ -67,6 +67,32 @@ _CLASSIFY_RE = re.compile(
 _EXTRACT_RE = re.compile(
     r"\b(extract|parse\s+(?:all|the)|find\s+all|list\s+(?:all|every)|pull\s+out)\b", re.IGNORECASE
 )
+# Structured-output extraction: "return/output/give JSON ... from <text>",
+# "as JSON: ...", or explicit field-list requests.
+_EXTRACT_STRUCTURED_RE = re.compile(
+    r"\b(?:return|output|produce|give\s+me|respond\s+with)\b[^\n]{0,120}?"
+    r"\b(?:json|xml|yaml|fields?|schema|object)\b[^\n]{0,200}?\bfrom\b",
+    re.IGNORECASE,
+)
+# Code-defect inspection: "find the race condition", "deadlock", etc. — strong
+# signal for code_review even without code fences.
+_CODE_DEFECT_RE = re.compile(
+    r"\b(race\s+condition|deadlock|memory\s+leak|null\s+pointer|"
+    r"off.by.one|infinite\s+loop|undefined\s+behavio[u]?r|"
+    r"data\s+race|use.after.free|double\s+free|buffer\s+overflow)\b",
+    re.IGNORECASE,
+)
+# Long-form creative writing: "write a <N>-word scene/chapter/prologue ..."
+# requires both a "write a" lead AND a narrative-form noun, AND a fiction cue
+# (novel/story/screenplay/etc.) to avoid matching "accident scene" prose.
+_CREATIVE_LONGFORM_RE = re.compile(
+    r"\bwrite\s+a\b[^\n]{0,80}?"
+    r"\b(?:scene|chapter|prologue|epilogue|monologue|vignette|novella)\b"
+    r"[^\n]{0,120}?"
+    r"\b(?:novel|story|screenplay|fiction|mystery|thriller|fantasy|"
+    r"sci.?fi|cyberpunk|romance|noir|book)\b",
+    re.IGNORECASE,
+)
 _CODE_GEN_RE = re.compile(
     r"\b(?:write\s+(?:a\s+)?(?:function|class|script|program|code|module)"
     r"|implement"
@@ -391,11 +417,10 @@ class RequestClassifier:
             return "vision", 0.9
         for msg in history + [{"role": "user", "content": prompt}]:
             content = msg.get("content", "")
-            if isinstance(content, list):
-                if any(
-                    isinstance(b, dict) and b.get("type") in ("image_url", "image") for b in content
-                ):
-                    return "vision", 0.9
+            if isinstance(content, list) and any(
+                isinstance(b, dict) and b.get("type") in ("image_url", "image") for b in content
+            ):
+                return "vision", 0.9
 
         # Function calling: explicit in metadata or capabilities
         if "function_calling" in request.required_capabilities or meta.get("tools"):
@@ -442,10 +467,21 @@ class RequestClassifier:
         if re.search(r"\bdesign\s+(?:a|an|the)\b", prompt, re.IGNORECASE):
             return "analysis", 0.7
 
-        # Code review: code fences + review/debug keywords
+        # Code review: code fences + review/debug keywords, OR a known
+        # defect-class term (race condition, deadlock, memory leak, …).
         has_fences = bool(_CODE_FENCE_RE.search(prompt))
         if has_fences and _CODE_REVIEW_RE.search(prompt):
             return "code_review", 0.8
+        if _CODE_DEFECT_RE.search(prompt):
+            return "code_review", 0.8
+
+        # Structured-output extraction: "return JSON with X from <text>"
+        if _EXTRACT_STRUCTURED_RE.search(prompt):
+            return "extraction", 0.85
+
+        # Long-form creative writing: "write a 900-word scene for a novel"
+        if _CREATIVE_LONGFORM_RE.search(prompt):
+            return "creative_writing", 0.85
 
         # Code generation: explicit patterns or language name + action verb
         if _CODE_GEN_RE.search(prompt) or (
@@ -454,12 +490,18 @@ class RequestClassifier:
         ):
             return "code_generation", 0.8
 
-        # Reasoning: proof / step-by-step / heavy math
-        if _REASONING_RE.search(prompt) or _STEP_BY_STEP_RE.search(prompt):
-            if _MATH_SYM_RE.search(prompt) or re.search(
-                r"\b(proof|theorem|derive|solve)\b", prompt, re.IGNORECASE
-            ):
-                return "reasoning", 0.8
+        # Reasoning: proof / step-by-step / heavy math. "prove" as bare verb
+        # is just as strong a signal as the noun "proof".
+        if (_REASONING_RE.search(prompt) or _STEP_BY_STEP_RE.search(prompt)) and (
+            _MATH_SYM_RE.search(prompt)
+            or re.search(
+                r"\b(prove|proof|theorem|derive|solve|irrational|rational|"
+                r"converges?|diverges?)\b",
+                prompt,
+                re.IGNORECASE,
+            )
+        ):
+            return "reasoning", 0.8
 
         # Extended reasoning patterns
         if _REASONING_EXTENDED_RE.search(prompt):
@@ -606,9 +648,9 @@ class RequestClassifier:
         otherwise we scan prompt + system prompt for keywords.
         """
         # Explicit override from caller
-        if override := request.metadata.get("sensitivity_level"):
-            if override in ("public", "internal", "confidential", "restricted"):
-                return override  # type: ignore[return-value]
+        override = request.metadata.get("sensitivity_level")
+        if override in ("public", "internal", "confidential", "restricted"):
+            return override  # type: ignore[return-value]
 
         combined = (request.raw_prompt + " " + (request.system_prompt or "")).lower()
         if _SENSITIVE_RESTRICTED_RE.search(combined):

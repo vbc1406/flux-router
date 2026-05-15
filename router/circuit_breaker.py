@@ -61,17 +61,16 @@ class CircuitBreaker:
 
             if entry["state"] == _OPEN:
                 elapsed = time.monotonic() - entry["opened_at"]
-                if elapsed >= self.recovery_timeout:
-                    # Transition to half-open; allow exactly one probe.
-                    if not entry["probe_in_flight"]:
-                        entry["state"] = _HALFOPEN
-                        entry["probe_in_flight"] = True
-                        log.info(
-                            "circuit_half_open",
-                            provider=provider,
-                            elapsed_s=round(elapsed, 1),
-                        )
-                        return True
+                # Transition to half-open; allow exactly one probe.
+                if elapsed >= self.recovery_timeout and not entry["probe_in_flight"]:
+                    entry["state"] = _HALFOPEN
+                    entry["probe_in_flight"] = True
+                    log.info(
+                        "circuit_half_open",
+                        provider=provider,
+                        elapsed_s=round(elapsed, 1),
+                    )
+                    return True
                 return False  # still open, no probe yet
 
             if entry["state"] == _HALFOPEN:

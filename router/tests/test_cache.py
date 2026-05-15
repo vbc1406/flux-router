@@ -84,12 +84,17 @@ class TestFingerprint:
         fp2 = fingerprint("hello world", None, [], None)
         assert fp1 == fp2
 
-    def test_date_removal(self):
+    def test_temporal_terms_preserved(self):
+        """
+        Temporal/freshness terms must change the fingerprint — a cached answer
+        to "what happened today" is wrong tomorrow.
+        """
         fp1 = fingerprint("What happened today?", None, [], None)
         fp2 = fingerprint("What happened?", None, [], None)
         fp3 = fingerprint("What happened currently?", None, [], None)
-        # "today" and "currently" stripped → similar hash as the bare question
-        assert fp1 == fp2 == fp3
+        assert fp1 != fp2
+        assert fp1 != fp3
+        assert fp2 != fp3
 
     def test_system_prompt_included(self):
         fp1 = fingerprint("Hello", "You are a pirate", [], None)

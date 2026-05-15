@@ -47,7 +47,7 @@ def _engine() -> RoutingEngine:
 
 
 def _req(prompt: str, **kw) -> RoutingRequest:
-    defaults = dict(user_id="u_expl", plan="business_plan", priority="normal")
+    defaults = {"user_id": "u_expl", "plan": "business_plan", "priority": "normal"}
     defaults.update(kw)
     defaults.setdefault("correlation_id", str(uuid.uuid4()))
     return RoutingRequest(raw_prompt=prompt, **defaults)

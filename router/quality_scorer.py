@@ -257,9 +257,7 @@ class QualityScorer:
         if _OPEN_FENCE_RE.search(text):
             return True
         # Ends on a word without sentence-ending punctuation in a substantial response
-        if len(stripped.split()) > 20 and stripped[-1] not in ".!?\"'`)]":
-            return True
-        return False
+        return len(stripped.split()) > 20 and stripped[-1] not in ".!?\"'`)]"
 
     @staticmethod
     def _score_latency(latency_ms: int) -> float:

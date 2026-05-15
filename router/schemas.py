@@ -93,7 +93,8 @@ class RoutingExplanation:
             f"Complexity: {self.complexity_score:.2f}"
             + (f" [{', '.join(self.complexity_modifiers)}]" if self.complexity_modifiers else ""),
             f"Tier: {self.tier_selected}",
-            f"Candidates: {self.candidates_considered} considered, {self.candidates_filtered} filtered",
+            f"Candidates: {self.candidates_considered} considered, "
+            f"{self.candidates_filtered} filtered",
         ]
         if self.filter_reasons:
             reason_summary: dict[str, int] = {}

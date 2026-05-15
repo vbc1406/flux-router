@@ -41,7 +41,7 @@ def _clf() -> RequestClassifier:
 
 
 def _req(prompt: str, **kw) -> RoutingRequest:
-    defaults = dict(user_id="u1", plan="pro_plan", priority="normal")
+    defaults = {"user_id": "u1", "plan": "pro_plan", "priority": "normal"}
     defaults.update(kw)
     return RoutingRequest(raw_prompt=prompt, **defaults)
 
@@ -355,12 +355,43 @@ class TestClassifierFallback:
         a = self.clf.analyze(_req("日本語で説明してください"))
         assert a.task_type != "unknown"
 
+    def test_extraction_return_json_from(self):
+        a = self.clf.analyze(
+            _req(
+                "Return JSON with company, ARR, and headcount from: "
+                "Acme has $12M ARR and 48 employees."
+            )
+        )
+        assert a.task_type == "extraction"
+
+    def test_code_review_race_condition(self):
+        a = self.clf.analyze(
+            _req("Find the race condition in this async worker design and propose a robust fix.")
+        )
+        assert a.task_type == "code_review"
+
+    def test_creative_writing_longform_scene(self):
+        a = self.clf.analyze(
+            _req("Write a polished 900-word opening scene for a cyberpunk mystery novel.")
+        )
+        assert a.task_type == "creative_writing"
+
+    def test_reasoning_prove_sqrt2_irrational(self):
+        a = self.clf.analyze(_req("Prove that sqrt(2) is irrational step by step."))
+        assert a.task_type == "reasoning"
+
+    def test_creative_longform_does_not_match_accident_scene(self):
+        """False-positive guard: bare 'scene' in non-fiction must NOT classify as creative."""
+        a = self.clf.analyze(_req("What happened at the accident scene?"))
+        assert a.task_type != "creative_writing"
+
     def test_general_complexity_is_mid(self):
         # general type should map to mid tier (base score 0.40 → mid range 0.30-0.60)
         # Use a longer prompt (≥15 words) to avoid the expected_short_response modifier.
         a = self.clf.analyze(
             _req(
-                "zorro quux frobble wibble bloop snorkel frob nork zing plonk baz qux quux grault garply"
+                "zorro quux frobble wibble bloop snorkel frob nork zing plonk "
+                "baz qux quux grault garply"
             )
         )
         assert a.task_type == "general"

@@ -59,19 +59,11 @@ log = structlog.get_logger(__name__)
 _CACHE_ENABLED_WARNING_EMITTED = False
 
 # Regex patterns compiled once at import time for < 1 ms fingerprinting.
+# NOTE: Temporal terms (today, now, dates, timestamps) are intentionally NOT
+# stripped — "what's the weather today" and "what's the weather" are different
+# questions, and collapsing them onto the same cache key would return stale
+# answers. Only harmless filler/whitespace normalization is applied.
 _WHITESPACE_RE = re.compile(r"\s+")
-_TIME_VARIANT_RE = re.compile(
-    r"\b(today|now|currently|yesterday|tomorrow|tonight|this\s+\w+)\b",
-    re.IGNORECASE,
-)
-_DATE_ISO_RE = re.compile(r"\b\d{4}[-/]\d{2}[-/]\d{2}\b")
-_DATE_HUMAN_RE = re.compile(
-    r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
-    r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|"
-    r"dec(?:ember)?)\s+\d{1,2},?\s+\d{4}\b",
-    re.IGNORECASE,
-)
-_TIMESTAMP_RE = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?\b", re.IGNORECASE)
 _FILLER_RE = re.compile(
     r"\b(please|can you|could you|i want you to|i need you to|hey|hi there|"
     r"kindly|would you|will you)\b",
@@ -85,10 +77,6 @@ def _normalize(text: str) -> str:
     different cache keys.  Order matters — whitespace collapse comes last.
     """
     text = text.lower()
-    text = _TIME_VARIANT_RE.sub("", text)
-    text = _DATE_ISO_RE.sub("", text)
-    text = _DATE_HUMAN_RE.sub("", text)
-    text = _TIMESTAMP_RE.sub("", text)
     text = _FILLER_RE.sub("", text)
     text = _WHITESPACE_RE.sub(" ", text).strip()
     # Remove spaces inserted before punctuation by earlier substitutions.
@@ -150,9 +138,7 @@ def is_cache_eligible(task_type: str, temperature: float | None) -> bool:
         return False
     if task_type not in CACHEABLE_TASK_TYPES:
         return False
-    if temperature is not None and temperature > 0.3:
-        return False
-    return True
+    return not (temperature is not None and temperature > 0.3)
 
 
 class _CacheEntry:

@@ -32,7 +32,6 @@ from router.fallback_chain import FallbackExecutor
 from router.provider_caller import ProviderCallError, _build_messages
 from router.schemas import ModelOption, RoutingDecision, RoutingRequest
 
-
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 

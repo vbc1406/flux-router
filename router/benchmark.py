@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import random
 import sys
 import time
@@ -266,7 +267,10 @@ _ARCH_SCENARIOS = [
 
 _THEOREMS = [
     "Prove that √2 is irrational using proof by contradiction. Show all algebraic steps.",
-    "Prove that there are infinitely many prime numbers using Euclid's original proof. Show ∑ notation where applicable.",
+    (
+        "Prove that there are infinitely many prime numbers using Euclid's "
+        "original proof. Show ∑ notation where applicable."
+    ),
     "Derive the quadratic formula from ax² + bx + c = 0 by completing the square. Show every step.",
     "Prove the Pythagorean theorem using geometric dissection methods. Include ∑ and ∫ notation.",
     "Prove and derive Bayes' theorem P(A|B) = P(B|A)P(A)/P(B) from first principles.",
@@ -621,10 +625,8 @@ def _extract_reasoning(reasoning: str) -> Tuple[str, float]:
     if "task=" in reasoning:
         task_type = reasoning.split("task=")[1].split(" |")[0].strip()
     if "complexity=" in reasoning:
-        try:
+        with contextlib.suppress(ValueError):
             complexity = float(reasoning.split("complexity=")[1].split(" |")[0].strip())
-        except ValueError:
-            pass
     return task_type, complexity
 
 
@@ -1136,9 +1138,8 @@ def print_section_g(inconsistencies: List[dict]) -> None:
         console.print("  [bold green]✓ All 20 prompts produced identical routing on both runs[/]")
     else:
         console.print(
-            "  [bold red]✗ {} inconsistency/ies detected (excluding expected A/B jitter):[/]".format(
-                len(inconsistencies)
-            )
+            f"  [bold red]✗ {len(inconsistencies)} inconsistency/ies "
+            "detected (excluding expected A/B jitter):[/]"
         )
         tbl = Table(box=box.SIMPLE)
         tbl.add_column("Prompt", min_width=40)
@@ -1275,15 +1276,24 @@ async def main() -> None:
         "What is the capital of France?",
         "Classify this review as positive or negative: 'Great product!'",
         "Summarize in one sentence: The earth is the third planet from the sun.",
-        "Build a complete REST API with authentication, rate limiting, pagination, and WebSocket support in FastAPI",
+        (
+            "Build a complete REST API with authentication, rate limiting, "
+            "pagination, and WebSocket support in FastAPI"
+        ),
         "hi",
         "Is Python compiled?",
         "Compare PostgreSQL vs MongoDB for a real-time analytics dashboard",
         "Extract all email addresses from: test@example.com, foo@bar.com",
-        "Design a complete system architecture for a multi-tenant SaaS platform with row-level security, audit logging, and soft deletes",
+        (
+            "Design a complete system architecture for a multi-tenant SaaS "
+            "platform with row-level security, audit logging, and soft deletes"
+        ),
         "What causes rain?",
         "Write a 500-word blog post about the future of renewable energy",
-        "Debug this code and explain every bug you find:\n```python\ndef foo(x):\n    return x/0\n```",
+        (
+            "Debug this code and explain every bug you find:\n"
+            "```python\ndef foo(x):\n    return x/0\n```"
+        ),
         "What is photosynthesis?",
         "Analyze the pros and cons of moving the company's infrastructure to the cloud",
         "Convert 100 USD to EUR",

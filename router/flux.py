@@ -255,10 +255,13 @@ def make_flux(api_key: SecretStr | str | None = None, **engine_kwargs) -> Flux:
     Keyword arguments are forwarded to RoutingEngine collaborators:
         adaptive_state_file — path for AdaptiveWeights JSON (default: None = in-memory).
         analytics_log_path  — path for analytics JSONL (default: None = disabled).
-        cache_enabled       — bool, default True.
+        cache_enabled       — bool, default False. The default response cache is
+                              process-wide and NOT segmented by user/tenant/sensitivity,
+                              so it MUST be opt-in. See SECURITY_ARCHITECTURE.md before
+                              enabling in any multi-tenant deployment.
     """
     registry = ModelRegistry()
-    cache = ResponseCache(enabled=engine_kwargs.pop("cache_enabled", True))
+    cache = ResponseCache(enabled=engine_kwargs.pop("cache_enabled", False))
     adaptive = AdaptiveWeights(state_file=engine_kwargs.pop("adaptive_state_file", None))
     analytics = RoutingAnalytics(log_path=engine_kwargs.pop("analytics_log_path", None))
     budget = BudgetTracker()

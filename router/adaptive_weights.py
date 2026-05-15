@@ -446,7 +446,7 @@ class AdaptiveWeights:
         )
 
     def _maybe_snapshot(self) -> None:
-        """Take a snapshot of global weights every _SNAPSHOT_INTERVAL signals (caller holds lock)."""
+        """Snapshot global weights every _SNAPSHOT_INTERVAL signals (caller holds lock)."""
         if self._total_signals > 0 and self._total_signals % _SNAPSHOT_INTERVAL == 0:
             snap_avg = self._avg_quality(self._state)
             self._snapshots.append(
