@@ -573,11 +573,17 @@ class RoutingEngine:
         # Change 1: routing_priority overrides the weight preset when set.
         weights = _get_weights_for_priority(request.routing_priority, request.priority)
 
-        for m in tier_candidates:
+        # Precompute normalized cost/latency once across the candidate set
+        # so scoring is O(M) instead of O(M²). Reused below for the verbose
+        # scoring_breakdown to avoid a second O(M²) pass.
+        norm_cost = _normalize_cost_vector(tier_candidates)
+        norm_latency = _normalize_latency_vector(tier_candidates)
+
+        for i, m in enumerate(tier_candidates):
             m.routing_score = (
                 m.adjusted_quality * weights["quality"]
-                + (1.0 - _normalize_cost(m, tier_candidates)) * weights["cost"]
-                + (1.0 - _normalize_latency(m, tier_candidates)) * weights["latency"]
+                + (1.0 - norm_cost[i]) * weights["cost"]
+                + (1.0 - norm_latency[i]) * weights["latency"]
             )
 
         # Fix 2: Context length penalty — reduce score for models whose window
@@ -625,13 +631,13 @@ class RoutingEngine:
         if expl:
             expl.tier_selected = target_tier
             expl.rules_fired.append("tier_selection")
-            for m in tier_candidates:
+            for i, m in enumerate(tier_candidates):
                 expl.scoring_breakdown.append(
                     {
                         "model": m.model_id,
                         "quality": m.adjusted_quality,
-                        "cost": 1.0 - _normalize_cost(m, tier_candidates),
-                        "latency": 1.0 - _normalize_latency(m, tier_candidates),
+                        "cost": 1.0 - norm_cost[i],
+                        "latency": 1.0 - norm_latency[i],
                         "score": m.routing_score,
                     }
                 )
@@ -1068,6 +1074,30 @@ def _normalize_latency(model: ModelOption, candidates: list[ModelOption]) -> flo
     if max_l == min_l:
         return 0.5
     return (model.avg_latency_ms - min_l) / (max_l - min_l)
+
+
+def _normalize_cost_vector(candidates: list[ModelOption]) -> list[float]:
+    """Vectorised single-pass equivalent of `_normalize_cost` over a candidate set.
+
+    Returns a list aligned with `candidates`: 0.0 = cheapest, 1.0 = most
+    expensive. All-equal costs collapse to 0.5 to match the scalar helper.
+    """
+    costs = [m.cost_per_1k_input + m.cost_per_1k_output for m in candidates]
+    min_c, max_c = min(costs), max(costs)
+    if max_c == min_c:
+        return [0.5] * len(candidates)
+    span = max_c - min_c
+    return [(c - min_c) / span for c in costs]
+
+
+def _normalize_latency_vector(candidates: list[ModelOption]) -> list[float]:
+    """Vectorised single-pass equivalent of `_normalize_latency`."""
+    latencies = [m.avg_latency_ms for m in candidates]
+    min_l, max_l = min(latencies), max(latencies)
+    if max_l == min_l:
+        return [0.5] * len(candidates)
+    span = max_l - min_l
+    return [(l - min_l) / span for l in latencies]
 
 
 def _get_tier_for_score(score: float) -> str:
