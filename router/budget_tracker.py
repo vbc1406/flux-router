@@ -26,8 +26,14 @@ Key Methods:
   the same; only the storage backend changes.
 
 Things NOT to change without discussion:
-  - The TOCTOU-safe lock pattern in would_exceed_budget() (reads plan, daily, monthly
-    under a single lock acquisition to prevent race conditions)
+  - The lock pattern in would_exceed_budget() that reads plan, daily, and monthly
+    spend under a single acquisition. This makes a single check internally
+    consistent — but note that the check→record window across calls is NOT
+    atomic: two concurrent requests can both pass the budget check before
+    either records spend, so daily/monthly caps can be exceeded by a small
+    margin under high concurrency. This is the standard pre-bill pattern;
+    operators who need a hard cap should record_spend BEFORE the provider
+    call and refund on failure, or wrap routing with their own mutex.
 """
 
 from __future__ import annotations
@@ -42,6 +48,19 @@ import structlog
 from .config import BUDGET_LEDGER_MAX_PER_USER, BUDGET_LIMITS
 
 log = structlog.get_logger(__name__)
+
+
+# Treating empty/None user_ids as a real key would silently pool spend across
+# all anonymous traffic; reject loudly instead so the caller bug is visible
+# at the failure site rather than as mysterious shared budgets later.
+_INVALID_USER_ID_MSG = "user_id must be a non-empty string"
+
+
+def _validate_user_id(user_id: str | None) -> str:
+    """Raise ValueError on empty/None/whitespace user_id. Returns the stripped id."""
+    if not isinstance(user_id, str) or not user_id.strip():
+        raise ValueError(_INVALID_USER_ID_MSG)
+    return user_id.strip()
 
 
 class _SpendRecord(NamedTuple):
@@ -82,6 +101,7 @@ class BudgetTracker:
         plan: str = "pro_plan",
     ) -> None:
         """Append a spend record. Also caches the user's plan for budget checks."""
+        user_id = _validate_user_id(user_id)
         with self._lock:
             self._plans[user_id] = plan
             self._ledger[user_id].append(
@@ -96,12 +116,14 @@ class BudgetTracker:
 
     def get_daily_spend(self, user_id: str) -> float:
         """Sum of spend for user_id within the current UTC day."""
+        user_id = _validate_user_id(user_id)
         today = datetime.now(timezone.utc).replace(tzinfo=None).date()
         with self._lock:
             return sum(r.amount for r in self._ledger[user_id] if r.timestamp.date() == today)
 
     def get_monthly_spend(self, user_id: str) -> float:
         """Sum of spend for user_id within the current UTC month."""
+        user_id = _validate_user_id(user_id)
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         with self._lock:
             return sum(
@@ -115,6 +137,7 @@ class BudgetTracker:
         Return the smaller of the remaining daily and monthly budget.
         Callers use this to know how much headroom is left before choosing a model.
         """
+        user_id = _validate_user_id(user_id)
         limits = BUDGET_LIMITS.get(plan, BUDGET_LIMITS["pro_plan"])
         daily_remaining = limits["daily"] - self.get_daily_spend(user_id)
         monthly_remaining = limits["monthly"] - self.get_monthly_spend(user_id)
@@ -127,9 +150,11 @@ class BudgetTracker:
         Return True if adding estimated_cost would push either the daily or
         monthly spend over the plan limit.
 
-        All reads (plan, daily spend, monthly spend) happen under a single lock
-        acquisition to avoid TOCTOU races under concurrent routing.
+        All reads (plan, daily spend, monthly spend) happen under a single
+        lock acquisition so this single check is internally consistent. The
+        check→record window across calls is not atomic (see module docstring).
         """
+        user_id = _validate_user_id(user_id)
         with self._lock:
             # Priority: explicitly-passed plan > previously-recorded plan > free_plan default.
             # Fail-closed (free_plan) for unknown users instead of fail-open (pro_plan).
@@ -155,6 +180,7 @@ class BudgetTracker:
         Return True if customer_id has already reached or exceeded daily_cap today.
         Change 4: Used by the routing engine to enforce per-request max_daily_cost.
         """
+        # get_daily_spend already validates the id.
         return self.get_daily_spend(customer_id) >= daily_cap
 
     def get_savings_report(self, user_id: str) -> dict:
@@ -162,6 +188,7 @@ class BudgetTracker:
         Compare actual spend vs what it would have cost using the most expensive
         model for every request.  Useful for ROI dashboards.
         """
+        user_id = _validate_user_id(user_id)
         with self._lock:
             records = list(self._ledger[user_id])
 
@@ -214,6 +241,7 @@ class DailyBudgetTracker:
         task_type: str = "unknown",
     ) -> None:
         """Record a spend event for customer_id."""
+        customer_id = _validate_user_id(customer_id)
         with self._lock:
             self._ledger[customer_id].append(
                 _SpendRecord(
@@ -233,6 +261,7 @@ class DailyBudgetTracker:
 
     def get_daily_spend(self, customer_id: str) -> float:
         """Sum of spend for customer_id within the current UTC day."""
+        customer_id = _validate_user_id(customer_id)
         today = datetime.now(timezone.utc).replace(tzinfo=None).date()
         with self._lock:
             return sum(r.amount for r in self._ledger[customer_id] if r.timestamp.date() == today)
@@ -242,10 +271,12 @@ class DailyBudgetTracker:
         Return True if customer_id has already spent >= daily_cap today.
         Called by the routing engine in Step 4 when request.max_daily_cost is set.
         """
+        # get_daily_spend already validates the id.
         return self.get_daily_spend(customer_id) >= daily_cap
 
     def get_report(self, customer_id: str) -> dict:
         """Today's spend summary for a customer."""
+        customer_id = _validate_user_id(customer_id)
         today = date.today()
         with self._lock:
             today_records = [r for r in self._ledger[customer_id] if r.timestamp.date() == today]
