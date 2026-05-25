@@ -252,12 +252,14 @@ class AdaptiveWeights:
                 if c_entry and c_entry.get("sample_count", 0) >= PER_CUSTOMER_MIN_SAMPLES:
                     adjusted = base_score + c_entry["adjustment"]
                     return round(max(_QUALITY_FLOOR, min(1.0, adjusted)), 4)
-            # Fall back to global
+            # Fall back to global. Stay inside the lock for the whole read —
+            # _update_ema mutates the entry dict in place, so dereferencing
+            # outside the lock could observe a torn EMA state.
             entry = self._state.get(key)
-        if not entry or entry.get("sample_count", 0) < ADAPTIVE_MIN_SAMPLES:
-            return base_score
-        adjusted = base_score + entry["adjustment"]
-        return round(max(_QUALITY_FLOOR, min(1.0, adjusted)), 4)
+            if not entry or entry.get("sample_count", 0) < ADAPTIVE_MIN_SAMPLES:
+                return base_score
+            adjusted = base_score + entry["adjustment"]
+            return round(max(_QUALITY_FLOOR, min(1.0, adjusted)), 4)
 
     def record_routing_event(
         self,
