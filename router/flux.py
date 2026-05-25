@@ -22,10 +22,31 @@ Example:
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import structlog
 from pydantic import SecretStr
+
+# Maps provider name (as used in models.json / ModelOption.provider) to the
+# environment variable users set their key in. Order doesn't matter; lookup
+# is by key.
+_PROVIDER_ENV_VARS: dict[str, str] = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "google": "GOOGLE_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "mistral": "MISTRAL_API_KEY",
+}
+
+
+def _load_keys_from_env() -> dict[str, SecretStr]:
+    out: dict[str, SecretStr] = {}
+    for provider, var in _PROVIDER_ENV_VARS.items():
+        val = os.environ.get(var)
+        if val:
+            out[provider] = SecretStr(val)
+    return out
 
 from . import errors as err
 from .adaptive_weights import AdaptiveWeights
@@ -75,6 +96,7 @@ class Flux:
         self,
         engine: RoutingEngine,
         api_key: SecretStr | str | None = None,
+        api_keys: dict[str, SecretStr | str] | None = None,
     ) -> None:
         self._engine = engine
         if api_key is None or isinstance(api_key, str):
@@ -83,6 +105,15 @@ class Flux:
             )
         else:
             self._api_key = api_key
+
+        # Per-provider keys: explicit `api_keys=` overrides env vars, which
+        # in turn override the legacy single `api_key=` (kept for back-compat
+        # and for OpenAI-compatible gateway setups where one key fits all).
+        merged: dict[str, SecretStr] = _load_keys_from_env()
+        if api_keys:
+            for prov, k in api_keys.items():
+                merged[prov.lower()] = SecretStr(k) if isinstance(k, str) else k
+        self._provider_keys: dict[str, SecretStr] = merged
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -223,7 +254,12 @@ class Flux:
         """
         from .provider_caller import ProviderCallError, call_provider
 
-        secret = self._api_key or request.provider_api_key
+        provider = model.provider.lower()
+        secret = (
+            self._provider_keys.get(provider)
+            or request.provider_api_key
+            or self._api_key
+        )
         api_key = secret.get_secret_value() if secret is not None else ""
         try:
             return await call_provider(model, request, api_key)
@@ -247,7 +283,11 @@ class Flux:
 # ── Factory helper ───────────────────────────────────────────────────────────
 
 
-def make_flux(api_key: SecretStr | str | None = None, **engine_kwargs) -> Flux:
+def make_flux(
+    api_key: SecretStr | str | None = None,
+    api_keys: dict[str, SecretStr | str] | None = None,
+    **engine_kwargs,
+) -> Flux:
     """
     Convenience factory that wires up a full RoutingEngine with sane defaults
     and returns a ready-to-use Flux instance.
@@ -276,4 +316,4 @@ def make_flux(api_key: SecretStr | str | None = None, **engine_kwargs) -> Flux:
         context_compressor=compressor,
         analytics=analytics,
     )
-    return Flux(engine, api_key=api_key)
+    return Flux(engine, api_key=api_key, api_keys=api_keys)

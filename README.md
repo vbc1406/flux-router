@@ -22,6 +22,59 @@ The model registry includes current-generation models from OpenAI, Anthropic, Go
 
 ---
 
+## Quickstart
+
+Install (from a clone):
+
+```bash
+pip install -e .
+```
+
+Export the keys for the providers you want Flux to route to. Each provider has
+its own variable — Flux dispatches the right one based on the model it picks:
+
+```bash
+export OPENAI_API_KEY=sk-...
+export ANTHROPIC_API_KEY=sk-ant-...
+export GOOGLE_API_KEY=...
+export GROQ_API_KEY=gsk_...
+export MISTRAL_API_KEY=...
+```
+
+You only need keys for the providers whose models you want eligible — missing
+keys mean those providers' models will fail at call time, so restrict the
+candidate set via routing constraints if you're only using a subset.
+
+Then:
+
+```python
+import asyncio
+from router.flux import make_flux
+
+flux = make_flux()  # reads keys from the env vars above
+resp = asyncio.run(flux.complete("Explain backpropagation in two sentences."))
+print(resp.text)
+print("routed to:", resp.model.display_name)
+```
+
+Programmatic alternatives:
+
+```python
+# One key for all providers (e.g., an OpenAI-compatible gateway like OpenRouter)
+flux = make_flux(api_key="sk-...")
+
+# Explicit per-provider keys (overrides env vars)
+flux = make_flux(api_keys={
+    "openai": "sk-...",
+    "anthropic": "sk-ant-...",
+})
+```
+
+Resolution order per request: explicit `api_keys=` / env var → per-request
+`provider_api_key` → legacy single `api_key=`.
+
+---
+
 ## What Flux Is Not
 
 - Not a hosted API. Flux runs in your infrastructure. Flux never calls an LLM to make routing decisions. In proxy mode, prompts are sent only to the selected provider.
