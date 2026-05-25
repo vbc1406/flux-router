@@ -153,6 +153,42 @@ class Flux:
             if attempts > max_retries:
                 break
 
+            # Re-check budget on each fallback attempt. The original routing
+            # decision passed the budget check, but spend recorded by other
+            # in-flight requests (or by the prior failed attempt's own logging,
+            # if any) may have pushed the user over the cap since then. Using
+            # decision.estimated_cost is a reasonable proxy — fallback models
+            # within a tier have similar costs, and we'd rather err toward
+            # stopping than blow the cap.
+            if attempts > 0:
+                plan = request.plan or "free_plan"
+                if self._engine._budget.would_exceed_budget(
+                    request.user_id, decision.estimated_cost, plan
+                ):
+                    last_error = "budget_exceeded"
+                    log.warning(
+                        "flux_fallback_skipped_budget",
+                        user_id=request.user_id,
+                        model=model.model_id,
+                        attempt=attempts,
+                    )
+                    attempts += 1
+                    continue
+                if request.max_daily_cost is not None:
+                    cust_id = request.customer_id or request.user_id
+                    if self._engine._daily_budget.is_cap_exceeded(
+                        cust_id, request.max_daily_cost
+                    ):
+                        last_error = "daily_cap_exceeded"
+                        log.warning(
+                            "flux_fallback_skipped_daily_cap",
+                            customer_id=cust_id,
+                            model=model.model_id,
+                            attempt=attempts,
+                        )
+                        attempts += 1
+                        continue
+
             try:
                 text = await self._call_model(model, request)
                 log.info(
