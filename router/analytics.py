@@ -229,7 +229,8 @@ class RoutingAnalytics:
             with self._path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(entry, default=str) + "\n")
                 fh.flush()
-                os.fsync(fh.fileno())
+                # No os.fsync: page-cache durability is enough for telemetry,
+                # and fsync-per-write was a 10-50ms bottleneck under load.
             # Restrict to owner read/write — analytics may contain user PII.
             # Best-effort: chmod can fail on Windows or unusual filesystems.
             try:
