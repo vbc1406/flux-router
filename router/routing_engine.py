@@ -55,7 +55,7 @@ import random
 import threading
 import time
 from collections import defaultdict, deque
-from datetime import datetime
+from datetime import datetime, timezone
 
 import structlog
 
@@ -277,7 +277,7 @@ class RoutingEngine:
                     context_was_compressed=False,
                     cost_blocked=False,
                     correlation_id=cid,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
                     priority_applied=request.routing_priority,
                 )
 
@@ -300,7 +300,7 @@ class RoutingEngine:
                 context_was_compressed=False,
                 cost_blocked=True,
                 correlation_id=cid,
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
                 priority_applied=request.routing_priority,
             )
 
@@ -352,7 +352,7 @@ class RoutingEngine:
                 reasoning="No models available matching request constraints",
                 routing_rule_matched="no_candidates",
                 correlation_id=cid,
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
                 cost_blocked=False,
                 priority_applied=request.routing_priority,
             )
@@ -409,7 +409,7 @@ class RoutingEngine:
                     ),
                     routing_rule_matched="daily_budget_exhausted",
                     correlation_id=cid,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
                     cost_blocked=True,
                     budget_exhausted=True,
                     priority_applied=request.routing_priority,
@@ -787,7 +787,7 @@ class RoutingEngine:
             context_was_compressed=compressed,
             cost_blocked=False,
             correlation_id=request.correlation_id,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
             priority_applied=priority_applied,
             confidence_fallback=confidence_fallback,
             budget_exhausted=budget_exhausted,

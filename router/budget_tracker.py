@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import threading
 from collections import defaultdict, deque
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import NamedTuple
 
 import structlog
@@ -90,19 +90,19 @@ class BudgetTracker:
                     model_id=model_id,
                     task_type=task_type,
                     correlation_id=correlation_id,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
                 )
             )
 
     def get_daily_spend(self, user_id: str) -> float:
         """Sum of spend for user_id within the current UTC day."""
-        today = datetime.utcnow().date()
+        today = datetime.now(timezone.utc).replace(tzinfo=None).date()
         with self._lock:
             return sum(r.amount for r in self._ledger[user_id] if r.timestamp.date() == today)
 
     def get_monthly_spend(self, user_id: str) -> float:
         """Sum of spend for user_id within the current UTC month."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         with self._lock:
             return sum(
                 r.amount
@@ -135,7 +135,7 @@ class BudgetTracker:
             # Fail-closed (free_plan) for unknown users instead of fail-open (pro_plan).
             resolved_plan = plan or self._plans.get(user_id, "free_plan")
             limits = BUDGET_LIMITS.get(resolved_plan, BUDGET_LIMITS["free_plan"])
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
             today = now.date()
             records = self._ledger[user_id]
             daily_spend = sum(r.amount for r in records if r.timestamp.date() == today)
@@ -221,7 +221,7 @@ class DailyBudgetTracker:
                     model_id=model_id,
                     task_type=task_type,
                     correlation_id=correlation_id,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
                 )
             )
         log.debug(
@@ -233,7 +233,7 @@ class DailyBudgetTracker:
 
     def get_daily_spend(self, customer_id: str) -> float:
         """Sum of spend for customer_id within the current UTC day."""
-        today = datetime.utcnow().date()
+        today = datetime.now(timezone.utc).replace(tzinfo=None).date()
         with self._lock:
             return sum(r.amount for r in self._ledger[customer_id] if r.timestamp.date() == today)
 

@@ -39,7 +39,7 @@ import math
 import threading
 import time
 from collections import defaultdict, deque
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -293,7 +293,7 @@ class AdaptiveWeights:
                     "model_id": model_id,
                     "task_type": task_type,
                     "cost": cost,
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
                 }
             )
 
@@ -402,7 +402,7 @@ class AdaptiveWeights:
                 "adjustment": 0.0,
                 "sample_count": 0,
                 "avg_quality": base_quality_rating,
-                "last_updated": datetime.utcnow().isoformat(),
+                "last_updated": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             }
         entry["avg_quality"] = (
             decay_factor * entry["avg_quality"] + (1.0 - decay_factor) * quality_score
@@ -411,7 +411,7 @@ class AdaptiveWeights:
         entry["avg_quality"] = max(_QUALITY_FLOOR, entry["avg_quality"])
         entry["adjustment"] = entry["avg_quality"] - base_quality_rating
         entry["sample_count"] += 1
-        entry["last_updated"] = datetime.utcnow().isoformat()
+        entry["last_updated"] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         return entry
 
     def _should_accept_signal(self, key: str, quality: float) -> bool:

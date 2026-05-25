@@ -36,7 +36,7 @@ import json
 import os
 import threading
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -94,7 +94,7 @@ class RoutingAnalytics:
         """Record a cache hit (no model was called)."""
         entry: dict[str, Any] = {
             "correlation_id": correlation_id,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             "cache_hit": True,
             "chosen_model": getattr(cached, "model_used", {}).model_id
             if hasattr(getattr(cached, "model_used", None), "model_id")
@@ -285,7 +285,7 @@ class RoutingAnalytics:
             entries = list(self._entries)
         if user_id:
             entries = [e for e in entries if e.get("user_id") == user_id]
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         if period == "day":
             entries = [e for e in entries if _parse_ts(e.get("timestamp", "")).date() == now.date()]
         elif period == "month":
