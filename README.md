@@ -75,11 +75,45 @@ Resolution order per request: explicit `api_keys=` / env var → per-request
 
 ---
 
+## How Flux compares
+
+Flux overlaps with LiteLLM, OpenRouter, and similar tools. The differences that matter:
+
+| | Flux | LiteLLM | OpenRouter |
+|---|---|---|---|
+| Routing decision | Pure-Python heuristic, ~0.2 ms P50 | Config-driven, no automatic per-task selection | Server-side, network round trip |
+| Per-task model selection | Yes (15 task types, complexity scoring) | Manual | Manual |
+| Adaptive learning from response quality | Yes (per-(model, task) EMA, optional per-customer) | No | No |
+| Typed fallback chains (rate-limit / timeout / content-filter) | Yes, separate per failure mode | Yes (single chain) | Yes |
+| Runs in your infrastructure | Yes | Yes | No (hosted) |
+| License | AGPL-3.0 (or commercial) | MIT | Proprietary |
+
+Use LiteLLM if you want a permissively-licensed SDK and you're happy choosing models yourself. Use OpenRouter if you want a managed gateway and don't mind sending traffic through a third party. Use Flux if you want per-request automatic model selection that learns from outcomes, running entirely in your own infrastructure.
+
+---
+
+## Documentation
+
+- [SECURITY_ARCHITECTURE.md](./SECURITY_ARCHITECTURE.md) — data flows, code-level guarantees, multi-tenant caveats
+- [CODEBASE_MAP.md](./CODEBASE_MAP.md) — directory layout and per-file purpose
+- [FEATURES.md](./FEATURES.md) — extension points for adding providers, models, or task types
+- [CHANGELOG.md](./CHANGELOG.md) — release notes
+- [DEBUG.md](./DEBUG.md) — troubleshooting
+
+---
+
+## Licensing
+
+Flux is licensed under **AGPL-3.0**. See [LICENSE](./LICENSE) for the full text. AGPL is fine if you're self-hosting Flux for your own use or shipping it as part of an open-source project.
+
+If you want to embed Flux in a closed-source product, offer Flux as a hosted service, or otherwise distribute it without releasing your own source under AGPL, you need a commercial license. Contact **licensing@flux.dev**.
+
+---
+
 ## What Flux Is Not
 
 - Not a hosted API. Flux runs in your infrastructure. Flux never calls an LLM to make routing decisions. In proxy mode, prompts are sent only to the selected provider.
 - Not a community project. Flux is built and maintained by the Flux team. Issues are welcome; pull requests are not currently accepted.
-- Not a free SaaS. AGPL-3.0 licensed for self-hosting. For commercial licensing or hosted offerings, contact licensing@flux.dev.
 
 ---
 
@@ -95,14 +129,6 @@ Flux is designed so that:
 For full guarantees and code-level verification steps, see [SECURITY_ARCHITECTURE.md](./SECURITY_ARCHITECTURE.md).
 
 To report a vulnerability, see [SECURITY.md](./SECURITY.md).
-
----
-
-## License
-
-Flux is licensed under **AGPL-3.0**. See [LICENSE](./LICENSE) for the full text.
-
-If you want to embed Flux in a closed-source product or offer Flux as a hosted service, contact licensing@flux.dev for a commercial license.
 
 ---
 
