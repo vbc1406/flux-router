@@ -38,7 +38,7 @@ import json
 import math
 import threading
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -98,6 +98,10 @@ class AdaptiveWeights:
         self._customer_log: dict[str, deque[dict[str, Any]]] = defaultdict(
             lambda: deque(maxlen=ADAPTIVE_CUSTOMER_LOG_MAX)
         )
+        # LRU recency tracking for _customer_state / _customer_log so that
+        # MAX_CUSTOMERS evicts the least-recently-active customer instead of
+        # freezing new customers out forever. Key = customer_id, value unused.
+        self._customer_lru: OrderedDict[str, None] = OrderedDict()
         self._dirty = 0  # updates since last flush
         self._total_signals = 0
         # Outlier detection: key → {mean, variance, count}
@@ -170,20 +174,10 @@ class AdaptiveWeights:
                 window.append(now)
 
             # Resource-exhaustion guard: a flood of unseen customer_ids would
-            # grow _customer_state without bound. Once the cap is hit, new
-            # customers are still served — they just don't get a per-customer
-            # EMA track until existing customers age out.
-            if (
-                customer_id
-                and customer_id not in self._customer_state
-                and len(self._customer_state) >= MAX_CUSTOMERS
-            ):
-                log.warning(
-                    "adaptive_max_customers_reached",
-                    limit=MAX_CUSTOMERS,
-                    customer_id=customer_id,
-                )
-                customer_id = None
+            # grow _customer_state without bound. When the cap is hit, evict
+            # the least-recently-active customer (LRU).
+            if customer_id:
+                self._touch_customer_lru(customer_id)
 
             # Resource-exhaustion guard: drop signals for unseen (model, task)
             # keys once the global state hits its cap. Existing keys continue
@@ -279,6 +273,9 @@ class AdaptiveWeights:
         Change 3: Called by the routing engine after every decision with a customer_id.
         """
         with self._lock:
+            # Routing events also count as customer activity — bump LRU so a
+            # busy read-only customer (no quality signals yet) isn't evicted.
+            self._touch_customer_lru(customer_id)
             clog = self._customer_log[customer_id]
             if len(clog) == clog.maxlen:
                 # Oldest entry is about to be silently dropped — surface it so ops can
@@ -378,6 +375,28 @@ class AdaptiveWeights:
         log.info("adaptive_decay_override_set", key=key, decay=decay)
 
     # ── Private ─────────────────────────────────────────────────────────────
+
+    def _touch_customer_lru(self, customer_id: str) -> None:
+        """Bump customer recency; evict the least-recently-active if at cap.
+
+        Caller MUST hold self._lock. Idempotent — re-touching an existing
+        customer is just a move_to_end. Eviction drops both _customer_state
+        and _customer_log for the evicted id so they stay in sync.
+        """
+        if customer_id in self._customer_lru:
+            self._customer_lru.move_to_end(customer_id)
+            return
+        if len(self._customer_lru) >= MAX_CUSTOMERS:
+            evicted_id, _ = self._customer_lru.popitem(last=False)
+            self._customer_state.pop(evicted_id, None)
+            self._customer_log.pop(evicted_id, None)
+            log.info(
+                "adaptive_customer_evicted_lru",
+                limit=MAX_CUSTOMERS,
+                evicted=evicted_id,
+                new=customer_id,
+            )
+        self._customer_lru[customer_id] = None
 
     @staticmethod
     def _avg_quality(state: dict) -> float:
@@ -529,6 +548,11 @@ class AdaptiveWeights:
                 self._state = data["global"]
                 for cid, cstate in data.get("customers", {}).items():
                     self._customer_state[cid] = cstate
+                    # Seed LRU in load order. Persisted order isn't a true
+                    # recency record, but it's better than starting empty —
+                    # otherwise the first MAX_CUSTOMERS new customers post-
+                    # restart would never trigger eviction of stale entries.
+                    self._customer_lru[cid] = None
                 if file_version < _FORMAT_VERSION:
                     # Schedule an immediate re-flush so the file is upgraded now.
                     self._dirty = _WRITE_INTERVAL
