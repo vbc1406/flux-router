@@ -83,6 +83,17 @@ The adaptive weights system records only:
 
 It never has access to prompt or response text.
 
+### Customer ID Must Come From Authenticated Context
+
+`RoutingRequest.customer_id` and `RoutingRequest.user_id` are plain string fields on the request schema. Flux treats them as **trusted identifiers** — the per-customer adaptive EMA, per-customer routing profile, and budget ledger are all keyed off of them.
+
+**In a multi-tenant deployment, you MUST populate these fields server-side from your authenticated session, not from anything the client controls.** If a client can set `customer_id` freely on the request body, they can:
+- Read another customer's learned routing preferences (via `get_customer_routing_profile`)
+- Pollute another customer's adaptive weights with bad-quality signals
+- Charge their spend against another customer's budget
+
+Flux does not authenticate. Your application layer must.
+
 ### File Writes Are Atomic
 
 State files (adaptive weights, analytics) are written via temp file + atomic rename. A process crash mid-write cannot corrupt your data.
