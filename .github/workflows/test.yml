@@ -35,3 +35,32 @@ jobs:
 
       - name: Run pytest
         run: pytest router/tests/ -v --timeout=30
+
+  # Validate the actual installable package (not the editable/dev setup): a
+  # clean `pip install .` must import and expose make_flux, and the shipped
+  # demo must run. This catches missing runtime deps and Python-version import
+  # breaks that the dev install (-r requirements*.txt) would otherwise hide.
+  package:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install the built package only
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+
+      - name: Import and construct from a clean install
+        run: python -c "import router; from router.flux import make_flux; make_flux()"
+
+      - name: Run the keyless demo
+        run: python -m router.demo
