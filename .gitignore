@@ -54,8 +54,10 @@ testing/router_core/
 # Packaging
 MANIFEST.in
 
-# Internal docs (not for public repo)
+# Internal docs / scratch / source dumps (not for public repo)
 INTERNAL_README.md
+routeengine.md
+weight review.txt
 
 # Review artifacts (never commit)
 flux_for_review.zip
