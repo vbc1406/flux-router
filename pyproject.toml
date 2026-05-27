@@ -9,7 +9,7 @@ description = "Intelligent LLM routing engine. Save 30-50% on AI costs automatic
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 license = {text = "AGPL-3.0-or-later"}
-authors = [{name = "Flux"}]
+authors = [{name = "Flux", email = "hello@flux.dev"}]
 keywords = ["llm", "routing", "ai", "cost-optimization", "openai", "anthropic"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -27,6 +27,12 @@ dependencies = [
     # Used by the shipped router.demo and router.benchmark modules.
     "rich>=13.0,<15.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/flux-ai/flux"
+Repository = "https://github.com/flux-ai/flux"
+Issues = "https://github.com/flux-ai/flux/issues"
+Changelog = "https://github.com/flux-ai/flux/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
