@@ -7,7 +7,7 @@ name = "flux-router"
 version = "1.0.0"
 description = "Intelligent LLM routing engine. Save 30-50% on AI costs automatically."
 readme = "README.md"
-requires-python = ">=3.9,<3.13"
+requires-python = ">=3.10,<3.13"
 license = {text = "AGPL-3.0-or-later"}
 authors = [{name = "Flux"}]
 keywords = ["llm", "routing", "ai", "cost-optimization", "openai", "anthropic"]
@@ -16,7 +16,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -51,7 +50,7 @@ router = ["models.json"]
 router = ["tests/*", "tests/**/*"]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
@@ -60,7 +59,7 @@ ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "B", "S", "C4", "SIM"]
