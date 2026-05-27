@@ -855,6 +855,25 @@ class RoutingEngine:
                 )
                 # Fix 4: Record success on the circuit breaker.
                 self._circuit_breaker.record_success(model.provider)
+                # Record actual spend so budget caps hold for proxy-mode calls.
+                # Without this, proxy traffic spends untracked money and
+                # would_exceed_budget always passes. Mirrors Flux.complete().
+                self._budget.record_spend(
+                    user_id=request.user_id,
+                    amount=decision.estimated_cost,
+                    model_id=model.model_id,
+                    correlation_id=request.correlation_id,
+                    task_type="unknown",
+                    plan=request.plan or "free_plan",
+                )
+                if request.max_daily_cost is not None:
+                    self._daily_budget.record_spend(
+                        customer_id=request.customer_id or request.user_id,
+                        amount=decision.estimated_cost,
+                        model_id=model.model_id,
+                        correlation_id=request.correlation_id,
+                        task_type="unknown",
+                    )
                 decision.proxy_response = response
                 decision.proxy_model_used = model
                 return decision
