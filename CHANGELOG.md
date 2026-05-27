@@ -23,4 +23,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Path traversal protection on all file-path inputs (C4)
 - Resource exhaustion caps on adaptive state dicts (C5)
 
-[1.0.0]: https://github.com/flux-ai/flux/releases/tag/v1.0.0
+[1.0.0]: https://github.com/vbc1406/flux/releases/tag/v1.0.0

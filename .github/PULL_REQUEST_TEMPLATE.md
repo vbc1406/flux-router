@@ -6,7 +6,7 @@
   provenance unambiguous (Flux is dual-licensed AGPL-3.0 / commercial).
 
   Please open an issue describing your fix or feature instead:
-  https://github.com/flux-ai/flux/issues
+  https://github.com/vbc1406/flux/issues
 
   See CONTRIBUTING.md for details.
 -->

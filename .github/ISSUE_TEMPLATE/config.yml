@@ -1,7 +1,7 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/flux-ai/flux/blob/main/SECURITY.md
+    url: https://github.com/vbc1406/flux/blob/main/SECURITY.md
     about: Do NOT open a public issue. Email security@flux.dev — see SECURITY.md.
   - name: Commercial / licensing questions
     url: mailto:licensing@flux.dev
