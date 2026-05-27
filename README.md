@@ -30,6 +30,19 @@ Install (from a clone):
 pip install -e .
 ```
 
+Try it with **no API keys** — the demo routes 25 sample prompts through the full
+stack with mocked provider calls and prints what it picked for each:
+
+```bash
+python -m router.demo
+```
+
+For an interactive prompt that routes what you type (needs real keys, see below):
+
+```bash
+python examples/chat.py
+```
+
 Export the keys for the providers you want Flux to route to. Each provider has
 its own variable — Flux dispatches the right one based on the model it picks:
 
@@ -81,7 +94,7 @@ Flux overlaps with LiteLLM, OpenRouter, and similar tools. The differences that 
 
 | | Flux | LiteLLM | OpenRouter |
 |---|---|---|---|
-| Routing decision | Pure-Python heuristic, ~0.2 ms P50 | Config-driven, no automatic per-task selection | Server-side, network round trip |
+| Routing decision | Pure-Python heuristic, sub-millisecond (~0.6 ms P50) | Config-driven, no automatic per-task selection | Server-side, network round trip |
 | Per-task model selection | Yes (15 task types, complexity scoring) | Manual | Manual |
 | Adaptive learning from response quality | Yes (per-(model, task) EMA, optional per-customer) | No | No |
 | Typed fallback chains (rate-limit / timeout / content-filter) | Yes, separate per failure mode | Yes (single chain) | Yes |
