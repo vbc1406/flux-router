@@ -22,6 +22,7 @@ from pathlib import Path
 # `pip install -e .` first (mirrors router/demo.py).
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from router.errors import FluxAPIError
 from router.flux import make_flux
 
 
@@ -43,10 +44,17 @@ async def main() -> None:
         if prompt.lower() in {"quit", "exit"}:
             break
 
-        resp = await flux.complete(
-            prompt,
-            routing_priority="cost-optimized",
-        )
+        try:
+            resp = await flux.complete(
+                prompt,
+                routing_priority="cost-optimized",
+            )
+        except FluxAPIError as exc:
+            # Most common cause: no/invalid API key for the chosen provider.
+            # Print and keep the loop alive instead of crashing the REPL.
+            print(f"\n[error] request failed: {exc}")
+            print("        (is the API key set for the provider Flux picked?)\n")
+            continue
 
         print(f"\n{resp.text}\n")
         print(
