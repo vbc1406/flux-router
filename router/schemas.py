@@ -133,6 +133,10 @@ class RoutingRequest(BaseModel):
     max_tokens_requested: int | None = None
     user_id: str = Field(..., min_length=1, max_length=256)
     team_id: str | None = Field(default=None, max_length=256)
+    # `plan` selects the budget ceiling (business_plan = highest). Like
+    # user_id/customer_id, it is a TRUSTED field: populate it server-side from
+    # the authenticated session, never from client input, or a caller can grant
+    # itself a higher spending limit. See SECURITY_ARCHITECTURE.md.
     plan: Literal["free_plan", "pro_plan", "business_plan"] = "pro_plan"
     priority: Literal["low", "normal", "high", "critical"] = "normal"
     required_capabilities: list[str] = Field(default_factory=list)

@@ -83,14 +83,17 @@ The adaptive weights system records only:
 
 It never has access to prompt or response text.
 
-### Customer ID Must Come From Authenticated Context
+### Identity and Budget Fields Must Come From Authenticated Context
 
 `RoutingRequest.customer_id` and `RoutingRequest.user_id` are plain string fields on the request schema. Flux treats them as **trusted identifiers** — the per-customer adaptive EMA, per-customer routing profile, and budget ledger are all keyed off of them.
 
-**In a multi-tenant deployment, you MUST populate these fields server-side from your authenticated session, not from anything the client controls.** If a client can set `customer_id` freely on the request body, they can:
+The same applies to the fields that select or raise a request's spending limits: **`plan`**, **`max_daily_cost`**, and **`max_cost_per_request`**. `plan` maps directly to a daily budget ceiling (e.g. `business_plan` → the highest tier), and the two cost-cap fields override the per-request and per-day limits.
+
+**In a multi-tenant deployment, you MUST populate all of these fields server-side from your authenticated session, not from anything the client controls.** If a client can set them freely on the request body, they can:
 - Read another customer's learned routing preferences (via `get_customer_routing_profile`)
 - Pollute another customer's adaptive weights with bad-quality signals
-- Charge their spend against another customer's budget
+- Charge their spend against another customer's budget (via `customer_id`/`user_id`)
+- Grant themselves a higher spending limit by claiming a more expensive `plan` or raising `max_daily_cost` / `max_cost_per_request`
 
 Flux does not authenticate. Your application layer must.
 
