@@ -306,22 +306,39 @@ class RoutingEngine:
 
         # ══ STEP 4: HARD CONSTRAINT FILTERING ═══════════════════════════════
         all_models = self._registry.all_available_models()
+        # Evaluate hard constraints and the provider circuit exactly once per
+        # model. is_available() has side effects (OPEN→HALF-OPEN transition,
+        # consumes the single half-open probe slot), so calling it a second
+        # time to build the verbose explanation could spend a probe spuriously
+        # and mislabel a recovering circuit. We only probe the circuit for
+        # models that otherwise pass constraints — matching the original
+        # short-circuit — and reuse the cached results below. (Fix 4)
+        passes_constraints = {
+            m.model_id: _passes_hard_constraints(m, request, analysis, self._registry)
+            for m in all_models
+        }
+        circuit_ok = {
+            m.model_id: self._circuit_breaker.is_available(m.provider)
+            for m in all_models
+            if passes_constraints[m.model_id]
+        }
         candidates = [
             m
             for m in all_models
-            if _passes_hard_constraints(m, request, analysis, self._registry)
-            # Fix 4: Skip models whose provider circuit is open.
-            and self._circuit_breaker.is_available(m.provider)
+            if passes_constraints[m.model_id] and circuit_ok.get(m.model_id, False)
         ]
         if expl:
             expl.candidates_considered = len(all_models)
             expl.candidates_filtered = len(all_models) - len(candidates)
             for m in all_models:
                 if m not in candidates:
-                    if not self._circuit_breaker.is_available(m.provider):
-                        expl.filter_reasons[m.model_id] = "circuit_open"
-                    elif not _passes_hard_constraints(m, request, analysis, self._registry):
+                    # A model that fails constraints never had its circuit
+                    # probed (short-circuit), so report the constraint miss;
+                    # otherwise it passed constraints and the circuit is why.
+                    if not passes_constraints[m.model_id]:
                         expl.filter_reasons[m.model_id] = "missing_cap"
+                    else:
+                        expl.filter_reasons[m.model_id] = "circuit_open"
 
         # Change 4: Per-request cost cap — filter out models whose estimated
         # cost exceeds max_cost_per_request before any other scoring.
