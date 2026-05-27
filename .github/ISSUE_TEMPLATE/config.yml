@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/flux-ai/flux/blob/main/SECURITY.md
+    about: Do NOT open a public issue. Email security@flux.dev — see SECURITY.md.
+  - name: Commercial / licensing questions
+    url: mailto:licensing@flux.dev
+    about: For commercial licensing (Flux is AGPL-3.0 by default).
