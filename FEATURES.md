@@ -129,7 +129,7 @@ VALID_ROUTING_PRIORITIES: frozenset[str] = frozenset({
 "latency-first": {"quality": 0.20, "cost": 0.20, "latency": 0.60},
 ```
 
-**Step 2:** `schemas.py` — no change needed (routing_priority is a free string validated at call time).
+**Step 2:** `schemas.py` — widen the `routing_priority` `Literal[...]` on `RoutingRequest` to include `"latency-first"`. Pydantic rejects values outside the Literal at request construction, so this must be updated in lockstep with `VALID_ROUTING_PRIORITIES`.
 
 **Step 3: Implementation** — `routing_engine.py` `_get_weights_for_priority()`: add `"latency-first"` to the dispatch, same pattern as `"quality-first"`.
 
