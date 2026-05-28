@@ -49,8 +49,8 @@ COMPLEXITY_BASE_SCORES: dict[str, float] = {
 
 # Additive modifiers applied on top of the base score when a signal is detected.
 # Positive values increase complexity (→ higher tier); negative values decrease it.
-# How to tune: inspect verbose REPL output (`python testing/router_tester.py --verbose`)
-# to see which modifiers are firing for a given prompt, then adjust.
+# How to tune: instantiate RequestClassifier and inspect which modifiers
+# fire for a given prompt (see DEBUG.md "Bad Routing Decisions"), then adjust.
 # What breaks if changed: global complexity distribution shifts for all affected prompts.
 COMPLEXITY_MODIFIERS: dict[str, float] = {
     "input_tokens_gt_2000": +0.10,  # large context → more demanding

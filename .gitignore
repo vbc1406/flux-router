@@ -39,13 +39,6 @@ adaptive_state.json
 routing_analytics.jsonl
 *.jsonl
 
-# Generated benchmark outputs (raw data — keep benchmark_report.txt as it's narrative)
-testing/benchmark_results.json
-testing/benchmark_summary.csv
-
-# Old unpatched router copies — never commit
-testing/router_core/
-
 # IDE
 .DS_Store
 .idea/

@@ -9,14 +9,8 @@ pytest -v
 # Run a specific test file
 pytest -v router/tests/test_routing.py
 
-# Run interactive router REPL (test any prompt manually)
-python testing/router_tester.py
-
-# Run with verbose mode (shows all 13 steps, filter reasons, sigmoid math)
-python testing/router_tester.py --verbose
-
-# Run a batch of prompts
-python testing/router_tester.py --batch testing/test_prompts.txt
+# Try the keyless demo (shows routing decisions on canned prompts)
+python -m router.demo
 
 # Tail the live analytics log
 tail -f router/routing_analytics.jsonl | python -m json.tool
@@ -84,10 +78,11 @@ adaptive_quality_clamped          key=model:task original=X
 **Symptoms:** Requests are routed to obviously wrong models (too cheap for complex tasks, too expensive for trivial ones).
 
 **Where to check:**
-1. **Classifier output** — run the REPL with `--verbose` to see the full `TaskAnalysis`. Is the `task_type` and `complexity_score` sensible?
-   ```
-   python testing/router_tester.py --verbose
-   > Your prompt here
+1. **Classifier output** — instantiate `RequestClassifier` and inspect the full `TaskAnalysis` for the prompt. Is the `task_type` and `complexity_score` sensible?
+   ```python
+   from router.classifier import RequestClassifier
+   from router.schemas import RoutingRequest
+   print(RequestClassifier().analyze(RoutingRequest(prompt="Your prompt here")))
    ```
 2. **Tier boundaries** — `TIER_BOUNDARIES` in `config.py`. Is the complexity score landing in the right tier?
 3. **Scoring weights** — `SCORING_WEIGHTS` in `config.py`. A `cost-optimized` routing priority will always prefer cheaper models.

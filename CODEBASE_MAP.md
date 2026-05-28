@@ -9,7 +9,7 @@ New engineer? Do this in order:
 3. Read `router/schemas.py` — understand the data contracts (10 min)
 4. Read the `routing_engine.py` header comment, then skim the 13-step `route()` method (15 min)
 5. Run the tests: `pytest -v` (2 min)
-6. Try the interactive tester: `python testing/router_tester.py` (5 min)
+6. Try the keyless demo: `python -m router.demo` (5 min)
 7. Read `DEBUG.md` so you know how to diagnose problems (5 min)
 
 Total: ~50 minutes before writing your first line of code.
@@ -19,7 +19,7 @@ Total: ~50 minutes before writing your first line of code.
 ## Directory Structure
 
 ```
-vibecode/
+flux/
 ├── router/                        ← Main package (all production logic lives here)
 │   ├── __init__.py                ← Public API surface: RoutingEngine, RoutingRequest, RoutingDecision
 │   ├── config.py                  ← ALL tunable constants — the single source of truth
@@ -55,16 +55,6 @@ vibecode/
 │       ├── test_smart_retry.py          ← Retry and fallback tests
 │       └── test_sticky_model.py         ← Conversation sticky bias tests
 │
-├── testing/                       ← Manual and batch testing tools (separate from unit tests)
-│   ├── router_tester.py           ← Interactive REPL for live routing decisions
-│   ├── batch_runner.py            ← Batch mode: run many prompts, output table + CSV
-│   ├── large_benchmark.py         ← Large-scale performance benchmark
-│   ├── test_prompts.txt           ← 20+ diverse prompts used by batch tools
-│   ├── benchmark_results.json     ← Latest benchmark output
-│   ├── benchmark_summary.csv      ← CSV summary of benchmark run
-│   ├── benchmark_report.txt       ← Human-readable benchmark report
-│   └── README.md                  ← How to use the testing tools
-│
 ├── CODEBASE_MAP.md                ← This file
 ├── FEATURES.md                    ← How to add new features
 ├── DEBUG.md                       ← How to diagnose common problems
@@ -98,7 +88,6 @@ Every value has a comment explaining what it does, why it exists, and how to tun
 
 ### Tests
 Unit and integration tests → `router/tests/test_*.py`
-Manual/interactive tests → `testing/`
 Run all tests: `pytest -v`
 Run one file: `pytest -v router/tests/test_routing.py`
 
