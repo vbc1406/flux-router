@@ -30,6 +30,14 @@ htmlcov/
 .env
 .env.*
 
+# Secrets / credentials (defense-in-depth — none currently exist)
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+id_rsa*
+
 # Local agent settings (Claude Code, Cursor, etc.)
 .claude/
 .cursor/

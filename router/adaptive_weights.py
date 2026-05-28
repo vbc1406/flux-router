@@ -390,6 +390,7 @@ class AdaptiveWeights:
             evicted_id, _ = self._customer_lru.popitem(last=False)
             self._customer_state.pop(evicted_id, None)
             self._customer_log.pop(evicted_id, None)
+            self._record_rate_limit.pop(evicted_id, None)
             log.info(
                 "adaptive_customer_evicted_lru",
                 limit=MAX_CUSTOMERS,
