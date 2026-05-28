@@ -59,6 +59,7 @@ from router.config import ADAPTIVE_MIN_SAMPLES, PER_CUSTOMER_MIN_SAMPLES
 
 @dataclass
 class TestMetrics:
+    __test__ = False  # tell pytest this dataclass is not a test class
     test_name: str
     initial_state: dict[str, Any]
     action_description: str

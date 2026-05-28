@@ -28,6 +28,17 @@ from dataclasses import dataclass
 import structlog
 from pydantic import SecretStr
 
+from . import errors as err
+from .adaptive_weights import AdaptiveWeights
+from .analytics import RoutingAnalytics
+from .budget_tracker import BudgetTracker
+from .cache import ResponseCache
+from .classifier import RequestClassifier
+from .context_compressor import ContextCompressor
+from .model_registry import ModelRegistry
+from .routing_engine import RoutingEngine
+from .schemas import ModelOption, RoutingDecision, RoutingRequest
+
 # Maps provider name (as used in models.json / ModelOption.provider) to the
 # environment variable users set their key in. Order doesn't matter; lookup
 # is by key.
@@ -48,16 +59,6 @@ def _load_keys_from_env() -> dict[str, SecretStr]:
             out[provider] = SecretStr(val)
     return out
 
-from . import errors as err
-from .adaptive_weights import AdaptiveWeights
-from .analytics import RoutingAnalytics
-from .budget_tracker import BudgetTracker
-from .cache import ResponseCache
-from .classifier import RequestClassifier
-from .context_compressor import ContextCompressor
-from .model_registry import ModelRegistry
-from .routing_engine import RoutingEngine
-from .schemas import ModelOption, RoutingDecision, RoutingRequest
 
 log = structlog.get_logger(__name__)
 

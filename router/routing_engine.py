@@ -1133,7 +1133,7 @@ def _normalize_latency_vector(candidates: list[ModelOption]) -> list[float]:
     if max_l == min_l:
         return [0.5] * len(candidates)
     span = max_l - min_l
-    return [(l - min_l) / span for l in latencies]
+    return [(lat - min_l) / span for lat in latencies]
 
 
 def _get_tier_for_score(score: float) -> str:
