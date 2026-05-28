@@ -2,7 +2,7 @@ blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
     url: https://github.com/vbc1406/flux/blob/main/SECURITY.md
-    about: Do NOT open a public issue. Email security@flux.dev — see SECURITY.md.
+    about: Do NOT open a public issue. Email fluxllmdev@gmail.com — see SECURITY.md.
   - name: Commercial / licensing questions
-    url: mailto:licensing@flux.dev
+    url: mailto:fluxllmdev@gmail.com
     about: For commercial licensing (Flux is AGPL-3.0 by default).

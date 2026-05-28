@@ -119,7 +119,7 @@ Use LiteLLM if you want a permissively-licensed SDK and you're happy choosing mo
 
 Flux is licensed under **AGPL-3.0**. See [LICENSE](./LICENSE) for the full text. AGPL is fine if you're self-hosting Flux for your own use or shipping it as part of an open-source project.
 
-If you want to embed Flux in a closed-source product, offer Flux as a hosted service, or otherwise distribute it without releasing your own source under AGPL, you need a commercial license. Contact **licensing@flux.dev**.
+If you want to embed Flux in a closed-source product, offer Flux as a hosted service, or otherwise distribute it without releasing your own source under AGPL, you need a commercial license. Contact **fluxllmdev@gmail.com**.
 
 ---
 
@@ -148,6 +148,6 @@ To report a vulnerability, see [SECURITY.md](./SECURITY.md).
 ## Contact
 
 - Bug reports: GitHub Issues
-- Security: security@flux.dev
-- Licensing: licensing@flux.dev
-- Everything else: hello@flux.dev
+- Security: fluxllmdev@gmail.com
+- Licensing: fluxllmdev@gmail.com
+- Everything else: fluxllmdev@gmail.com

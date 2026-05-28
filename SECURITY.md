@@ -4,7 +4,7 @@
 
 If you discover a security vulnerability in Flux, please report it responsibly:
 
-- **Email:** security@flux.dev
+- **Email:** fluxllmdev@gmail.com
 - **Do NOT open a public GitHub issue** for security vulnerabilities
 - **Subject line:** [SECURITY] Brief description
 

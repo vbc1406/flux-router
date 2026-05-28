@@ -9,7 +9,7 @@ description = "Intelligent LLM routing engine. Save 30-50% on AI costs automatic
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 license = {text = "AGPL-3.0-or-later"}
-authors = [{name = "Flux", email = "hello@flux.dev"}]
+authors = [{name = "Flux", email = "fluxllmdev@gmail.com"}]
 keywords = ["llm", "routing", "ai", "cost-optimization", "openai", "anthropic"]
 classifiers = [
     "Development Status :: 4 - Beta",

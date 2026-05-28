@@ -29,7 +29,7 @@ A good bug report includes:
 
 ## Security issues
 
-Do **not** open a public issue for vulnerabilities. Email security@flux.dev —
+Do **not** open a public issue for vulnerabilities. Email fluxllmdev@gmail.com —
 see [SECURITY.md](./SECURITY.md) for the disclosure process.
 
 ## Trying it locally

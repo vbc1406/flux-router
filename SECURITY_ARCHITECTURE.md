@@ -144,10 +144,10 @@ Every claim above can be verified by reading the code:
 
 You can also run the security audit yourself:
 
-If you find a discrepancy between this document and the code, please report it to security@flux.dev — that is a security issue.
+If you find a discrepancy between this document and the code, please report it to fluxllmdev@gmail.com — that is a security issue.
 
 ---
 
 ## Reporting Issues
 
-Report security issues to security@flux.dev. See SECURITY.md for our full disclosure process.
+Report security issues to fluxllmdev@gmail.com. See SECURITY.md for our full disclosure process.
