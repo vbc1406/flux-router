@@ -35,12 +35,21 @@ _SCORE_RE = re.compile(r"\b(10|[1-9])\b")
 class Judge:
     """Calls a provider to score an answer. Constructed only for live runs."""
 
-    def __init__(self, model: ModelOption, api_key: str) -> None:
+    def __init__(self, model: ModelOption, api_key: str, cache=None) -> None:
         self._model = model
         self._api_key = api_key
+        self._cache = cache  # optional DiskCache; verdicts keyed by answer text
 
     async def score(self, sample: "EvalSample", completion: "Completion") -> float:
         from ...provider_caller import ProviderCallError, call_provider
+        from ..cache import make_key
+
+        cache_key = None
+        if self._cache is not None and self._cache.enabled:
+            cache_key = make_key("judge", self._model.model_id, sample.id, completion.text)
+            hit = self._cache.get(cache_key)
+            if hit is not None:
+                return float(hit["score"])
 
         prompt = _RUBRIC.format(prompt=sample.prompt, answer=completion.text)
         request = RoutingRequest(raw_prompt=prompt, user_id="flux-eval-judge", temperature=0.0)
@@ -49,7 +58,10 @@ class Judge:
         except ProviderCallError as exc:
             log.warning("judge_call_failed", model=self._model.model_id, error=str(exc))
             return 0.0
-        return _parse_score(raw)
+        score = _parse_score(raw)
+        if cache_key is not None:
+            self._cache.set(cache_key, {"score": score})
+        return score
 
 
 def _parse_score(raw: str) -> float:
@@ -61,7 +73,7 @@ def _parse_score(raw: str) -> float:
 
 
 def make_judge(
-    registry: ModelRegistry, model_id: str, api_keys: dict[str, str]
+    registry: ModelRegistry, model_id: str, api_keys: dict[str, str], cache=None
 ) -> Judge:
     """Build a Judge for ``model_id`` using the matching provider key."""
     model = registry.get_model(model_id)
@@ -76,7 +88,7 @@ def make_judge(
             f"No API key for judge provider '{model.provider}'. "
             f"Set the appropriate *_API_KEY env var."
         )
-    return Judge(model, key)
+    return Judge(model, key, cache=cache)
 
 
 async def grade_llm_judge(
