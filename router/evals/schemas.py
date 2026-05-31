@@ -49,6 +49,10 @@ class Completion:
     cost: float
     latency_ms: int
     simulated: bool = False
+    # Mock mode only: the simulated quality the LLM judge should report for
+    # open-ended samples (objective samples encode correctness in .text instead).
+    # None in live mode — the real judge scores the real text.
+    sim_quality: float | None = None
 
 
 @dataclass

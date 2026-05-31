@@ -57,10 +57,7 @@ _MTBENCH_TASK_TYPE = {
 
 def _extract_gsm8k_answer(answer_field: str) -> str:
     """Pull the canonical final number out of a GSM8K answer string."""
-    if "####" in answer_field:
-        tail = answer_field.split("####")[-1]
-    else:
-        tail = answer_field
+    tail = answer_field.split("####")[-1] if "####" in answer_field else answer_field
     nums = re.findall(r"-?\d[\d,]*\.?\d*", tail)
     return nums[-1].replace(",", "") if nums else tail.strip()
 
