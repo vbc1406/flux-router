@@ -16,7 +16,7 @@ import structlog
 from ..flux import make_flux
 from ..schemas import RoutingRequest
 from .cache import DiskCache, make_key
-from .completions import get_completion
+from .completions import LiveCompletionError, get_completion
 from .datasets import DATASETS, load_datasets
 from .graders import grade, make_judge
 from .schemas import Completion, GradedResult
@@ -104,7 +104,20 @@ async def run_eval(config: RunConfig) -> RunOutput:
                 exploration_rate=0.0,
             )
             model = await pick_model(strategy, request, engine, registry)
-            comp = await _completion(cache, model, sample, config.mode, api_keys, config.seed)
+            try:
+                comp = await _completion(
+                    cache, model, sample, config.mode, api_keys, config.seed
+                )
+            except LiveCompletionError as exc:
+                skipped += 1
+                log.warning(
+                    "eval_completion_skipped",
+                    strategy=strategy,
+                    sample=sample.id,
+                    model=model.model_id,
+                    error=str(exc),
+                )
+                continue
             quality, correct = await grade(
                 sample, comp, allow_code_exec=config.allow_code_exec, judge=judge
             )

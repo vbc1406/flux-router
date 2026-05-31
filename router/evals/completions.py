@@ -18,10 +18,19 @@ estimate_tokens() heuristic so mock and live accounting match.
 from __future__ import annotations
 
 import random
+import time
 
 from ..classifier import estimate_tokens
-from ..schemas import ModelOption
+from ..schemas import ModelOption, RoutingRequest
 from .schemas import Completion, EvalSample
+
+
+class LiveCompletionError(Exception):
+    """A live completion could not be produced (missing key or provider failure).
+
+    The runner catches this and skips the (sample, strategy) pair rather than
+    crashing the whole run or scoring an infra gap as zero quality.
+    """
 
 # Fallback quality by tier when a model has no rating for the task type.
 _TIER_DEFAULT_QUALITY = {"free": 0.55, "cheap": 0.70, "mid": 0.82, "premium": 0.92}
@@ -144,5 +153,45 @@ def _mock_completion(model: ModelOption, sample: EvalSample, seed: str) -> Compl
 async def _live_completion(
     model: ModelOption, sample: EvalSample, api_keys: dict, max_tokens: int
 ) -> Completion:
-    # Wired in Phase 5 (real provider_caller.call_provider with a forced model).
-    raise NotImplementedError("Live completions are wired in Phase 5 (--live).")
+    """Call the real provider for ``model`` with the sample's prompt.
+
+    The model is forced — we call provider_caller directly rather than routing —
+    so each strategy/baseline hits exactly the model it selected. temperature=0
+    keeps answers as reproducible as the provider allows.
+    """
+    from ..provider_caller import ProviderCallError, call_provider
+
+    provider = model.provider.lower()
+    key = api_keys.get(provider)
+    if not key:
+        raise LiveCompletionError(
+            f"no API key for provider '{provider}' — set {provider.upper()}_API_KEY"
+        )
+
+    request = RoutingRequest(
+        raw_prompt=sample.prompt,
+        user_id="flux-eval",
+        max_tokens_requested=max_tokens,
+        temperature=0.0,
+    )
+    t0 = time.perf_counter()
+    try:
+        text = await call_provider(model, request, key)
+    except ProviderCallError as exc:
+        raise LiveCompletionError(f"provider call failed for {model.model_id}: {exc}") from exc
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+
+    input_tokens = estimate_tokens(sample.prompt)
+    output_tokens = estimate_tokens(text)
+    return Completion(
+        text=text,
+        model_id=model.model_id,
+        provider=model.provider,
+        tier=model.tier,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost=estimate_cost(model, input_tokens, output_tokens),
+        latency_ms=latency_ms,
+        simulated=False,
+        sim_quality=None,
+    )
