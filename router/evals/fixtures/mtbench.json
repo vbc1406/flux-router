@@ -1,0 +1,27 @@
+[
+  {
+    "prompt_id": 1,
+    "prompt": ["Compose an engaging travel blog post about a recent trip to Hawaii, highlighting cultural experiences and must-see attractions."],
+    "category": "writing"
+  },
+  {
+    "prompt_id": 2,
+    "prompt": ["Draft a professional email seeking your supervisor's feedback on the quarterly financial report you prepared. Keep it short and to the point."],
+    "category": "writing"
+  },
+  {
+    "prompt_id": 3,
+    "prompt": ["Explain the concept of opportunity cost to a high school student using a relatable, everyday example."],
+    "category": "humanities"
+  },
+  {
+    "prompt_id": 4,
+    "prompt": ["Describe a concrete scenario where machine learning could improve a city's public transportation, and outline the specific data you would need to build it."],
+    "category": "reasoning"
+  },
+  {
+    "prompt_id": 5,
+    "prompt": ["Write a persuasive paragraph arguing that remote work increases overall employee productivity."],
+    "category": "writing"
+  }
+]
