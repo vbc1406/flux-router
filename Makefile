@@ -1,4 +1,4 @@
-.PHONY: install install-dev test test-fast lint security-check format clean run docker-build help
+.PHONY: install install-dev test test-fast lint security-check format clean run evals docker-build help
 
 help:
 	@echo "Flux — Available commands:"
@@ -11,6 +11,7 @@ help:
 	@echo "  format          Auto-format code with ruff"
 	@echo "  clean           Remove build artifacts and caches"
 	@echo "  run             Run the demo"
+	@echo "  evals           Run the cost-vs-quality eval harness (mock, offline)"
 	@echo "  docker-build    Build Docker image"
 
 install:
@@ -44,6 +45,9 @@ clean:
 
 run:
 	python -m router.demo
+
+evals:
+	python -m router.evals
 
 docker-build:
 	docker build -t flux-router:latest .

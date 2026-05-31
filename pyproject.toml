@@ -46,6 +46,12 @@ dev = [
     "pip-audit>=2.0,<3.0",
     "hypothesis>=6.0,<7.0",
 ]
+# Only needed to pull the full public benchmarks for `python -m router.evals
+# --live --source hub`. The harness runs offline (fixtures + simulated
+# completions) without it.
+evals = [
+    "datasets>=2.0,<4.0",
+]
 
 [tool.setuptools.packages.find]
 include = ["router*"]

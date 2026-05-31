@@ -36,6 +36,9 @@ jobs:
       - name: Run pytest
         run: pytest router/tests/ -v --timeout=30
 
+      - name: Run eval harness smoke (mock, offline)
+        run: python -m router.evals --n 5
+
   # Validate the actual installable package (not the editable/dev setup): a
   # clean `pip install .` must import and expose make_flux, and the shipped
   # demo must run. This catches missing runtime deps and Python-version import

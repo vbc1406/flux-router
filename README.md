@@ -110,6 +110,7 @@ Use LiteLLM if you want a permissively-licensed SDK and you're happy choosing mo
 - [SECURITY_ARCHITECTURE.md](./SECURITY_ARCHITECTURE.md) — data flows, code-level guarantees, multi-tenant caveats
 - [CODEBASE_MAP.md](./CODEBASE_MAP.md) — directory layout and per-file purpose
 - [FEATURES.md](./FEATURES.md) — extension points for adding providers, models, or task types
+- [EVALS.md](./EVALS.md) — cost-vs-quality eval harness (`python -m router.evals`)
 - [DEBUG.md](./DEBUG.md) — troubleshooting
 - [MIGRATIONS.md](./MIGRATIONS.md) — schema and config migration guide
 - [CHANGELOG.md](./CHANGELOG.md) — release notes
