@@ -14,10 +14,13 @@ from router.evals.completions import get_completion
 from router.evals.datasets import DATASETS, load_dataset, load_datasets
 from router.evals.graders import grade
 from router.evals.graders.llm_judge import _parse_score
-from router.evals.report import aggregate
+from router.evals.report import aggregate, per_question_payload
 from router.evals.runner import RunConfig, run_eval
 from router.evals.schemas import Completion, EvalSample, GradedResult
+from router.evals.strategies import _PROVIDER_DEFAULTS, pick_model
+from router.flux import make_flux
 from router.model_registry import ModelRegistry
+from router.schemas import RoutingRequest
 
 
 def _run(coro):
@@ -225,3 +228,73 @@ class TestEndToEnd:
         a = aggregate(_run(run_eval(config)).results)["flux"]
         b = aggregate(_run(run_eval(config)).results)["flux"]
         assert a.mean_quality == b.mean_quality and a.total_cost == b.total_cost
+
+
+# ── Provider-default baselines + per-question drill-down ─────────────────────
+
+_PQ_STRATEGIES = ["flux", "default_openai", "default_anthropic", "default_google"]
+
+
+def _pq_run() -> "RunConfig":
+    return _run(
+        run_eval(
+            RunConfig(
+                datasets=["gsm8k", "mmlu"],
+                strategies=_PQ_STRATEGIES,
+                n=3,
+                mode="mock",
+                source="fixture",
+                cache_dir=None,
+            )
+        )
+    )
+
+
+class TestProviderDefaults:
+    def test_default_strategies_pin_expected_models(self):
+        flux = make_flux()
+        engine = flux._engine
+        registry = engine._registry
+        req = RoutingRequest(raw_prompt="hello there", user_id="t", exploration_rate=0.0)
+        for strat, model_id in _PROVIDER_DEFAULTS.items():
+            model = _run(pick_model(strat, req, engine, registry))
+            assert model.model_id == model_id, f"{strat} should pin {model_id}"
+
+
+class TestPerQuestion:
+    def test_quality_rating_matches_registry_table(self):
+        out = _pq_run()
+        reg = ModelRegistry()
+        assert out.results
+        for r in out.results:
+            model = reg.get_model(r.model_id)
+            assert model is not None
+            assert r.quality_rating == model.quality_ratings.get(r.task_type, 0.0)
+
+    def test_payload_has_one_row_per_sample_with_all_strategies(self):
+        out = _pq_run()
+        payload = per_question_payload(out)
+        n_samples = len({r.sample_id for r in out.results})
+        assert len(payload["questions"]) == n_samples
+        for q in payload["questions"]:
+            assert set(q["strategies"]) == set(_PQ_STRATEGIES)
+            assert q["question"] and q["question_type"]
+
+    def test_rollup_quality_is_mean_of_rated_quality(self):
+        out = _pq_run()
+        payload = per_question_payload(out)
+        # Recompute one (question_type, strategy) cell straight from the rows.
+        qtype = next(iter(payload["by_question_type"]))
+        strat = _PQ_STRATEGIES[0]
+        rated = [
+            r.quality_rating
+            for r in out.results
+            if r.question_type == qtype and r.strategy == strat
+        ]
+        expected = round(sum(rated) / len(rated), 4)
+        assert payload["by_question_type"][qtype][strat]["quality"] == expected
+
+    def test_per_question_payload_is_reproducible(self):
+        a = per_question_payload(_pq_run())
+        b = per_question_payload(_pq_run())
+        assert a == b

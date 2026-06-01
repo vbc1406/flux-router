@@ -18,7 +18,18 @@ from dataclasses import dataclass, field
 GRADERS = ("gsm8k", "mmlu", "humaneval", "llm_judge")
 
 # Strategy names understood by strategies.py.
-STRATEGIES = ("flux", "premium", "cheapest", "mid")
+#   flux/premium/cheapest/mid  — the routing engine and the synthetic baselines.
+#   default_openai/anthropic/google — the flagship a company would "normally" call
+#   per provider when it isn't routing (the ChatGPT / Claude / Gemini defaults).
+STRATEGIES = (
+    "flux",
+    "premium",
+    "cheapest",
+    "mid",
+    "default_openai",
+    "default_anthropic",
+    "default_google",
+)
 
 
 @dataclass
@@ -70,6 +81,14 @@ class GradedResult:
     # True/False for objective graders; None for the LLM judge (graded, not pass/fail).
     correct: bool | None
     simulated: bool = False
+    # ── per-question drill-down fields (for the --per-question report) ──────
+    # The question text, a human-readable type label (dataset + subject/category),
+    # the classifier's complexity score (0–1), and the chosen model's *rated*
+    # benchmark quality for this task type (registry quality_ratings[task_type]).
+    prompt: str = ""
+    question_type: str = ""
+    complexity: float = 0.0
+    quality_rating: float = 0.0
 
 
 @dataclass

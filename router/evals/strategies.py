@@ -6,6 +6,8 @@ Each strategy answers "which model handles this request?":
   premium   — always the most expensive model (quality/cost ceiling baseline).
   cheapest  — always the cheapest capable model (quality/cost floor baseline).
   mid       — a representative mid-tier model (a midpoint reference).
+  default_* — the flagship a company would "normally" call per provider when it
+              isn't routing at all (see _PROVIDER_DEFAULTS below).
 
 Cost is NOT taken from the routing decision; the runner recomputes it uniformly
 from token counts so every strategy is compared on the same yardstick.
@@ -26,8 +28,29 @@ def _capable(models: list[ModelOption], request: RoutingRequest) -> list[ModelOp
     return [m for m in models if required.issubset(set(m.capabilities))]
 
 
+# The model a company would reach for "by default" per provider when it isn't
+# routing — i.e. each provider's recommended general-purpose flagship, NOT its
+# most expensive option. Grounded in 2025/26 API guidance (OpenAI's GPT-4o as the
+# best-value general default, Anthropic's Sonnet as the cost-effective flagship,
+# Google's Gemini Pro as the flagship). Mapped onto this repo's registry. Change a
+# value here to re-pin a baseline (e.g. claude-opus-4-20250514 for Anthropic).
+_PROVIDER_DEFAULTS = {
+    "default_openai": "gpt-4o",
+    "default_anthropic": "claude-sonnet-4-20250514",
+    "default_google": "gemini-2.5-pro",
+}
+
+
 def _combined_cost(model: ModelOption) -> float:
     return model.cost_per_1k_input + model.cost_per_1k_output
+
+
+def _fixed(registry: ModelRegistry, model_id: str, request: RoutingRequest) -> ModelOption:
+    """Always use the named model; fall back to the cheapest capable one if it's gone."""
+    model = registry.get_model(model_id)
+    if model is not None and model.is_available:
+        return model
+    return _cheapest(registry, request)
 
 
 def _cheapest(registry: ModelRegistry, request: RoutingRequest) -> ModelOption:
@@ -66,4 +89,6 @@ async def pick_model(
         return _cheapest(registry, request)
     if strategy == "mid":
         return _mid(registry, request)
+    if strategy in _PROVIDER_DEFAULTS:
+        return _fixed(registry, _PROVIDER_DEFAULTS[strategy], request)
     raise ValueError(f"Unknown strategy '{strategy}'")

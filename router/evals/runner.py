@@ -46,6 +46,13 @@ class RunOutput:
     n_skipped: int
 
 
+def _question_type(sample) -> str:
+    """Human-readable type label: dataset + the finest topic tag we already have."""
+    topic = sample.metadata.get("subject") or sample.metadata.get("category")
+    base = f"{sample.dataset}/{topic}" if topic else sample.dataset
+    return f"{base} ({sample.task_type})"
+
+
 def _provider_keys(flux) -> dict[str, str]:
     """Extract plain-text provider keys from a Flux instance for live calls."""
     return {prov: sec.get_secret_value() for prov, sec in flux._provider_keys.items()}
@@ -94,15 +101,20 @@ async def run_eval(config: RunConfig) -> RunOutput:
     skipped = 0
 
     for i, sample in enumerate(samples, start=1):
+        request = RoutingRequest(
+            raw_prompt=sample.prompt,
+            user_id="flux-eval",
+            required_capabilities=sample.metadata.get("required_capabilities", []),
+            # Disable A/B exploration so the flux strategy is deterministic and
+            # the published tradeoff numbers reproduce across runs.
+            exploration_rate=0.0,
+        )
+        # Classify once per sample (strategy-independent) for the per-question view:
+        # the complexity score + a human-readable question-type label.
+        complexity = engine._classifier.analyze(request).complexity_score
+        question_type = _question_type(sample)
+
         for strategy in config.strategies:
-            request = RoutingRequest(
-                raw_prompt=sample.prompt,
-                user_id="flux-eval",
-                required_capabilities=sample.metadata.get("required_capabilities", []),
-                # Disable A/B exploration so the flux strategy is deterministic and
-                # the published tradeoff numbers reproduce across runs.
-                exploration_rate=0.0,
-            )
             model = await pick_model(strategy, request, engine, registry)
             try:
                 comp = await _completion(
@@ -136,6 +148,10 @@ async def run_eval(config: RunConfig) -> RunOutput:
                     quality=quality,
                     correct=correct,
                     simulated=comp.simulated,
+                    prompt=sample.prompt,
+                    question_type=question_type,
+                    complexity=complexity,
+                    quality_rating=model.quality_ratings.get(sample.task_type, 0.0),
                 )
             )
         if i % 25 == 0:
