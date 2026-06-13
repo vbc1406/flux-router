@@ -94,7 +94,7 @@ Flux overlaps with LiteLLM, OpenRouter, and similar tools. The differences that 
 
 | | Flux | LiteLLM | OpenRouter |
 |---|---|---|---|
-| Routing decision | Pure-Python heuristic, sub-millisecond (~0.6 ms P50) | Config-driven, no automatic per-task selection | Server-side, network round trip |
+| Routing decision | Pure-Python heuristic, sub-millisecond (~0.23 ms P50) | Config-driven, no automatic per-task selection | Server-side, network round trip |
 | Per-task model selection | Yes (15 task types, complexity scoring) | Manual | Manual |
 | Adaptive learning from response quality | Yes (per-(model, task) EMA, optional per-customer) | No | No |
 | Typed fallback chains (rate-limit / timeout / content-filter) | Yes, separate per failure mode | Yes (single chain) | Yes |
