@@ -204,7 +204,37 @@ class Flux:
 
         request = self._build_request(prompt, **request_kwargs)
         decision = await self._engine.route(request)
+        text, model, fallback_used, fallback_reason = await self._dispatch_with_fallback(
+            decision, request, max_retries
+        )
+        return FluxResponse(
+            text=text,
+            model=model,
+            decision=decision,
+            fallback_used=fallback_used,
+            fallback_reason=fallback_reason,
+        )
 
+    async def _dispatch_with_fallback(
+        self,
+        decision: RoutingDecision,
+        request: RoutingRequest,
+        max_retries: int = 2,
+    ) -> tuple[str, ModelOption, bool, str | None]:
+        """
+        Call ``decision.chosen_model`` and, on a typed transient failure, walk
+        the appropriate fallback chain up to ``max_retries`` further attempts.
+
+        Shared by complete() and router.server's HTTP proxy so both paths get
+        identical retry, budget-recording, run-budget, and attribution
+        behavior — see module docstring.
+
+        Returns (text, model_used, fallback_used, fallback_reason).
+
+        Raises:
+            AuthenticationError — immediately, never retried.
+            FluxAPIError        — after all retries are exhausted.
+        """
         models_to_try: list[ModelOption] = []
         if decision.chosen_model:
             models_to_try.append(decision.chosen_model)
@@ -295,13 +325,7 @@ class Flux:
                     model_id=model.model_id,
                     cost_usd=decision.estimated_cost,
                 )
-                return FluxResponse(
-                    text=text,
-                    model=model,
-                    decision=decision,
-                    fallback_used=attempts > 0,
-                    fallback_reason=last_error,
-                )
+                return text, model, attempts > 0, last_error
 
             except err.AuthenticationError:
                 # Key is wrong — retrying won't help.

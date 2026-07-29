@@ -37,7 +37,7 @@ except ImportError as exc:  # pragma: no cover - exercised only without the extr
     ) from exc
 
 from .config import ATTRIBUTION_USAGE_PAGE_MAX, SERVER_MAX_BODY_BYTES, SERVER_REQUIRE_AUTH
-from .errors import FluxAPIError
+from .errors import AuthenticationError, FluxAPIError
 from .flux import Flux, make_flux
 from .provider_caller import (
     STREAMING_NATIVE_PROVIDERS,
@@ -332,21 +332,22 @@ async def chat_completions(
         )
 
     try:
-        text = await _flux._call_model(decision.chosen_model, routing_request)
+        # Shared with Flux.complete(): retries the typed fallback chain on
+        # transient errors, and records plan/daily-cap spend, run-budget steps,
+        # and attribution — all of which this path used to skip by calling
+        # _call_model() directly.
+        text, used_model, _fallback_used, _fallback_reason = await _flux._dispatch_with_fallback(
+            decision, routing_request, max_retries=2
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
     except FluxAPIError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    _flux._engine._run_budget.record_step(
-        run_id, model_id, decision.estimated_cost, max(len(text) // 4, 1)
-    )
-    _flux._engine._attribution.record(
-        tenant_id=routing_request.tenant_id,
-        run_id=run_id,
-        task_type=decision.task_type,
-        step_type=decision.step_type,
-        model_id=model_id,
-        cost_usd=decision.estimated_cost,
-    )
+    # The dispatched model may differ from decision.chosen_model if a fallback
+    # fired — reflect the model that actually served the request.
+    model_id = used_model.model_id
+    headers["x-flux-model"] = model_id
 
     response_body = {
         "id": completion_id,

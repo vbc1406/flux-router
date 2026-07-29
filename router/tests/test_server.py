@@ -34,6 +34,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import router.server as server  # noqa: E402
 from router import config  # noqa: E402
+from router.errors import AuthenticationError, RateLimitError  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -308,3 +309,106 @@ class TestAttribution:
         )
         resp = client.get("/metrics")
         assert 'flux_budget_exceeded_total{tenant_id="budget-blown-co"} 1' in resp.text
+
+
+class TestPlanBudgetEnforcement:
+    """
+    Regression tests for the plan-budget gap: the HTTP path used to call
+    Flux._call_model() directly, skipping BudgetTracker.record_spend()
+    entirely, so a user's plan spend never accumulated across requests.
+    """
+
+    def test_successful_completion_records_plan_spend(self, client):
+        budget = server._flux._engine._budget
+        user = "plan-budget-user-1"
+        before = budget.get_daily_spend(user)
+
+        # A literal (non-free) model guarantees estimated_cost > 0 — routing
+        # a free-tier model would record a real $0.00 entry and this
+        # assertion would pass even if record_spend() were never called.
+        body = _body("gpt-4o")
+        body["user"] = user
+        resp = client.post("/v1/chat/completions", json=body)
+        assert resp.status_code == 200
+
+        after = budget.get_daily_spend(user)
+        assert after > before, "record_spend() was not called on the HTTP path"
+
+    def test_repeated_completions_accumulate_spend(self, client):
+        budget = server._flux._engine._budget
+        user = "plan-budget-user-2"
+
+        body = _body("gpt-4o")
+        body["user"] = user
+        for _ in range(3):
+            resp = client.post("/v1/chat/completions", json=body)
+            assert resp.status_code == 200
+
+        # Three recorded steps, not zero — proves each call independently records.
+        report = budget.get_savings_report(user)
+        assert report["record_count"] == 3
+
+    def test_budget_pressure_degrades_to_cheapest_tier(self, client, monkeypatch):
+        from router import budget_tracker as bt
+
+        # Shrink pro_plan's cap to near-zero so any real request cost blows
+        # through it immediately — forces route()'s tier walk-down to the
+        # cheapest (free-tier) model on the very first call.
+        monkeypatch.setitem(bt.BUDGET_LIMITS, "pro_plan", {"daily": 1e-9, "monthly": 1e-9})
+
+        body = _body()
+        body["user"] = "plan-budget-pressured-user"
+        resp = client.post("/v1/chat/completions", json=body)
+        assert resp.status_code == 200
+
+        registry = server._flux._engine._registry
+        chosen = registry.get_model(resp.headers["x-flux-model"])
+        assert chosen is not None
+        assert chosen.tier == "free"
+
+
+class TestFallbackChain:
+    """
+    Regression tests for the flat-502 gap: the HTTP path used to call
+    Flux._call_model() directly with no retry, so any transient provider
+    error became a 502 instead of trying the routing decision's fallback
+    chain the way Flux.complete() does.
+    """
+
+    def test_transient_error_falls_back_instead_of_502(self, client, _mock_call_model):
+        _mock_call_model.side_effect = [RateLimitError("429 Too Many Requests"), "fallback text"]
+        resp = client.post("/v1/chat/completions", json=_body())
+        assert resp.status_code == 200
+        assert resp.json()["choices"][0]["message"]["content"] == "fallback text"
+        assert _mock_call_model.call_count == 2
+
+    def test_fallback_model_reflected_in_response_and_headers(self, client, _mock_call_model):
+        calls: list[str] = []
+
+        async def flaky(model, request):
+            calls.append(model.model_id)
+            if len(calls) == 1:
+                raise RateLimitError("429")
+            return "ok from fallback"
+
+        _mock_call_model.side_effect = flaky
+        resp = client.post("/v1/chat/completions", json=_body())
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["model"] == calls[-1]
+        assert resp.headers["x-flux-model"] == calls[-1]
+        assert calls[0] != calls[-1]
+
+    def test_all_models_failing_returns_502_with_attempt_summary(self, client, _mock_call_model):
+        _mock_call_model.side_effect = RateLimitError("always 429")
+        resp = client.post("/v1/chat/completions", json=_body())
+        assert resp.status_code == 502
+        detail = resp.json()["detail"].lower()
+        assert "attempt" in detail
+        assert "failed" in detail
+
+    def test_auth_error_short_circuits_without_retry(self, client, _mock_call_model):
+        _mock_call_model.side_effect = AuthenticationError("bad key")
+        resp = client.post("/v1/chat/completions", json=_body())
+        assert resp.status_code == 401
+        assert _mock_call_model.call_count == 1
