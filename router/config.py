@@ -580,3 +580,51 @@ SERVER_REQUIRE_AUTH: bool = bool(os.environ.get("FLUX_SERVER_TOKEN"))
 # How to tune: raise for workloads with very large system prompts / long
 # conversation histories; lower to reduce exposure to body-based DoS.
 SERVER_MAX_BODY_BYTES: int = 2 * 1024 * 1024  # 2MB
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RUN-SCOPED BUDGET ENFORCEMENT (router/run_budget.py)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Global default ceilings for a single "run" — a multi-step agent trajectory
+# sharing one run_id. Any of these can be overridden per-run via
+# Flux.start_run(max_cost_usd=..., max_steps=..., max_tokens=..., max_duration_seconds=...).
+# How to tune: these are deliberately conservative single-run defaults, not
+# fleet-wide budgets — raise for workloads with long, expensive trajectories
+# (deep research agents); lower to fail fast on runaway loops in dev/CI.
+RUN_MAX_COST_USD: float = 1.00
+RUN_MAX_STEPS: int = 100
+RUN_MAX_TOKENS: int = 500_000
+RUN_MAX_DURATION_SECONDS: float = 900.0  # 15 minutes
+
+# Graceful degradation ladder (checked as fractions of whichever limit above
+# is closest to being hit). At DEGRADE_THRESHOLD, routing_priority is forced
+# to "cost-optimized" for the rest of the run regardless of what the caller
+# requested. At WARN_THRESHOLD, the same plus RoutingDecision.budget_warning
+# is populated so the caller's agent loop can choose to wrap up early. At
+# 1.0, RunBudgetExceeded is raised — before the next step dispatches, not
+# after it spends.
+# How to tune: lower RUN_DEGRADE_THRESHOLD to downgrade earlier/more
+# conservatively; the gap between the two thresholds is the caller's window
+# to notice budget_warning and stop voluntarily before a hard stop.
+RUN_DEGRADE_THRESHOLD: float = 0.70
+RUN_WARN_THRESHOLD: float = 0.90
+
+# Max concurrent run_ids tracked in the default in-memory RunStore. Oldest
+# (least-recently-touched) run is evicted first once the cap is hit — mirrors
+# the LRU eviction pattern used by AdaptiveWeights' MAX_CUSTOMERS.
+# How to tune: raise for high-concurrency multi-tenant deployments; lower to
+# bound memory tighter on constrained hosts.
+RUN_STORE_MAX_ENTRIES: int = 50_000
+
+# A run with no activity (no check/record call) for this long is considered
+# abandoned and is evicted on the next housekeeping sweep, freeing its slot
+# even if RUN_STORE_MAX_ENTRIES hasn't been reached. Agent loops that crash
+# or hang without ever closing their run must not leak memory.
+# How to tune: raise if legitimate runs can go quiet for long stretches
+# (e.g. waiting on a human-in-the-loop step); lower to reclaim memory faster.
+RUN_TTL_SECONDS: float = 3600.0  # 1 hour
+
+# Proactive housekeeping sweep frequency: every Nth check/record call across
+# all runs, sweep for TTL-expired entries. Mirrors RoutingEngine's
+# ConversationStore housekeeping cadence (every 500 route() calls).
+RUN_HOUSEKEEPING_INTERVAL: int = 500

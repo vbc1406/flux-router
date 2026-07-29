@@ -186,7 +186,14 @@ class RoutingRequest(BaseModel):
     # more than the sticky bias threshold.
     conversation_id: str | None = Field(default=None, max_length=256)
 
-    @field_validator("user_id", "team_id", "customer_id", "conversation_id")
+    # ── Task 3: Run-scoped budget enforcement ────────────────────────────────
+    # A correlation ID grouping N routing decisions into one "run" (a
+    # multi-step agent trajectory). See router/run_budget.py. Auto-generated
+    # by Flux.start_run() / the proxy's X-Flux-Run-Id header if not supplied;
+    # requests with no run_id are not subject to run-budget enforcement at all.
+    run_id: str | None = Field(default=None, max_length=256)
+
+    @field_validator("user_id", "team_id", "customer_id", "conversation_id", "run_id")
     @classmethod
     def _safe_id(cls, v: str | None) -> str | None:
         if v is not None and not _SAFE_ID_PATTERN.match(v):
@@ -350,6 +357,20 @@ class RoutingDecision(BaseModel):
     # ── Fix 5: Decision explainability ───────────────────────────────────────
     # Populated only when verbose=True is passed to flux.route() or engine.route().
     explanation: RoutingExplanation | None = None
+
+    # ── Task 3: Run-scoped budget enforcement ────────────────────────────────
+    # Populated only when the request carried a run_id. run_cost_so_far and
+    # run_steps_so_far reflect the run's state BEFORE this step (this step's
+    # own cost/tokens are recorded separately, after dispatch succeeds).
+    # budget_state: "ok" (well under limits), "degraded" (routing_priority
+    # was forced to cost-optimized), "warning" (degraded + caller should
+    # consider wrapping up), or "exceeded" (only appears inside
+    # RunBudgetExceeded.summary — a request in that state never reaches here).
+    run_id: str | None = None
+    run_cost_so_far: float = 0.0
+    run_steps_so_far: int = 0
+    budget_state: Literal["ok", "degraded", "warning", "exceeded"] = "ok"
+    budget_warning: str | None = None
 
     def explain(self) -> str:
         """Return human-readable routing explanation, or a placeholder if not populated."""

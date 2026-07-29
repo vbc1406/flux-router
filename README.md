@@ -127,6 +127,32 @@ flux = make_flux(api_keys={
 Resolution order per request: explicit `api_keys=` / env var → per-request
 `provider_api_key` → legacy single `api_key=`.
 
+### Run-scoped budgets (for agent loops)
+
+Per-request cost ceilings don't stop a runaway multi-step agent loop — by the
+time any single step looks expensive, the loop has already made 40 of them.
+`flux.start_run()` caps a whole trajectory instead of one call:
+
+```python
+from router import RunBudgetExceeded
+
+with flux.start_run(max_cost_usd=0.10, max_steps=50) as run_id:
+    for step in agent_steps:
+        try:
+            resp = await flux.complete(step.prompt, run_id=run_id)
+        except RunBudgetExceeded as exc:
+            # exc.summary: steps_taken, total_cost_usd, per-step breakdown
+            break
+```
+
+As the run's spend approaches the cap, Flux automatically forces
+cost-optimized routing for the rest of the run (`RoutingDecision.budget_state
+== "degraded"`), then flags `budget_warning` so the caller can choose to wrap
+up — and only raises `RunBudgetExceeded` once a limit is actually hit,
+**before** the next step dispatches, never after it spends. On the HTTP
+proxy, tag repeated calls with the same `X-Flux-Run-Id` header to get the
+same enforcement without any Python. See `examples/agent_loop.py`.
+
 ---
 
 ## How Flux compares

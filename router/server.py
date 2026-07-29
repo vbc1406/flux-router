@@ -44,6 +44,7 @@ from .provider_caller import (
     ProviderCallError,
     stream_openai_compat_lines,
 )
+from .run_budget import RunBudgetExceeded
 from .schemas import RoutingRequest
 
 log = structlog.get_logger(__name__)
@@ -126,7 +127,7 @@ def _messages_to_request_fields(
     return system_prompt, raw_prompt, history
 
 
-def _build_routing_request(body: dict[str, Any]) -> tuple[RoutingRequest, bool]:
+def _build_routing_request(body: dict[str, Any], run_id: str) -> tuple[RoutingRequest, bool]:
     """Translate an OpenAI chat-completion request body into a RoutingRequest.
 
     Returns (request, is_literal_model) — is_literal_model is True when `model`
@@ -144,6 +145,7 @@ def _build_routing_request(body: dict[str, Any]) -> tuple[RoutingRequest, bool]:
         "message_history": history,
         "temperature": body.get("temperature"),
         "max_tokens_requested": body.get("max_tokens"),
+        "run_id": run_id,
     }
 
     is_literal_model = False
@@ -172,13 +174,18 @@ def _build_routing_request(body: dict[str, Any]) -> tuple[RoutingRequest, bool]:
 def _flux_headers(decision, decision_latency_ms: float) -> dict[str, str]:
     task_type = decision.explanation.task_type if decision.explanation else ""
     complexity = decision.explanation.complexity_score if decision.explanation else 0.0
-    return {
+    headers = {
         "x-flux-model": decision.chosen_model.model_id if decision.chosen_model else "",
         "x-flux-task-type": task_type,
         "x-flux-complexity-score": f"{complexity:.3f}",
         "x-flux-estimated-cost-usd": f"{decision.estimated_cost:.6f}",
         "x-flux-decision-latency-ms": f"{decision_latency_ms:.2f}",
+        "x-flux-run-id": decision.run_id or "",
+        "x-flux-budget-state": decision.budget_state,
     }
+    if decision.budget_warning:
+        headers["x-flux-budget-warning"] = decision.budget_warning
+    return headers
 
 
 @app.get("/health")
@@ -205,6 +212,7 @@ async def list_models(authorization: str | None = Header(default=None)) -> dict[
 async def chat_completions(
     request: Request,
     authorization: str | None = Header(default=None),
+    x_flux_run_id: str | None = Header(default=None, alias="X-Flux-Run-Id"),
 ) -> Any:
     _check_auth(authorization)
     raw_body = await _read_bounded_body(request)
@@ -215,11 +223,23 @@ async def chat_completions(
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Request body must be a JSON object")
 
-    routing_request, _ = _build_routing_request(body)
+    # Task 3: every request belongs to a run — X-Flux-Run-Id groups repeated
+    # calls into one budgeted trajectory; a request with no header gets its
+    # own single-step run (harmless: checked against the generous global
+    # RUN_MAX_* defaults, evicted quickly by the RunStore's TTL/LRU).
+    run_id = x_flux_run_id or str(uuid.uuid4())
+    routing_request, _ = _build_routing_request(body, run_id)
     stream = bool(body.get("stream", False))
 
     start = time.monotonic()
-    decision = await _flux.route(routing_request, verbose=True)
+    try:
+        decision = await _flux.route(routing_request, verbose=True)
+    except RunBudgetExceeded as exc:
+        return JSONResponse(
+            status_code=429,
+            content={"error": {"message": str(exc), "type": "run_budget_exceeded", **exc.summary}},
+            headers={"x-flux-run-id": run_id},
+        )
     decision_latency_ms = (time.monotonic() - start) * 1000
 
     if decision.chosen_model is None:
@@ -231,6 +251,13 @@ async def chat_completions(
     model_id = decision.chosen_model.model_id
 
     if stream:
+        # Recorded up front (using the cost estimate) rather than after the
+        # stream closes — StreamingResponse's body can be abandoned by the
+        # client mid-stream, which would otherwise leave this step unrecorded
+        # and let a run dodge its own budget by disconnecting early.
+        _flux._engine._run_budget.record_step(
+            run_id, model_id, decision.estimated_cost, routing_request.max_tokens_requested or 1024
+        )
         return StreamingResponse(
             _stream_completion(routing_request, decision, completion_id, created, headers),
             media_type="text/event-stream",
@@ -241,6 +268,10 @@ async def chat_completions(
         text = await _flux._call_model(decision.chosen_model, routing_request)
     except FluxAPIError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    _flux._engine._run_budget.record_step(
+        run_id, model_id, decision.estimated_cost, max(len(text) // 4, 1)
+    )
 
     response_body = {
         "id": completion_id,

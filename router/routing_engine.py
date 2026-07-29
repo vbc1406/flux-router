@@ -24,7 +24,10 @@ Key Entry Points:
   RoutingEngine.route(request)        — call this to get a routing decision
   RoutingEngine.__init__(...)         — inject all collaborators here
 
-The 13 Steps (in execution order):
+The 13 Steps (in execution order), plus Step 0 in the route() wrapper:
+  0  Run-budget gate  → RunBudget.check_before_dispatch() (Task 3; only if request.run_id
+                         is set). Raises RunBudgetExceeded before dispatch, or forces
+                         cost-optimized routing_priority if degraded/warning.
   1  Classify         → RequestClassifier.analyze()
   2  Cache check      → ResponseCache.get()
   3  Cost ceiling     → block ruinously expensive requests early
@@ -99,6 +102,7 @@ from .config import (
 from .context_compressor import ContextCompressor
 from .fallback_chain import build_fallback_chain, build_typed_fallback_chains
 from .model_registry import ModelRegistry
+from .run_budget import RunBudget
 from .schemas import ModelOption, RoutingDecision, RoutingExplanation, RoutingRequest, TaskAnalysis
 
 log = structlog.get_logger(__name__)
@@ -207,10 +211,62 @@ class RoutingEngine:
         self._user_free_rpm: dict[str, deque[float]] = defaultdict(deque)
         # Route call counter for periodic housekeeping (conversation expiry).
         self._route_count: int = 0
+        # Task 3: run-scoped budget enforcement (checked before Step 1).
+        self._run_budget = RunBudget()
 
     # ── Public ──────────────────────────────────────────────────────────────
 
     async def route(self, request: RoutingRequest, verbose: bool = False) -> RoutingDecision:
+        """
+        Task 3, Step 0: run-scoped budget gate, then delegate to the 13-step
+        algorithm in _route_core(). Kept as a thin wrapper so every one of
+        _route_core's early-return paths automatically gets the same
+        run-budget bookkeeping without having to touch each of them.
+
+        If request.run_id is unset, this is a pure passthrough — run-budget
+        enforcement never applies to requests outside a run.
+
+        Raises:
+            RunBudgetExceeded — before dispatch, if the run already met/exceeded
+                                 any of its limits from prior steps.
+        """
+        if not request.run_id:
+            return await self._route_core(request, verbose=verbose)
+
+        run_id = request.run_id
+        budget_state = self._run_budget.check_before_dispatch(run_id)
+        cost_so_far, steps_so_far = self._run_budget.snapshot(run_id)
+
+        effective_request = request
+        budget_warning: str | None = None
+        if budget_state in ("degraded", "warning"):
+            # Force cost-optimized routing for the rest of the run, regardless
+            # of what the caller asked for — this is what keeps a degrading
+            # run's remaining steps cheap instead of crashing outright.
+            effective_request = request.model_copy(update={"routing_priority": "cost-optimized"})
+            log.info(
+                "run_budget_degraded",
+                run_id=run_id,
+                budget_state=budget_state,
+                cost_so_far=cost_so_far,
+                steps_so_far=steps_so_far,
+            )
+        if budget_state == "warning":
+            budget_warning = (
+                f"Run '{run_id}' is at {budget_state} threshold "
+                f"(${cost_so_far:.4f} spent over {steps_so_far} step(s)); "
+                "consider wrapping up soon."
+            )
+
+        decision = await self._route_core(effective_request, verbose=verbose)
+        decision.run_id = run_id
+        decision.run_cost_so_far = cost_so_far
+        decision.run_steps_so_far = steps_so_far
+        decision.budget_state = budget_state
+        decision.budget_warning = budget_warning
+        return decision
+
+    async def _route_core(self, request: RoutingRequest, verbose: bool = False) -> RoutingDecision:
         """
         Run the full 13-step routing algorithm and return a RoutingDecision.
 
@@ -573,9 +629,7 @@ class RoutingEngine:
         target_tier = _get_tier_for_score(analysis.complexity_score)  # kept for logs/explanation
         quality_floor = _quality_floor_for_complexity(analysis.complexity_score)
         tier_candidates = [
-            m
-            for m in candidates
-            if m.quality_ratings.get(analysis.task_type, 0.5) >= quality_floor
+            m for m in candidates if m.quality_ratings.get(analysis.task_type, 0.5) >= quality_floor
         ]
         if not tier_candidates:
             # Floor too strict — fall back to all candidates so we always return something.
@@ -890,6 +944,16 @@ class RoutingEngine:
                         model_id=model.model_id,
                         correlation_id=request.correlation_id,
                         task_type="unknown",
+                    )
+                # Task 3: record this step against the run's cumulative budget so
+                # the NEXT step's check_before_dispatch() sees it. Token count is
+                # estimated (~4 chars/token) since call_provider returns text only.
+                if request.run_id:
+                    self._run_budget.record_step(
+                        request.run_id,
+                        model.model_id,
+                        decision.estimated_cost,
+                        max(len(response) // 4, 1),
                     )
                 decision.proxy_response = response
                 decision.proxy_model_used = model

@@ -18,6 +18,8 @@ Test coverage:
   - Auth rejection when FLUX_SERVER_TOKEN is set
   - Oversized body rejection
   - /health and /v1/models
+  - X-Flux-Run-Id: echoed back, auto-generated when absent, groups repeated
+    calls into one run-budget trajectory, 429 + summary once exceeded
 """
 
 from __future__ import annotations
@@ -187,3 +189,50 @@ class TestMisc:
     def test_missing_messages_rejected(self, client):
         resp = client.post("/v1/chat/completions", json={"model": "flux-auto"})
         assert resp.status_code == 400
+
+
+class TestRunBudget:
+    def test_run_id_auto_generated_and_echoed(self, client):
+        resp = client.post("/v1/chat/completions", json=_body())
+        assert resp.status_code == 200
+        assert resp.headers["x-flux-run-id"] != ""
+        assert resp.headers["x-flux-budget-state"] == "ok"
+
+    def test_run_id_header_is_echoed_back(self, client):
+        resp = client.post(
+            "/v1/chat/completions", json=_body(), headers={"X-Flux-Run-Id": "my-run-42"}
+        )
+        assert resp.status_code == 200
+        assert resp.headers["x-flux-run-id"] == "my-run-42"
+
+    def test_repeated_calls_share_run_state(self, client):
+        run_id = "shared-run"
+        for _ in range(3):
+            resp = client.post(
+                "/v1/chat/completions", json=_body(), headers={"X-Flux-Run-Id": run_id}
+            )
+            assert resp.status_code == 200
+        cost, steps = server._flux._engine._run_budget.snapshot(run_id)
+        assert steps == 3
+
+    def test_run_budget_exceeded_returns_429_with_summary(self, client):
+        from router.run_budget import RunLimits
+
+        # Start a run with a tiny cap and pre-record a step that already blows
+        # past it, so the NEXT request is blocked before it ever dispatches.
+        run_id = "tight-run"
+        rb = server._flux._engine._run_budget
+        rb.start(
+            run_id,
+            RunLimits(
+                max_cost_usd=0.0001, max_steps=1000, max_tokens=10**9, max_duration_seconds=10**9
+            ),
+        )
+        rb.record_step(run_id, "some-model", 1.0, 100)
+
+        resp = client.post("/v1/chat/completions", json=_body(), headers={"X-Flux-Run-Id": run_id})
+        assert resp.status_code == 429
+        body = resp.json()
+        assert body["error"]["type"] == "run_budget_exceeded"
+        assert "steps_taken" in body["error"]
+        assert resp.headers["x-flux-run-id"] == run_id

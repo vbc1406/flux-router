@@ -42,9 +42,11 @@ flux/
 │   ├── benchmark.py               ← Routing decision benchmarks
 │   ├── demo.py                    ← Standalone demo script
 │   ├── server.py                  ← OpenAI-compatible HTTP proxy (POST /v1/chat/completions); optional `[server]` extra
+│   ├── run_budget.py              ← Run-scoped budget enforcement for agent loops (Task 3)
 │   └── tests/
 │       ├── test_routing.py        ← End-to-end routing engine tests (13 change areas)
 │       ├── test_server.py         ← HTTP proxy tests (directives, passthrough, streaming, auth, body cap)
+│       ├── test_run_budget.py     ← Run-budget ladder, eviction at scale, agent-loop integration
 │       ├── test_adaptive_guardrails.py  ← AdaptiveWeights guardrail tests (6 issue areas)
 │       ├── test_adaptive_weights.py     ← AdaptiveWeights unit tests with metrics
 │       ├── test_cache.py          ← ResponseCache + fingerprinting tests
@@ -121,6 +123,17 @@ Supported: Anthropic, OpenAI, Google (Gemini), Groq, Mistral
 `flux-quality`) unless it names a real registered model, in which case routing is
 bypassed and that model is called verbatim. Requires the `[server]` extra
 (fastapi/uvicorn) — not a core dependency. Run with `make serve`.
+
+### Run-Scoped Budgets (agent loops)
+→ `router/run_budget.py` (`RunBudget`, `RunLimits`, `RunBudgetExceeded`).
+A `run_id` groups N routing decisions into one multi-step trajectory. Checked
+BEFORE each step dispatches (`RoutingEngine.route()`'s Step 0): forces
+cost-optimized routing once a run crosses `RUN_DEGRADE_THRESHOLD`, sets
+`RoutingDecision.budget_warning` at `RUN_WARN_THRESHOLD`, and raises
+`RunBudgetExceeded` (with a per-step cost breakdown) once a limit is met —
+never after a step has already spent. Entry points: `Flux.start_run()` /
+`flux.complete(..., run_id=...)`, or the proxy's `X-Flux-Run-Id` header.
+See `examples/agent_loop.py`.
 
 ### Fallback and Retry Logic
 Chain construction → `router/fallback_chain.py` (`build_fallback_chain`, `build_typed_fallback_chains`)

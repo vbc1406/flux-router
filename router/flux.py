@@ -22,7 +22,10 @@ Example:
 
 from __future__ import annotations
 
+import contextlib
 import os
+import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 import structlog
@@ -37,6 +40,7 @@ from .classifier import RequestClassifier
 from .context_compressor import ContextCompressor
 from .model_registry import ModelRegistry
 from .routing_engine import RoutingEngine
+from .run_budget import RunLimits
 from .schemas import ModelOption, RoutingDecision, RoutingRequest
 
 # Maps provider name (as used in models.json / ModelOption.provider) to the
@@ -121,6 +125,54 @@ class Flux:
     async def route(self, request: RoutingRequest, verbose: bool = False) -> RoutingDecision:
         """Delegate to the underlying RoutingEngine."""
         return await self._engine.route(request, verbose=verbose)
+
+    @contextlib.contextmanager
+    def start_run(
+        self,
+        run_id: str | None = None,
+        max_cost_usd: float | None = None,
+        max_steps: int | None = None,
+        max_tokens: int | None = None,
+        max_duration_seconds: float | None = None,
+    ) -> Iterator[str]:
+        """
+        Task 3: open a budgeted run and yield its run_id. Pass that run_id to
+        every complete() call in the trajectory (as run_id=...) to enable
+        run-scoped enforcement: cost-optimized degradation as the budget gets
+        close, then RunBudgetExceeded raised before the next step dispatches.
+
+        Any limit left as None falls back to the RUN_MAX_* global default in
+        config.py.
+
+        Example:
+            with flux.start_run(max_cost_usd=0.10, max_steps=50) as run_id:
+                for _ in range(50):
+                    resp = await flux.complete(next_prompt, run_id=run_id)
+                    ...
+
+        The run's state is dropped when the context exits (whether the loop
+        finished, broke early, or raised) — call again with the same run_id
+        if you need it to persist across separate start_run() blocks.
+        """
+        run_id = run_id or str(uuid.uuid4())
+        defaults = RunLimits()
+        self._engine._run_budget.start(
+            run_id,
+            RunLimits(
+                max_cost_usd=max_cost_usd if max_cost_usd is not None else defaults.max_cost_usd,
+                max_steps=max_steps if max_steps is not None else defaults.max_steps,
+                max_tokens=max_tokens if max_tokens is not None else defaults.max_tokens,
+                max_duration_seconds=(
+                    max_duration_seconds
+                    if max_duration_seconds is not None
+                    else defaults.max_duration_seconds
+                ),
+            ),
+        )
+        try:
+            yield run_id
+        finally:
+            self._engine._run_budget.finish(run_id)
 
     async def complete(
         self,
@@ -212,6 +264,16 @@ class Flux:
                         model_id=model.model_id,
                         correlation_id=request.correlation_id,
                         task_type="unknown",
+                    )
+                # Task 3: record this step against the run's cumulative budget so
+                # the NEXT call to complete(run_id=...) sees it in check_before_dispatch().
+                # Token count is estimated (~4 chars/token) since _call_model returns text only.
+                if request.run_id:
+                    self._engine._run_budget.record_step(
+                        request.run_id,
+                        model.model_id,
+                        decision.estimated_cost,
+                        max(len(text) // 4, 1),
                     )
                 return FluxResponse(
                     text=text,
