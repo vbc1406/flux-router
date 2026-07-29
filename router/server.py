@@ -29,14 +29,14 @@ from typing import Any
 import structlog
 
 try:
-    from fastapi import FastAPI, Header, HTTPException, Request
+    from fastapi import FastAPI, Header, HTTPException, Request, Response
     from fastapi.responses import JSONResponse, StreamingResponse
 except ImportError as exc:  # pragma: no cover - exercised only without the extra installed
     raise ImportError(
         "router.server requires the 'server' extra. Install with: pip install flux-router[server]"
     ) from exc
 
-from .config import SERVER_MAX_BODY_BYTES, SERVER_REQUIRE_AUTH
+from .config import ATTRIBUTION_USAGE_PAGE_MAX, SERVER_MAX_BODY_BYTES, SERVER_REQUIRE_AUTH
 from .errors import FluxAPIError
 from .flux import Flux, make_flux
 from .provider_caller import (
@@ -127,7 +127,9 @@ def _messages_to_request_fields(
     return system_prompt, raw_prompt, history
 
 
-def _build_routing_request(body: dict[str, Any], run_id: str) -> tuple[RoutingRequest, bool]:
+def _build_routing_request(
+    body: dict[str, Any], run_id: str, tenant_id: str | None = None
+) -> tuple[RoutingRequest, bool]:
     """Translate an OpenAI chat-completion request body into a RoutingRequest.
 
     Returns (request, is_literal_model) — is_literal_model is True when `model`
@@ -146,6 +148,8 @@ def _build_routing_request(body: dict[str, Any], run_id: str) -> tuple[RoutingRe
         "temperature": body.get("temperature"),
         "max_tokens_requested": body.get("max_tokens"),
         "run_id": run_id,
+        # Task 7: X-Flux-Tenant-Id, for router/attribution.py aggregation.
+        "tenant_id": tenant_id,
         # Task 6: passed through verbatim for step_type inference + capability
         # filtering. Not forwarded to the provider call itself in this proxy —
         # tool-calling over the proxy is a routing-only signal for now.
@@ -213,11 +217,60 @@ async def list_models(authorization: str | None = Header(default=None)) -> dict[
     }
 
 
+@app.get("/v1/usage")
+async def get_usage(
+    authorization: str | None = Header(default=None),
+    tenant_id: str | None = None,
+    run_id: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """
+    Task 7: paginated cost/metadata usage records — never prompt or
+    completion content (see SECURITY_ARCHITECTURE.md). Filter with
+    ?tenant_id=... and/or ?run_id=...; paginate with ?limit=&offset=.
+    """
+    _check_auth(authorization)
+    limit = max(1, min(limit, ATTRIBUTION_USAGE_PAGE_MAX))
+    offset = max(0, offset)
+    records, total = _flux._engine._attribution.usage(
+        tenant_id=tenant_id, run_id=run_id, limit=limit, offset=offset
+    )
+    return {
+        "object": "list",
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "data": [
+            {
+                "tenant_id": r.tenant_id,
+                "run_id": r.run_id,
+                "task_type": r.task_type,
+                "step_type": r.step_type,
+                "model_id": r.model_id,
+                "cost_usd": r.cost_usd,
+                "timestamp": r.timestamp,
+            }
+            for r in records
+        ],
+    }
+
+
+@app.get("/metrics")
+async def metrics(authorization: str | None = Header(default=None)) -> Response:
+    """Task 7: Prometheus text-exposition metrics — flux_cost_usd_total,
+    flux_run_steps, flux_budget_exceeded_total, labelled by tenant/model."""
+    _check_auth(authorization)
+    body = _flux._engine._attribution.render_prometheus()
+    return Response(content=body, media_type="text/plain; version=0.0.4")
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(
     request: Request,
     authorization: str | None = Header(default=None),
     x_flux_run_id: str | None = Header(default=None, alias="X-Flux-Run-Id"),
+    x_flux_tenant_id: str | None = Header(default=None, alias="X-Flux-Tenant-Id"),
 ) -> Any:
     _check_auth(authorization)
     raw_body = await _read_bounded_body(request)
@@ -233,13 +286,14 @@ async def chat_completions(
     # own single-step run (harmless: checked against the generous global
     # RUN_MAX_* defaults, evicted quickly by the RunStore's TTL/LRU).
     run_id = x_flux_run_id or str(uuid.uuid4())
-    routing_request, _ = _build_routing_request(body, run_id)
+    routing_request, _ = _build_routing_request(body, run_id, x_flux_tenant_id)
     stream = bool(body.get("stream", False))
 
     start = time.monotonic()
     try:
         decision = await _flux.route(routing_request, verbose=True)
     except RunBudgetExceeded as exc:
+        _flux._engine._attribution.record_budget_exceeded(x_flux_tenant_id)
         return JSONResponse(
             status_code=429,
             content={"error": {"message": str(exc), "type": "run_budget_exceeded", **exc.summary}},
@@ -263,6 +317,14 @@ async def chat_completions(
         _flux._engine._run_budget.record_step(
             run_id, model_id, decision.estimated_cost, routing_request.max_tokens_requested or 1024
         )
+        _flux._engine._attribution.record(
+            tenant_id=routing_request.tenant_id,
+            run_id=run_id,
+            task_type=decision.task_type,
+            step_type=decision.step_type,
+            model_id=model_id,
+            cost_usd=decision.estimated_cost,
+        )
         return StreamingResponse(
             _stream_completion(routing_request, decision, completion_id, created, headers),
             media_type="text/event-stream",
@@ -276,6 +338,14 @@ async def chat_completions(
 
     _flux._engine._run_budget.record_step(
         run_id, model_id, decision.estimated_cost, max(len(text) // 4, 1)
+    )
+    _flux._engine._attribution.record(
+        tenant_id=routing_request.tenant_id,
+        run_id=run_id,
+        task_type=decision.task_type,
+        step_type=decision.step_type,
+        model_id=model_id,
+        cost_usd=decision.estimated_cost,
     )
 
     response_body = {

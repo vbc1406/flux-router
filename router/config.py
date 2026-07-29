@@ -696,10 +696,13 @@ CACHE_TRACKER_MAX_ENTRIES: int = 50_000
 # COST ATTRIBUTION (Task 7: router/attribution.py, router/server.py)
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Path to the SQLite usage database. ":memory:" for tests / ephemeral
-# deployments (no cross-restart history); a file path persists across
-# restarts. Never contains prompts or completions — costs and metadata only.
-ATTRIBUTION_DB_PATH: str = os.environ.get("FLUX_ATTRIBUTION_DB", "flux_usage.db")
+# Path to the SQLite usage database. Defaults to ":memory:" — matching this
+# codebase's convention that new engine collaborators default to no disk I/O
+# (see ResponseCache(enabled=False), AdaptiveWeights(state_file=None)) — so
+# constructing a RoutingEngine never silently creates a file on disk. Set
+# FLUX_ATTRIBUTION_DB to a real path for cross-restart persistence; never
+# contains prompts or completions, costs and metadata only.
+ATTRIBUTION_DB_PATH: str = os.environ.get("FLUX_ATTRIBUTION_DB", ":memory:")
 
 # Prometheus label cardinality cap: distinct (tenant_id, model_id) label
 # combinations tracked before falling back to an "_overflow_" bucket. Prevents

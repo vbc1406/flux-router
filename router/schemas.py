@@ -369,6 +369,13 @@ class RoutingDecision(BaseModel):
 
     chosen_model: ModelOption | None = None
 
+    # ── Task 7: Cost attribution ─────────────────────────────────────────────
+    # Denormalized from TaskAnalysis so callers (and router/attribution.py)
+    # don't need verbose=True / explanation populated just to see what kind
+    # of request this was.
+    task_type: str = ""
+    step_type: str = ""
+
     # ── Primary fallback chain (generic best-effort) ─────────────────────────
     fallback_chain: list[ModelOption] = Field(default_factory=list)
 

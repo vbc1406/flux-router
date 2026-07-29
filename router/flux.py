@@ -286,6 +286,15 @@ class Flux:
                         decision.estimated_cost,
                         max(len(text) // 4, 1),
                     )
+                # Task 7: cost attribution — costs/metadata only, never `text`.
+                self._engine._attribution.record(
+                    tenant_id=request.tenant_id,
+                    run_id=request.run_id,
+                    task_type=decision.task_type,
+                    step_type=decision.step_type,
+                    model_id=model.model_id,
+                    cost_usd=decision.estimated_cost,
+                )
                 return FluxResponse(
                     text=text,
                     model=model,
@@ -424,6 +433,21 @@ class Flux:
                 last_model.model_id,
                 decision.estimated_cost,
                 max(len(last_text) // 4, 1),
+            )
+
+        # Task 7: attribution gets ONE record per tier actually dispatched
+        # (unlike the plan/run-budget trackers above, which only count the
+        # final tier) — cascade's real economics require seeing every attempt.
+        for i in range(len(step_breakdown)):
+            self._engine._attribution.record(
+                tenant_id=request.tenant_id,
+                run_id=request.run_id,
+                task_type=decision.task_type,
+                step_type=decision.step_type,
+                model_id=tier_ladder[i].model_id,
+                cost_usd=estimate_step_cost(
+                    tier_ladder[i], decision.chosen_model, decision.estimated_cost
+                ),
             )
 
         # cascade_net_savings: actual cost of every tier PAID FOR (all

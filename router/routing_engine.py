@@ -64,6 +64,7 @@ import structlog
 
 from .adaptive_weights import AdaptiveWeights
 from .analytics import RoutingAnalytics
+from .attribution import CostAttribution
 from .budget_tracker import BudgetTracker, DailyBudgetTracker
 from .cache import ResponseCache
 from .circuit_breaker import CircuitBreaker
@@ -222,6 +223,8 @@ class RoutingEngine:
         self._run_budget = RunBudget()
         # Task 5: cache-aware routing (which provider holds a warm prefix).
         self._prompt_cache = PromptCacheTracker()
+        # Task 7: per-run/per-tenant cost attribution.
+        self._attribution = CostAttribution()
 
     # ── Public ──────────────────────────────────────────────────────────────
 
@@ -961,6 +964,8 @@ class RoutingEngine:
             confidence_fallback=confidence_fallback,
             budget_exhausted=budget_exhausted,
             prompt_cache_status=prompt_cache_status,
+            task_type=analysis.task_type,
+            step_type=analysis.step_type,
         )
 
     def _post_route(self, decision: RoutingDecision, request: RoutingRequest) -> None:
@@ -1054,6 +1059,16 @@ class RoutingEngine:
                         decision.estimated_cost,
                         max(len(response) // 4, 1),
                     )
+                # Task 7: cost attribution — costs/metadata only, never the
+                # prompt or the `response` text itself.
+                self._attribution.record(
+                    tenant_id=request.tenant_id,
+                    run_id=request.run_id,
+                    task_type=decision.task_type,
+                    step_type=decision.step_type,
+                    model_id=model.model_id,
+                    cost_usd=decision.estimated_cost,
+                )
                 decision.proxy_response = response
                 decision.proxy_model_used = model
                 return decision

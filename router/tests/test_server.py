@@ -236,3 +236,75 @@ class TestRunBudget:
         assert body["error"]["type"] == "run_budget_exceeded"
         assert "steps_taken" in body["error"]
         assert resp.headers["x-flux-run-id"] == run_id
+
+
+class TestAttribution:
+    def test_chat_completion_records_usage_under_tenant_header(self, client):
+        resp = client.post(
+            "/v1/chat/completions", json=_body(), headers={"X-Flux-Tenant-Id": "acme"}
+        )
+        assert resp.status_code == 200
+        usage = client.get("/v1/usage", params={"tenant_id": "acme"}).json()
+        assert usage["total"] >= 1
+        assert all(r["tenant_id"] == "acme" for r in usage["data"])
+
+    def test_usage_endpoint_paginates(self, client):
+        for _ in range(3):
+            client.post(
+                "/v1/chat/completions", json=_body(), headers={"X-Flux-Tenant-Id": "paginate-me"}
+            )
+        page = client.get(
+            "/v1/usage", params={"tenant_id": "paginate-me", "limit": 2, "offset": 0}
+        ).json()
+        assert page["limit"] == 2
+        assert len(page["data"]) == 2
+        assert page["total"] == 3
+
+    def test_usage_endpoint_never_includes_prompt_or_response_text(self, client):
+        resp = client.post(
+            "/v1/chat/completions",
+            json=_body(),
+            headers={"X-Flux-Tenant-Id": "no-leak-test"},
+        )
+        assert resp.status_code == 200
+        usage = client.get("/v1/usage", params={"tenant_id": "no-leak-test"}).json()
+        for record in usage["data"]:
+            assert set(record.keys()) == {
+                "tenant_id",
+                "run_id",
+                "task_type",
+                "step_type",
+                "model_id",
+                "cost_usd",
+                "timestamp",
+            }
+
+    def test_metrics_endpoint_returns_prometheus_text(self, client):
+        client.post(
+            "/v1/chat/completions", json=_body(), headers={"X-Flux-Tenant-Id": "metrics-co"}
+        )
+        resp = client.get("/metrics")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/plain")
+        assert "flux_cost_usd_total" in resp.text
+        assert 'tenant_id="metrics-co"' in resp.text
+
+    def test_run_budget_exceeded_increments_metric(self, client):
+        from router.run_budget import RunLimits
+
+        run_id = "metrics-exceeded-run"
+        rb = server._flux._engine._run_budget
+        rb.start(
+            run_id,
+            RunLimits(
+                max_cost_usd=0.0001, max_steps=1000, max_tokens=10**9, max_duration_seconds=10**9
+            ),
+        )
+        rb.record_step(run_id, "m", 1.0, 10)
+        client.post(
+            "/v1/chat/completions",
+            json=_body(),
+            headers={"X-Flux-Run-Id": run_id, "X-Flux-Tenant-Id": "budget-blown-co"},
+        )
+        resp = client.get("/metrics")
+        assert 'flux_budget_exceeded_total{tenant_id="budget-blown-co"} 1' in resp.text

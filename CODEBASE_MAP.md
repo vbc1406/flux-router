@@ -45,6 +45,7 @@ flux/
 │   ├── run_budget.py              ← Run-scoped budget enforcement for agent loops (Task 3)
 │   ├── prompt_cache.py            ← Cache-aware routing: tracks which provider holds a warm prefix (Task 5)
 │   ├── cascade.py                 ← Local response verifiers + cost accounting for cascade routing (Task 8)
+│   ├── attribution.py             ← Per-run/per-tenant cost attribution: SQLite usage log + Prometheus counters (Task 7)
 │   └── tests/
 │       ├── test_routing.py        ← End-to-end routing engine tests (13 change areas)
 │       ├── test_server.py         ← HTTP proxy tests (directives, passthrough, streaming, auth, body cap)
@@ -52,6 +53,7 @@ flux/
 │       ├── test_step_type.py      ← step_type inference, STEP_TYPE_FLOORS, tool-capability filter
 │       ├── test_cache_aware_routing.py ← PromptCacheTracker + cache-stickiness routing behavior
 │       ├── test_cascade.py        ← Cascade escalation ladder, verifiers, net-savings accounting
+│       ├── test_attribution.py    ← UsageStore, cardinality-capped Prometheus counters, wiring
 │       ├── test_adaptive_guardrails.py  ← AdaptiveWeights guardrail tests (6 issue areas)
 │       ├── test_adaptive_weights.py     ← AdaptiveWeights unit tests with metrics
 │       ├── test_cache.py          ← ResponseCache + fingerprinting tests
@@ -136,6 +138,17 @@ tier tried, by design (see FEATURES.md honesty requirement). Python API
 (`Flux.complete(routing_priority="cascade")`) only for now — `router/server.py`
 calls `Flux._call_model()` directly rather than `Flux.complete()`, so the
 HTTP proxy does not yet expose a `flux-cascade` directive.
+
+### Cost Attribution
+→ `router/attribution.py` (`CostAttribution`, `SqliteUsageStore`) — "which
+customer/workflow is eating my margin." Recorded at every successful
+dispatch point (`RoutingEngine._proxy_execute()`, `Flux.complete()`,
+`Flux._complete_cascade()`, and `router/server.py`'s two response paths):
+`tenant_id`, `run_id`, `task_type`, `step_type`, `model_id`, `cost_usd` — no
+prompt or response content, ever (see SECURITY_ARCHITECTURE.md). Exposed via
+`GET /v1/usage` (paginated, filterable) and `GET /metrics` (Prometheus text,
+label-cardinality-capped at `ATTRIBUTION_METRICS_MAX_LABEL_COMBOS`). Default
+storage is SQLite `:memory:`; set `FLUX_ATTRIBUTION_DB` for a persistent file.
 
 ### Step-Type Classification (agent trajectories)
 → `RoutingRequest.step_type` / `TaskAnalysis.step_type`, inferred by
