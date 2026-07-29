@@ -78,6 +78,7 @@ from .config import (
     CACHE_PREFIX_MIN_TOKENS,
     CACHE_STICKINESS_WEIGHT,
     CACHE_SWITCH_MARGIN,
+    CASCADE_ESCALATION_TIERS,
     CIRCUIT_BREAKER_FAILURE_THRESHOLD,
     CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
     COMPLEXITY_QUALITY_FLOOR,
@@ -561,6 +562,37 @@ class RoutingEngine:
                 compressed=context_was_compressed,
                 cost=cost,
                 priority_applied="always-premium",
+                confidence_fallback=False,
+                budget_exhausted=False,
+                fallback_on_rate_limit=rl,
+                fallback_on_content_safety=cs,
+                fallback_on_timeout=to,
+            )
+            decision.last_model = conv_entry["last_model"] if conv_entry else None
+            decision.explanation = expl
+            self._post_route(decision, request)
+            if request.mode == "proxy":
+                decision = await self._proxy_execute(decision, request)
+            return decision
+
+        # Task 8: cascade shortcut — mirrors always-premium above but starts
+        # at the cheapest capable tier instead of the most capable one. The
+        # escalation walk itself happens in Flux.complete() / router/cascade.py,
+        # using decision.fallback_chain (built below) as the tier ladder.
+        if request.routing_priority == "cascade":
+            chosen, rule = _route_cascade_initial(candidates, analysis)
+            chain = build_fallback_chain(chosen, candidates, analysis)
+            rl, cs, to = build_typed_fallback_chains(chosen, candidates, analysis)
+            cost = _estimate_cost(analysis, chosen)
+            decision = self._finalise(
+                chosen=chosen,
+                chain=chain,
+                analysis=analysis,
+                request=request,
+                rule=rule,
+                compressed=context_was_compressed,
+                cost=cost,
+                priority_applied="cascade",
                 confidence_fallback=False,
                 budget_exhausted=False,
                 fallback_on_rate_limit=rl,
@@ -1153,6 +1185,27 @@ def _route_always_premium(
     # Should not reach here if candidates is non-empty
     best = _pick_best(candidates, analysis)
     return best, "always_premium (fallback)"
+
+
+def _route_cascade_initial(
+    candidates: list[ModelOption],
+    analysis: TaskAnalysis,
+) -> tuple[ModelOption, str]:
+    """
+    Task 8: pick the CHEAPEST capable tier to start a cascade — the mirror
+    image of _route_always_premium(). CASCADE_ESCALATION_TIERS order
+    (cheapest first) determines which tier is tried first; the caller
+    (Flux.complete()) escalates through decision.fallback_chain — built by
+    build_fallback_chain() from this starting point, which walks up in
+    tier/capability — on verification failure.
+    """
+    for tier in CASCADE_ESCALATION_TIERS:  # cheapest first
+        tier_models = [m for m in candidates if m.tier == tier]
+        if tier_models:
+            best = _pick_best(tier_models, analysis)
+            return best, f"cascade_initial (tier={tier})"
+    best = _pick_best(candidates, analysis)
+    return best, "cascade_initial (fallback)"
 
 
 def _budget_tier_walkdown(

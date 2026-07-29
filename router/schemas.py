@@ -151,9 +151,12 @@ class RoutingRequest(BaseModel):
     #   quality-first   → weights quality=0.70, cost=0.20, latency=0.10
     #   balanced        → default behavior (current logic, no change)
     #   cost-optimized  → weights quality=0.30, cost=0.60, latency=0.10
-    routing_priority: Literal["always-premium", "quality-first", "balanced", "cost-optimized"] = (
-        "balanced"
-    )
+    #   cascade         → Task 8: start at the cheapest capable tier; Flux
+    #                     escalates through decision.fallback_chain on
+    #                     verification failure. See router/cascade.py.
+    routing_priority: Literal[
+        "always-premium", "quality-first", "balanced", "cost-optimized", "cascade"
+    ] = "balanced"
 
     # ── Change 3: Per-customer adaptive memory ──────────────────────────────────
     # When provided, per-customer adaptive quality scores are used after 20+ samples.

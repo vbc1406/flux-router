@@ -432,13 +432,19 @@ SCORING_WEIGHTS: dict[str, dict[str, float]] = {
     # routing_priority overrides (Change 1) — these override the latency-mode entry
     "quality-first": {"quality": 0.70, "cost": 0.20, "latency": 0.10},
     "cost-optimized": {"quality": 0.30, "cost": 0.60, "latency": 0.10},
+    # Task 8: cascade is a shortcut priority (like always-premium) that
+    # bypasses Step 9 scoring entirely — see _route_cascade_initial(). This
+    # entry exists for explainability/tooling consistency (every
+    # VALID_ROUTING_PRIORITIES value should be describable in weight terms),
+    # heavily cost-weighted since the whole point is to start cheap.
+    "cascade": {"quality": 0.20, "cost": 0.70, "latency": 0.10},
 }
 
 # Valid values for RoutingRequest.routing_priority.
 # Validated at the start of RoutingEngine.route() — invalid values raise ValueError.
 # How to tune: add new priority tags here AND add their weights to SCORING_WEIGHTS.
 VALID_ROUTING_PRIORITIES: frozenset[str] = frozenset(
-    {"always-premium", "quality-first", "balanced", "cost-optimized"}
+    {"always-premium", "quality-first", "balanced", "cost-optimized", "cascade"}
 )
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -44,12 +44,14 @@ flux/
 │   ├── server.py                  ← OpenAI-compatible HTTP proxy (POST /v1/chat/completions); optional `[server]` extra
 │   ├── run_budget.py              ← Run-scoped budget enforcement for agent loops (Task 3)
 │   ├── prompt_cache.py            ← Cache-aware routing: tracks which provider holds a warm prefix (Task 5)
+│   ├── cascade.py                 ← Local response verifiers + cost accounting for cascade routing (Task 8)
 │   └── tests/
 │       ├── test_routing.py        ← End-to-end routing engine tests (13 change areas)
 │       ├── test_server.py         ← HTTP proxy tests (directives, passthrough, streaming, auth, body cap)
 │       ├── test_run_budget.py     ← Run-budget ladder, eviction at scale, agent-loop integration
 │       ├── test_step_type.py      ← step_type inference, STEP_TYPE_FLOORS, tool-capability filter
 │       ├── test_cache_aware_routing.py ← PromptCacheTracker + cache-stickiness routing behavior
+│       ├── test_cascade.py        ← Cascade escalation ladder, verifiers, net-savings accounting
 │       ├── test_adaptive_guardrails.py  ← AdaptiveWeights guardrail tests (6 issue areas)
 │       ├── test_adaptive_weights.py     ← AdaptiveWeights unit tests with metrics
 │       ├── test_cache.py          ← ResponseCache + fingerprinting tests
@@ -119,6 +121,21 @@ savings clear `CACHE_SWITCH_MARGIN`. Result surfaces on
 Not the same thing as `router/cache.py`'s `ResponseCache` (whole-response
 caching) — this tracks provider-side *prefix* caching state only, no prompt
 or response content.
+
+### Cascade / Escalation
+→ `router/cascade.py` (`verify_response`, `Verifier` protocol,
+`estimate_step_cost`) + `Flux._complete_cascade()` in `flux.py` +
+`_route_cascade_initial()` in `routing_engine.py`. `routing_priority="cascade"`
+starts at the cheapest capable tier (mirrors `always-premium`'s shortcut, but
+inverted); `Flux.complete()` then walks `decision.fallback_chain` as an
+escalation ladder, running local verifiers (no LLM judge in the hot path)
+after each attempt and stopping at the first pass. Surfaces
+`RoutingDecision.cascade_attempts` / `cascade_net_savings` — the latter can
+go negative when escalation cost more than skipping straight to the priciest
+tier tried, by design (see FEATURES.md honesty requirement). Python API
+(`Flux.complete(routing_priority="cascade")`) only for now — `router/server.py`
+calls `Flux._call_model()` directly rather than `Flux.complete()`, so the
+HTTP proxy does not yet expose a `flux-cascade` directive.
 
 ### Step-Type Classification (agent trajectories)
 → `RoutingRequest.step_type` / `TaskAnalysis.step_type`, inferred by
