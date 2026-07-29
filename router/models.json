@@ -279,7 +279,11 @@
         "general": 0.82
       },
       "supports_tools": true,
-      "supports_structured_output": true
+      "supports_structured_output": true,
+      "cache_read_cost_per_1m": 0.1,
+      "cache_write_cost_per_1m": 1.25,
+      "cache_min_tokens": 1024,
+      "cache_ttl_seconds": 300
     },
     {
       "provider": "openai",
@@ -322,7 +326,11 @@
         "general": 0.83
       },
       "supports_tools": true,
-      "supports_structured_output": true
+      "supports_structured_output": true,
+      "cache_read_cost_per_1m": 0.025,
+      "cache_write_cost_per_1m": 0.3125,
+      "cache_min_tokens": 1024,
+      "cache_ttl_seconds": 300
     },
     {
       "provider": "openai",
@@ -365,7 +373,11 @@
         "general": 0.76
       },
       "supports_tools": true,
-      "supports_structured_output": true
+      "supports_structured_output": true,
+      "cache_read_cost_per_1m": 0.015,
+      "cache_write_cost_per_1m": 0.1875,
+      "cache_min_tokens": 1024,
+      "cache_ttl_seconds": 300
     },
     {
       "provider": "google",
@@ -490,7 +502,11 @@
         "general": 0.88
       },
       "supports_tools": true,
-      "supports_structured_output": true
+      "supports_structured_output": true,
+      "cache_read_cost_per_1m": 0.3,
+      "cache_write_cost_per_1m": 3.75,
+      "cache_min_tokens": 1024,
+      "cache_ttl_seconds": 300
     },
     {
       "provider": "anthropic",
@@ -533,7 +549,11 @@
         "general": 0.84
       },
       "supports_tools": true,
-      "supports_structured_output": true
+      "supports_structured_output": true,
+      "cache_read_cost_per_1m": 0.3,
+      "cache_write_cost_per_1m": 3.75,
+      "cache_min_tokens": 1024,
+      "cache_ttl_seconds": 300
     },
     {
       "provider": "openai",
@@ -576,7 +596,11 @@
         "general": 0.9
       },
       "supports_tools": true,
-      "supports_structured_output": true
+      "supports_structured_output": true,
+      "cache_read_cost_per_1m": 0.125,
+      "cache_write_cost_per_1m": 1.5625,
+      "cache_min_tokens": 1024,
+      "cache_ttl_seconds": 300
     },
     {
       "provider": "openai",
@@ -619,7 +643,11 @@
         "general": 0.84
       },
       "supports_tools": true,
-      "supports_structured_output": true
+      "supports_structured_output": true,
+      "cache_read_cost_per_1m": 0.25,
+      "cache_write_cost_per_1m": 3.125,
+      "cache_min_tokens": 1024,
+      "cache_ttl_seconds": 300
     },
     {
       "provider": "google",
@@ -746,7 +774,11 @@
         "general": 0.94
       },
       "supports_tools": true,
-      "supports_structured_output": true
+      "supports_structured_output": true,
+      "cache_read_cost_per_1m": 0.5,
+      "cache_write_cost_per_1m": 6.25,
+      "cache_min_tokens": 1024,
+      "cache_ttl_seconds": 300
     },
     {
       "provider": "anthropic",
@@ -789,7 +821,11 @@
         "general": 0.9
       },
       "supports_tools": true,
-      "supports_structured_output": true
+      "supports_structured_output": true,
+      "cache_read_cost_per_1m": 1.5,
+      "cache_write_cost_per_1m": 18.75,
+      "cache_min_tokens": 1024,
+      "cache_ttl_seconds": 300
     },
     {
       "provider": "openai",
@@ -832,7 +868,11 @@
         "general": 0.92
       },
       "supports_tools": true,
-      "supports_structured_output": true
+      "supports_structured_output": true,
+      "cache_read_cost_per_1m": 0.5,
+      "cache_write_cost_per_1m": 6.25,
+      "cache_min_tokens": 1024,
+      "cache_ttl_seconds": 300
     },
     {
       "provider": "openai",
@@ -876,7 +916,11 @@
         "general": 0.88
       },
       "supports_tools": true,
-      "supports_structured_output": true
+      "supports_structured_output": true,
+      "cache_read_cost_per_1m": 7.5,
+      "cache_write_cost_per_1m": 93.75,
+      "cache_min_tokens": 1024,
+      "cache_ttl_seconds": 300
     },
     {
       "provider": "google",
@@ -1003,7 +1047,11 @@
         "general": 0.9
       },
       "supports_tools": true,
-      "supports_structured_output": true
+      "supports_structured_output": true,
+      "cache_read_cost_per_1m": 1.0,
+      "cache_write_cost_per_1m": 12.5,
+      "cache_min_tokens": 1024,
+      "cache_ttl_seconds": 300
     },
     {
       "provider": "openai",
@@ -1046,7 +1094,11 @@
         "general": 0.86
       },
       "supports_tools": true,
-      "supports_structured_output": true
+      "supports_structured_output": true,
+      "cache_read_cost_per_1m": 0.11,
+      "cache_write_cost_per_1m": 1.375,
+      "cache_min_tokens": 1024,
+      "cache_ttl_seconds": 300
     },
     {
       "provider": "anthropic",
@@ -1089,7 +1141,11 @@
         "general": 0.92
       },
       "supports_tools": true,
-      "supports_structured_output": true
+      "supports_structured_output": true,
+      "cache_read_cost_per_1m": 1.5,
+      "cache_write_cost_per_1m": 18.75,
+      "cache_min_tokens": 1024,
+      "cache_ttl_seconds": 300
     }
   ]
 }

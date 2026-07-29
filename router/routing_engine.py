@@ -73,7 +73,11 @@ from .config import (
     AB_BLOCKED_SENSITIVITY_LEVELS,
     AB_MAX_COMPLEXITY_SCORE,
     AB_MAX_EXPLORATION_RATE,
+    CACHE_DEFAULT_TTL_SECONDS,
     CACHE_ENABLED,
+    CACHE_PREFIX_MIN_TOKENS,
+    CACHE_STICKINESS_WEIGHT,
+    CACHE_SWITCH_MARGIN,
     CIRCUIT_BREAKER_FAILURE_THRESHOLD,
     CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
     COMPLEXITY_QUALITY_FLOOR,
@@ -103,6 +107,7 @@ from .config import (
 from .context_compressor import ContextCompressor
 from .fallback_chain import build_fallback_chain, build_typed_fallback_chains
 from .model_registry import ModelRegistry
+from .prompt_cache import PromptCacheTracker, hash_prefix
 from .run_budget import RunBudget
 from .schemas import ModelOption, RoutingDecision, RoutingExplanation, RoutingRequest, TaskAnalysis
 
@@ -214,6 +219,8 @@ class RoutingEngine:
         self._route_count: int = 0
         # Task 3: run-scoped budget enforcement (checked before Step 1).
         self._run_budget = RunBudget()
+        # Task 5: cache-aware routing (which provider holds a warm prefix).
+        self._prompt_cache = PromptCacheTracker()
 
     # ── Public ──────────────────────────────────────────────────────────────
 
@@ -696,6 +703,47 @@ class RoutingEngine:
                     )
                     break
 
+        # Task 5: cache-aware routing. Only modeled when there's a key to
+        # correlate repeat calls (conversation_id, falling back to run_id)
+        # and a system prompt long enough that provider caching would
+        # plausibly engage at all.
+        cache_key = request.conversation_id or request.run_id
+        cache_prefix_hash = ""
+        cache_prefix_tokens = 0
+        prompt_cache_status = "cold"
+        warm_provider: str | None = None
+        if cache_key and request.system_prompt:
+            cache_prefix_tokens = self._classifier._count_tokens(request.system_prompt)
+            if cache_prefix_tokens >= CACHE_PREFIX_MIN_TOKENS:
+                cache_prefix_hash = hash_prefix(request.system_prompt)
+                warm_provider = self._prompt_cache.get_warm_provider(cache_key, cache_prefix_hash)
+                if warm_provider:
+                    incumbents = [m for m in tier_candidates if m.provider == warm_provider]
+                    if incumbents:
+                        for m in incumbents:
+                            m.routing_score += CACHE_STICKINESS_WEIGHT
+                        incumbent_best = max(incumbents, key=lambda m: m.routing_score)
+                        incumbent_cost = _cache_aware_cost(
+                            analysis, incumbent_best, cache_prefix_tokens, cache_hit=True
+                        )
+                        others = [m for m in tier_candidates if m.provider != warm_provider]
+                        other_best = max(others, key=lambda m: m.routing_score) if others else None
+                        relative_savings = 0.0
+                        if other_best is not None and incumbent_cost > 0:
+                            other_cost = _cache_aware_cost(
+                                analysis, other_best, cache_prefix_tokens, cache_hit=False
+                            )
+                            relative_savings = (incumbent_cost - other_cost) / incumbent_cost
+                        if other_best is None or relative_savings <= CACHE_SWITCH_MARGIN:
+                            # Hard constraint: the switch doesn't clear the margin
+                            # (or there's nothing to switch to) — pin to the
+                            # incumbent provider so the cache isn't lost for a
+                            # marginal saving.
+                            tier_candidates = incumbents
+                            prompt_cache_status = "warm"
+                        else:
+                            prompt_cache_status = "would_lose_cache"
+
         tier_candidates.sort(key=lambda m: m.routing_score, reverse=True)
         chosen = tier_candidates[0]
         rule = "tier_selection"
@@ -787,6 +835,21 @@ class RoutingEngine:
             fallback_chain = build_fallback_chain(chosen, candidates, analysis)
             rl_chain, cs_chain, to_chain = build_typed_fallback_chains(chosen, candidates, analysis)
 
+        # Task 5: if budget walk-down (Step 12) moved `chosen` off the provider
+        # cache-selection picked, the cache status no longer reflects reality —
+        # budget is a harder constraint than cache stickiness. Also record the
+        # (possibly walked-down) final choice as the new cache holder.
+        if cache_prefix_hash:
+            if warm_provider is not None and chosen.provider != warm_provider:
+                prompt_cache_status = "would_lose_cache"
+            self._prompt_cache.record(
+                cache_key,
+                chosen.provider,
+                cache_prefix_hash,
+                cache_prefix_tokens,
+                (chosen.cache_ttl_seconds or CACHE_DEFAULT_TTL_SECONDS),
+            )
+
         # ══ STEP 13: LOG + RETURN ════════════════════════════════════════
         decision = self._finalise(
             chosen,
@@ -802,6 +865,7 @@ class RoutingEngine:
             fallback_on_rate_limit=rl_chain,
             fallback_on_content_safety=cs_chain,
             fallback_on_timeout=to_chain,
+            prompt_cache_status=prompt_cache_status,
         )
         decision.last_model = conv_entry["last_model"] if conv_entry else None
         decision.explanation = expl
@@ -840,6 +904,7 @@ class RoutingEngine:
         fallback_on_rate_limit: list[ModelOption] | None = None,
         fallback_on_content_safety: list[ModelOption] | None = None,
         fallback_on_timeout: list[ModelOption] | None = None,
+        prompt_cache_status: str = "cold",
     ) -> RoutingDecision:
         """Assemble and return a fully populated RoutingDecision."""
         savings = _estimate_savings_vs_premium(analysis, chosen, self._registry)
@@ -863,6 +928,7 @@ class RoutingEngine:
             priority_applied=priority_applied,
             confidence_fallback=confidence_fallback,
             budget_exhausted=budget_exhausted,
+            prompt_cache_status=prompt_cache_status,
         )
 
     def _post_route(self, decision: RoutingDecision, request: RoutingRequest) -> None:
@@ -1149,6 +1215,35 @@ def _estimate_cost(analysis: TaskAnalysis, model: ModelOption) -> float:
     cost = (analysis.estimated_input_tokens / 1000.0) * model.cost_per_1k_input + (
         output_tokens / 1000.0
     ) * model.cost_per_1k_output
+    return round(cost, 6)
+
+
+def _cache_aware_cost(
+    analysis: TaskAnalysis,
+    model: ModelOption,
+    prefix_tokens: int,
+    cache_hit: bool,
+) -> float:
+    """
+    Task 5: effective cost accounting for a warm provider-side prefix cache.
+
+    Falls back to the plain _estimate_cost() (no cache modeled) whenever the
+    model has no cache pricing, cache_hit is False, or the shared prefix is
+    below the model's own cache_min_tokens. Otherwise the prefix portion of
+    input tokens is priced at cache_read_cost_per_1m instead of
+    cost_per_1k_input.
+    """
+    min_tokens = model.cache_min_tokens or CACHE_PREFIX_MIN_TOKENS
+    if not cache_hit or model.cache_read_cost_per_1m is None or prefix_tokens < min_tokens:
+        return _estimate_cost(analysis, model)
+
+    remaining_input = max(analysis.estimated_input_tokens - prefix_tokens, 0)
+    output_tokens = min(analysis.estimated_output_tokens, model.max_output_tokens)
+    cost = (
+        (prefix_tokens / 1_000_000.0) * model.cache_read_cost_per_1m
+        + (remaining_input / 1000.0) * model.cost_per_1k_input
+        + (output_tokens / 1000.0) * model.cost_per_1k_output
+    )
     return round(cost, 6)
 
 

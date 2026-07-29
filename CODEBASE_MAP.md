@@ -43,11 +43,13 @@ flux/
 │   ├── demo.py                    ← Standalone demo script
 │   ├── server.py                  ← OpenAI-compatible HTTP proxy (POST /v1/chat/completions); optional `[server]` extra
 │   ├── run_budget.py              ← Run-scoped budget enforcement for agent loops (Task 3)
+│   ├── prompt_cache.py            ← Cache-aware routing: tracks which provider holds a warm prefix (Task 5)
 │   └── tests/
 │       ├── test_routing.py        ← End-to-end routing engine tests (13 change areas)
 │       ├── test_server.py         ← HTTP proxy tests (directives, passthrough, streaming, auth, body cap)
 │       ├── test_run_budget.py     ← Run-budget ladder, eviction at scale, agent-loop integration
 │       ├── test_step_type.py      ← step_type inference, STEP_TYPE_FLOORS, tool-capability filter
+│       ├── test_cache_aware_routing.py ← PromptCacheTracker + cache-stickiness routing behavior
 │       ├── test_adaptive_guardrails.py  ← AdaptiveWeights guardrail tests (6 issue areas)
 │       ├── test_adaptive_weights.py     ← AdaptiveWeights unit tests with metrics
 │       ├── test_cache.py          ← ResponseCache + fingerprinting tests
@@ -104,6 +106,19 @@ To add a model: edit `models.json`, no code change needed.
 ### Routing Logic
 Main algorithm → `router/routing_engine.py` (`RoutingEngine.route()`)
 The method is structured as 13 numbered steps with header comments.
+
+### Cache-Aware Routing
+→ `router/prompt_cache.py` (`PromptCacheTracker`) + a block inside
+`routing_engine.py` Step 9. Keyed by `conversation_id` (falling back to
+`run_id`); only engages when `system_prompt` is at least
+`CACHE_PREFIX_MIN_TOKENS`. A soft `CACHE_STICKINESS_WEIGHT` score bonus goes
+to models on the provider already holding a warm prefix; a hard constraint
+then blocks switching away from that provider unless the switch's cost
+savings clear `CACHE_SWITCH_MARGIN`. Result surfaces on
+`RoutingDecision.prompt_cache_status` (`cold` / `warm` / `would_lose_cache`).
+Not the same thing as `router/cache.py`'s `ResponseCache` (whole-response
+caching) — this tracks provider-side *prefix* caching state only, no prompt
+or response content.
 
 ### Step-Type Classification (agent trajectories)
 → `RoutingRequest.step_type` / `TaskAnalysis.step_type`, inferred by
