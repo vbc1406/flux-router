@@ -52,6 +52,13 @@ dev = [
 evals = [
     "datasets>=2.0,<4.0",
 ]
+# OpenAI-compatible HTTP proxy (router/server.py). Not a core dependency —
+# import-time users of `router.flux` / `router.routing_engine` should never
+# need an ASGI server pulled in.
+server = [
+    "fastapi>=0.110,<1.0",
+    "uvicorn[standard]>=0.27,<1.0",
+]
 
 [tool.setuptools.packages.find]
 include = ["router*"]

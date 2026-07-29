@@ -41,8 +41,10 @@ flux/
 │   ├── errors.py                  ← Typed exception hierarchy (FluxAPIError and subtypes)
 │   ├── benchmark.py               ← Routing decision benchmarks
 │   ├── demo.py                    ← Standalone demo script
+│   ├── server.py                  ← OpenAI-compatible HTTP proxy (POST /v1/chat/completions); optional `[server]` extra
 │   └── tests/
 │       ├── test_routing.py        ← End-to-end routing engine tests (13 change areas)
+│       ├── test_server.py         ← HTTP proxy tests (directives, passthrough, streaming, auth, body cap)
 │       ├── test_adaptive_guardrails.py  ← AdaptiveWeights guardrail tests (6 issue areas)
 │       ├── test_adaptive_weights.py     ← AdaptiveWeights unit tests with metrics
 │       ├── test_cache.py          ← ResponseCache + fingerprinting tests
@@ -112,6 +114,13 @@ Writes to `router/routing_analytics.jsonl` (append-only JSONL).
 HTTP callers → `router/provider_caller.py`
 Error types → `router/errors.py`
 Supported: Anthropic, OpenAI, Google (Gemini), Groq, Mistral
+
+### HTTP Proxy (OpenAI-compatible)
+→ `router/server.py` — `POST /v1/chat/completions`, `GET /v1/models`, `GET /health`.
+`model` in the request body is a routing directive (`flux-auto` / `flux-cheap` /
+`flux-quality`) unless it names a real registered model, in which case routing is
+bypassed and that model is called verbatim. Requires the `[server]` extra
+(fastapi/uvicorn) — not a core dependency. Run with `make serve`.
 
 ### Fallback and Retry Logic
 Chain construction → `router/fallback_chain.py` (`build_fallback_chain`, `build_typed_fallback_chains`)

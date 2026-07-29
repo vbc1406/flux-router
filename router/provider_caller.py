@@ -261,6 +261,101 @@ _OPENAI_COMPAT_BASES: dict[str, str] = {
     "mistral": "https://api.mistral.ai/v1",
 }
 
+# Providers whose wire format is already OpenAI SSE (`data: {...}\n\n` chunks with
+# a `choices[0].delta` shape). These can be proxied line-for-line by router/server.py
+# without reshaping each chunk. Anthropic and Google use different event formats and
+# are not included here — router/server.py falls back to a synthesized single-chunk
+# stream for those providers rather than translating their event schemas.
+STREAMING_NATIVE_PROVIDERS: frozenset[str] = frozenset(_OPENAI_COMPAT_BASES)
+
+
+def _open_openai_compat_stream(
+    model: ModelOption,
+    request: RoutingRequest,
+    api_key: str,
+    base_url: str,
+    provider_name: str,
+):
+    """Open a streaming POST to an OpenAI-compatible provider. Returns the open response.
+
+    Synchronous — always called via loop.run_in_executor. The caller is
+    responsible for closing the returned response object.
+    """
+    messages = _build_messages(request)
+    if request.system_prompt:
+        messages.insert(0, {"role": "system", "content": request.system_prompt})
+
+    body: dict[str, Any] = {"model": model.model_id, "messages": messages, "stream": True}
+    token_limit = request.max_tokens_requested or 1024
+    if _uses_max_completion_tokens(provider_name, model.model_id):
+        body["max_completion_tokens"] = token_limit
+    else:
+        body["max_tokens"] = token_limit
+    if request.temperature is not None:
+        body["temperature"] = request.temperature
+
+    url = f"{base_url}/chat/completions"
+    if not url.startswith("https://"):
+        raise ProviderCallError("Invalid URL scheme; only https allowed", http_status=None)
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+    }
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    try:
+        return urllib.request.urlopen(req, timeout=PROVIDER_CALL_TIMEOUT_SECONDS)  # nosec B310
+    except urllib.error.HTTPError as exc:
+        raise ProviderCallError(
+            f"HTTP {exc.code} from {provider_name}", http_status=exc.code
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise ProviderCallError(f"Network error calling {provider_name}") from exc
+
+
+async def stream_openai_compat_lines(
+    model: ModelOption,
+    request: RoutingRequest,
+    api_key: str,
+):
+    """
+    Async generator yielding raw SSE lines (bytes, including the trailing
+    newline) from an OpenAI-compatible provider as they arrive on the wire.
+
+    Each `readline()` call runs in the executor individually rather than
+    reading the whole body at once, so lines are yielded incrementally instead
+    of being buffered until the response completes.
+
+    Raises ProviderCallError if the provider is not OpenAI-compatible, or on
+    HTTP/network failure when opening the connection.
+    """
+    provider = model.provider.lower()
+    base_url = _OPENAI_COMPAT_BASES.get(provider)
+    if base_url is None:
+        raise ProviderCallError(f"'{provider}' does not support native SSE streaming")
+
+    loop = asyncio.get_running_loop()
+    resp = await loop.run_in_executor(
+        None, _open_openai_compat_stream, model, request, api_key, base_url, provider
+    )
+    total_bytes = 0
+    try:
+        while True:
+            line = await loop.run_in_executor(None, resp.readline)
+            if not line:
+                break
+            total_bytes += len(line)
+            if total_bytes > MAX_PROVIDER_RESPONSE_BYTES:
+                raise ProviderCallError(
+                    f"Streamed response from {provider} exceeded "
+                    f"{MAX_PROVIDER_RESPONSE_BYTES} bytes",
+                    http_status=None,
+                )
+            yield line
+    finally:
+        await loop.run_in_executor(None, resp.close)
+
 
 # ── Public async entry point ─────────────────────────────────────────────────
 
@@ -285,13 +380,16 @@ async def call_provider(
     #        (3) add the provider's base URL to _OPENAI_COMPAT_BASES if it's OpenAI-compatible,
     #        (4) add models for that provider to router/models.json.
     if provider == "anthropic":
+
         def fn() -> str:
             return _call_anthropic_sync(model, request, api_key)
     elif provider in _OPENAI_COMPAT_BASES:
         base = _OPENAI_COMPAT_BASES[provider]
+
         def fn() -> str:
             return _call_openai_compat_sync(model, request, api_key, base, provider)
     elif provider == "google":
+
         def fn() -> str:
             return _call_google_sync(model, request, api_key)
     else:

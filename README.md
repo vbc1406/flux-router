@@ -24,6 +24,43 @@ The model registry includes current-generation models from OpenAI, Anthropic, Go
 
 ## Quickstart
 
+### Option 1: `base_url` swap (no code changes)
+
+Run Flux as a local HTTP proxy and point your existing OpenAI SDK client at it —
+no call-site rewrites required.
+
+```bash
+pip install -e ".[server]"
+export OPENAI_API_KEY=sk-...        # + whichever other provider keys you use
+make serve                          # or: uvicorn router.server:app
+```
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="unused")
+resp = client.chat.completions.create(
+    model="flux-auto",              # or "flux-cheap" / "flux-quality"
+    messages=[{"role": "user", "content": "Explain backpropagation in two sentences."}],
+)
+print(resp.choices[0].message.content)
+print("routed to:", resp.model)
+```
+
+`model` is a routing directive, not a literal model name: `flux-auto` routes
+normally, `flux-cheap` forces cost-optimized routing, `flux-quality` forces
+quality-first routing. Passing a concrete model ID (e.g. `gpt-4o`) bypasses
+routing entirely and calls that model verbatim. Streaming (`stream: true`) is
+supported. Routing metadata (chosen model, task type, complexity, estimated
+cost, decision latency) comes back on `x-flux-*` response headers.
+
+By default the server binds to `127.0.0.1` only and logs a warning. Set
+`FLUX_SERVER_TOKEN` to require `Authorization: Bearer <token>` on every
+request and allow non-loopback binding — see `router/config.py` for the rest
+of the `SERVER_*` settings.
+
+### Option 2: Python import
+
 Install (from a clone):
 
 ```bash

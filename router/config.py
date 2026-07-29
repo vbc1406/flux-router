@@ -545,3 +545,38 @@ ANALYTICS_MAX_STARTUP_ENTRIES: int = 50_000
 # effect on budget enforcement — eviction is safe.
 # How to tune: raise if you need a longer ledger window; lower to reduce memory.
 BUDGET_LEDGER_MAX_PER_USER: int = 10_000
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HTTP PROXY SERVER (router/server.py)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Bind address for `router.server`. Defaults to loopback-only when no auth token
+# is configured, so an unauthenticated server is never reachable off-box by
+# accident. Set FLUX_SERVER_HOST to override explicitly (e.g. "0.0.0.0" behind
+# a reverse proxy that terminates auth itself).
+# What breaks if misused: setting this to 0.0.0.0 without FLUX_SERVER_TOKEN
+# exposes an unauthenticated proxy — that spends real provider API budget —
+# to anything that can reach the port.
+SERVER_HOST: str = os.environ.get(
+    "FLUX_SERVER_HOST",
+    "0.0.0.0" if os.environ.get("FLUX_SERVER_TOKEN") else "127.0.0.1",  # noqa: S104
+)
+
+# Port for `router.server`. How to tune: change FLUX_SERVER_PORT if 8000 collides
+# with something else in your stack.
+SERVER_PORT: int = int(os.environ.get("FLUX_SERVER_PORT", "8000"))
+
+# Whether the proxy requires `Authorization: Bearer <FLUX_SERVER_TOKEN>` on every
+# request (except /health). Derived from whether the token env var is set at all —
+# there is no way to run with SERVER_REQUIRE_AUTH=True and no token, since that
+# would lock every caller out.
+SERVER_REQUIRE_AUTH: bool = bool(os.environ.get("FLUX_SERVER_TOKEN"))
+
+# Hard cap on request body size for the proxy endpoint, checked against
+# Content-Length and enforced again while streaming the body off the wire (so a
+# missing/lying Content-Length header can't bypass it). Chat completion request
+# bodies (prompt + history) are rarely more than a few hundred KB; 2MB leaves
+# headroom for large message_history without allowing an unbounded upload.
+# How to tune: raise for workloads with very large system prompts / long
+# conversation histories; lower to reduce exposure to body-based DoS.
+SERVER_MAX_BODY_BYTES: int = 2 * 1024 * 1024  # 2MB

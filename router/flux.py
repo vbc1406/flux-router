@@ -177,9 +177,7 @@ class Flux:
                     continue
                 if request.max_daily_cost is not None:
                     cust_id = request.customer_id or request.user_id
-                    if self._engine._daily_budget.is_cap_exceeded(
-                        cust_id, request.max_daily_cost
-                    ):
+                    if self._engine._daily_budget.is_cap_exceeded(cust_id, request.max_daily_cost):
                         last_error = "daily_cap_exceeded"
                         log.warning(
                             "flux_fallback_skipped_daily_cap",
@@ -279,6 +277,12 @@ class Flux:
         kwargs.setdefault("user_id", "flux_default")
         return RoutingRequest(raw_prompt=prompt, **kwargs)
 
+    def _resolve_api_key(self, model: ModelOption, request: RoutingRequest) -> str:
+        """Resolve the API key for ``model``'s provider: per-provider > per-request > legacy."""
+        provider = model.provider.lower()
+        secret = self._provider_keys.get(provider) or request.provider_api_key or self._api_key
+        return secret.get_secret_value() if secret is not None else ""
+
     async def _call_model(self, model: ModelOption, request: RoutingRequest) -> str:
         """
         Call the provider API for ``model`` and return the response text.
@@ -291,13 +295,7 @@ class Flux:
         """
         from .provider_caller import ProviderCallError, call_provider
 
-        provider = model.provider.lower()
-        secret = (
-            self._provider_keys.get(provider)
-            or request.provider_api_key
-            or self._api_key
-        )
-        api_key = secret.get_secret_value() if secret is not None else ""
+        api_key = self._resolve_api_key(model, request)
         try:
             return await call_provider(model, request, api_key)
         except ProviderCallError as exc:
