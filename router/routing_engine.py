@@ -24,7 +24,10 @@ Key Entry Points:
   RoutingEngine.route(request)        — call this to get a routing decision
   RoutingEngine.__init__(...)         — inject all collaborators here
 
-The 13 Steps (in execution order):
+The 13 Steps (in execution order), plus Step 0 in the route() wrapper:
+  0  Run-budget gate  → RunBudget.check_before_dispatch() (Task 3; only if request.run_id
+                         is set). Raises RunBudgetExceeded before dispatch, or forces
+                         cost-optimized routing_priority if degraded/warning.
   1  Classify         → RequestClassifier.analyze()
   2  Cache check      → ResponseCache.get()
   3  Cost ceiling     → block ruinously expensive requests early
@@ -61,6 +64,7 @@ import structlog
 
 from .adaptive_weights import AdaptiveWeights
 from .analytics import RoutingAnalytics
+from .attribution import CostAttribution
 from .budget_tracker import BudgetTracker, DailyBudgetTracker
 from .cache import ResponseCache
 from .circuit_breaker import CircuitBreaker
@@ -70,7 +74,12 @@ from .config import (
     AB_BLOCKED_SENSITIVITY_LEVELS,
     AB_MAX_COMPLEXITY_SCORE,
     AB_MAX_EXPLORATION_RATE,
+    CACHE_DEFAULT_TTL_SECONDS,
     CACHE_ENABLED,
+    CACHE_PREFIX_MIN_TOKENS,
+    CACHE_STICKINESS_WEIGHT,
+    CACHE_SWITCH_MARGIN,
+    CASCADE_ESCALATION_TIERS,
     CIRCUIT_BREAKER_FAILURE_THRESHOLD,
     CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
     COMPLEXITY_QUALITY_FLOOR,
@@ -92,6 +101,7 @@ from .config import (
     MIN_CONFIDENCE_THRESHOLD,
     MIN_QUALITY_THRESHOLD,
     SCORING_WEIGHTS,
+    STEP_TYPE_FLOORS,
     TIER_BOUNDARIES,
     TIER_ORDER,
     VALID_ROUTING_PRIORITIES,
@@ -99,6 +109,8 @@ from .config import (
 from .context_compressor import ContextCompressor
 from .fallback_chain import build_fallback_chain, build_typed_fallback_chains
 from .model_registry import ModelRegistry
+from .prompt_cache import PromptCacheTracker, hash_prefix
+from .run_budget import RunBudget
 from .schemas import ModelOption, RoutingDecision, RoutingExplanation, RoutingRequest, TaskAnalysis
 
 log = structlog.get_logger(__name__)
@@ -207,10 +219,66 @@ class RoutingEngine:
         self._user_free_rpm: dict[str, deque[float]] = defaultdict(deque)
         # Route call counter for periodic housekeeping (conversation expiry).
         self._route_count: int = 0
+        # Task 3: run-scoped budget enforcement (checked before Step 1).
+        self._run_budget = RunBudget()
+        # Task 5: cache-aware routing (which provider holds a warm prefix).
+        self._prompt_cache = PromptCacheTracker()
+        # Task 7: per-run/per-tenant cost attribution.
+        self._attribution = CostAttribution()
 
     # ── Public ──────────────────────────────────────────────────────────────
 
     async def route(self, request: RoutingRequest, verbose: bool = False) -> RoutingDecision:
+        """
+        Task 3, Step 0: run-scoped budget gate, then delegate to the 13-step
+        algorithm in _route_core(). Kept as a thin wrapper so every one of
+        _route_core's early-return paths automatically gets the same
+        run-budget bookkeeping without having to touch each of them.
+
+        If request.run_id is unset, this is a pure passthrough — run-budget
+        enforcement never applies to requests outside a run.
+
+        Raises:
+            RunBudgetExceeded — before dispatch, if the run already met/exceeded
+                                 any of its limits from prior steps.
+        """
+        if not request.run_id:
+            return await self._route_core(request, verbose=verbose)
+
+        run_id = request.run_id
+        budget_state = self._run_budget.check_before_dispatch(run_id)
+        cost_so_far, steps_so_far = self._run_budget.snapshot(run_id)
+
+        effective_request = request
+        budget_warning: str | None = None
+        if budget_state in ("degraded", "warning"):
+            # Force cost-optimized routing for the rest of the run, regardless
+            # of what the caller asked for — this is what keeps a degrading
+            # run's remaining steps cheap instead of crashing outright.
+            effective_request = request.model_copy(update={"routing_priority": "cost-optimized"})
+            log.info(
+                "run_budget_degraded",
+                run_id=run_id,
+                budget_state=budget_state,
+                cost_so_far=cost_so_far,
+                steps_so_far=steps_so_far,
+            )
+        if budget_state == "warning":
+            budget_warning = (
+                f"Run '{run_id}' is at {budget_state} threshold "
+                f"(${cost_so_far:.4f} spent over {steps_so_far} step(s)); "
+                "consider wrapping up soon."
+            )
+
+        decision = await self._route_core(effective_request, verbose=verbose)
+        decision.run_id = run_id
+        decision.run_cost_so_far = cost_so_far
+        decision.run_steps_so_far = steps_so_far
+        decision.budget_state = budget_state
+        decision.budget_warning = budget_warning
+        return decision
+
+    async def _route_core(self, request: RoutingRequest, verbose: bool = False) -> RoutingDecision:
         """
         Run the full 13-step routing algorithm and return a RoutingDecision.
 
@@ -510,6 +578,37 @@ class RoutingEngine:
                 decision = await self._proxy_execute(decision, request)
             return decision
 
+        # Task 8: cascade shortcut — mirrors always-premium above but starts
+        # at the cheapest capable tier instead of the most capable one. The
+        # escalation walk itself happens in Flux.complete() / router/cascade.py,
+        # using decision.fallback_chain (built below) as the tier ladder.
+        if request.routing_priority == "cascade":
+            chosen, rule = _route_cascade_initial(candidates, analysis)
+            chain = build_fallback_chain(chosen, candidates, analysis)
+            rl, cs, to = build_typed_fallback_chains(chosen, candidates, analysis)
+            cost = _estimate_cost(analysis, chosen)
+            decision = self._finalise(
+                chosen=chosen,
+                chain=chain,
+                analysis=analysis,
+                request=request,
+                rule=rule,
+                compressed=context_was_compressed,
+                cost=cost,
+                priority_applied="cascade",
+                confidence_fallback=False,
+                budget_exhausted=False,
+                fallback_on_rate_limit=rl,
+                fallback_on_content_safety=cs,
+                fallback_on_timeout=to,
+            )
+            decision.last_model = conv_entry["last_model"] if conv_entry else None
+            decision.explanation = expl
+            self._post_route(decision, request)
+            if request.mode == "proxy":
+                decision = await self._proxy_execute(decision, request)
+            return decision
+
         # Trivially short conversation → always free tier
         if analysis.task_type == "conversation" and analysis.estimated_input_tokens < 50:
             free_models = [m for m in candidates if m.tier == "free"]
@@ -573,9 +672,7 @@ class RoutingEngine:
         target_tier = _get_tier_for_score(analysis.complexity_score)  # kept for logs/explanation
         quality_floor = _quality_floor_for_complexity(analysis.complexity_score)
         tier_candidates = [
-            m
-            for m in candidates
-            if m.quality_ratings.get(analysis.task_type, 0.5) >= quality_floor
+            m for m in candidates if m.quality_ratings.get(analysis.task_type, 0.5) >= quality_floor
         ]
         if not tier_candidates:
             # Floor too strict — fall back to all candidates so we always return something.
@@ -640,6 +737,47 @@ class RoutingEngine:
                         msg_count=msg_count,
                     )
                     break
+
+        # Task 5: cache-aware routing. Only modeled when there's a key to
+        # correlate repeat calls (conversation_id, falling back to run_id)
+        # and a system prompt long enough that provider caching would
+        # plausibly engage at all.
+        cache_key = request.conversation_id or request.run_id
+        cache_prefix_hash = ""
+        cache_prefix_tokens = 0
+        prompt_cache_status = "cold"
+        warm_provider: str | None = None
+        if cache_key and request.system_prompt:
+            cache_prefix_tokens = self._classifier._count_tokens(request.system_prompt)
+            if cache_prefix_tokens >= CACHE_PREFIX_MIN_TOKENS:
+                cache_prefix_hash = hash_prefix(request.system_prompt)
+                warm_provider = self._prompt_cache.get_warm_provider(cache_key, cache_prefix_hash)
+                if warm_provider:
+                    incumbents = [m for m in tier_candidates if m.provider == warm_provider]
+                    if incumbents:
+                        for m in incumbents:
+                            m.routing_score += CACHE_STICKINESS_WEIGHT
+                        incumbent_best = max(incumbents, key=lambda m: m.routing_score)
+                        incumbent_cost = _cache_aware_cost(
+                            analysis, incumbent_best, cache_prefix_tokens, cache_hit=True
+                        )
+                        others = [m for m in tier_candidates if m.provider != warm_provider]
+                        other_best = max(others, key=lambda m: m.routing_score) if others else None
+                        relative_savings = 0.0
+                        if other_best is not None and incumbent_cost > 0:
+                            other_cost = _cache_aware_cost(
+                                analysis, other_best, cache_prefix_tokens, cache_hit=False
+                            )
+                            relative_savings = (incumbent_cost - other_cost) / incumbent_cost
+                        if other_best is None or relative_savings <= CACHE_SWITCH_MARGIN:
+                            # Hard constraint: the switch doesn't clear the margin
+                            # (or there's nothing to switch to) — pin to the
+                            # incumbent provider so the cache isn't lost for a
+                            # marginal saving.
+                            tier_candidates = incumbents
+                            prompt_cache_status = "warm"
+                        else:
+                            prompt_cache_status = "would_lose_cache"
 
         tier_candidates.sort(key=lambda m: m.routing_score, reverse=True)
         chosen = tier_candidates[0]
@@ -732,6 +870,21 @@ class RoutingEngine:
             fallback_chain = build_fallback_chain(chosen, candidates, analysis)
             rl_chain, cs_chain, to_chain = build_typed_fallback_chains(chosen, candidates, analysis)
 
+        # Task 5: if budget walk-down (Step 12) moved `chosen` off the provider
+        # cache-selection picked, the cache status no longer reflects reality —
+        # budget is a harder constraint than cache stickiness. Also record the
+        # (possibly walked-down) final choice as the new cache holder.
+        if cache_prefix_hash:
+            if warm_provider is not None and chosen.provider != warm_provider:
+                prompt_cache_status = "would_lose_cache"
+            self._prompt_cache.record(
+                cache_key,
+                chosen.provider,
+                cache_prefix_hash,
+                cache_prefix_tokens,
+                (chosen.cache_ttl_seconds or CACHE_DEFAULT_TTL_SECONDS),
+            )
+
         # ══ STEP 13: LOG + RETURN ════════════════════════════════════════
         decision = self._finalise(
             chosen,
@@ -747,6 +900,7 @@ class RoutingEngine:
             fallback_on_rate_limit=rl_chain,
             fallback_on_content_safety=cs_chain,
             fallback_on_timeout=to_chain,
+            prompt_cache_status=prompt_cache_status,
         )
         decision.last_model = conv_entry["last_model"] if conv_entry else None
         decision.explanation = expl
@@ -785,6 +939,7 @@ class RoutingEngine:
         fallback_on_rate_limit: list[ModelOption] | None = None,
         fallback_on_content_safety: list[ModelOption] | None = None,
         fallback_on_timeout: list[ModelOption] | None = None,
+        prompt_cache_status: str = "cold",
     ) -> RoutingDecision:
         """Assemble and return a fully populated RoutingDecision."""
         savings = _estimate_savings_vs_premium(analysis, chosen, self._registry)
@@ -808,6 +963,9 @@ class RoutingEngine:
             priority_applied=priority_applied,
             confidence_fallback=confidence_fallback,
             budget_exhausted=budget_exhausted,
+            prompt_cache_status=prompt_cache_status,
+            task_type=analysis.task_type,
+            step_type=analysis.step_type,
         )
 
     def _post_route(self, decision: RoutingDecision, request: RoutingRequest) -> None:
@@ -891,6 +1049,26 @@ class RoutingEngine:
                         correlation_id=request.correlation_id,
                         task_type="unknown",
                     )
+                # Task 3: record this step against the run's cumulative budget so
+                # the NEXT step's check_before_dispatch() sees it. Token count is
+                # estimated (~4 chars/token) since call_provider returns text only.
+                if request.run_id:
+                    self._run_budget.record_step(
+                        request.run_id,
+                        model.model_id,
+                        decision.estimated_cost,
+                        max(len(response) // 4, 1),
+                    )
+                # Task 7: cost attribution — costs/metadata only, never the
+                # prompt or the `response` text itself.
+                self._attribution.record(
+                    tenant_id=request.tenant_id,
+                    run_id=request.run_id,
+                    task_type=decision.task_type,
+                    step_type=decision.step_type,
+                    model_id=model.model_id,
+                    cost_usd=decision.estimated_cost,
+                )
                 decision.proxy_response = response
                 decision.proxy_model_used = model
                 return decision
@@ -1024,6 +1202,27 @@ def _route_always_premium(
     return best, "always_premium (fallback)"
 
 
+def _route_cascade_initial(
+    candidates: list[ModelOption],
+    analysis: TaskAnalysis,
+) -> tuple[ModelOption, str]:
+    """
+    Task 8: pick the CHEAPEST capable tier to start a cascade — the mirror
+    image of _route_always_premium(). CASCADE_ESCALATION_TIERS order
+    (cheapest first) determines which tier is tried first; the caller
+    (Flux.complete()) escalates through decision.fallback_chain — built by
+    build_fallback_chain() from this starting point, which walks up in
+    tier/capability — on verification failure.
+    """
+    for tier in CASCADE_ESCALATION_TIERS:  # cheapest first
+        tier_models = [m for m in candidates if m.tier == tier]
+        if tier_models:
+            best = _pick_best(tier_models, analysis)
+            return best, f"cascade_initial (tier={tier})"
+    best = _pick_best(candidates, analysis)
+    return best, "cascade_initial (fallback)"
+
+
 def _budget_tier_walkdown(
     chosen: ModelOption,
     candidates: list[ModelOption],
@@ -1084,6 +1283,35 @@ def _estimate_cost(analysis: TaskAnalysis, model: ModelOption) -> float:
     cost = (analysis.estimated_input_tokens / 1000.0) * model.cost_per_1k_input + (
         output_tokens / 1000.0
     ) * model.cost_per_1k_output
+    return round(cost, 6)
+
+
+def _cache_aware_cost(
+    analysis: TaskAnalysis,
+    model: ModelOption,
+    prefix_tokens: int,
+    cache_hit: bool,
+) -> float:
+    """
+    Task 5: effective cost accounting for a warm provider-side prefix cache.
+
+    Falls back to the plain _estimate_cost() (no cache modeled) whenever the
+    model has no cache pricing, cache_hit is False, or the shared prefix is
+    below the model's own cache_min_tokens. Otherwise the prefix portion of
+    input tokens is priced at cache_read_cost_per_1m instead of
+    cost_per_1k_input.
+    """
+    min_tokens = model.cache_min_tokens or CACHE_PREFIX_MIN_TOKENS
+    if not cache_hit or model.cache_read_cost_per_1m is None or prefix_tokens < min_tokens:
+        return _estimate_cost(analysis, model)
+
+    remaining_input = max(analysis.estimated_input_tokens - prefix_tokens, 0)
+    output_tokens = min(analysis.estimated_output_tokens, model.max_output_tokens)
+    cost = (
+        (prefix_tokens / 1_000_000.0) * model.cache_read_cost_per_1m
+        + (remaining_input / 1000.0) * model.cost_per_1k_input
+        + (output_tokens / 1000.0) * model.cost_per_1k_output
+    )
     return round(cost, 6)
 
 
@@ -1194,6 +1422,18 @@ def _passes_hard_constraints(
     # the model would likely truncate or fail even before output tokens are added.
     if analysis.estimated_input_tokens > model.max_context_window * CONTEXT_PENALTY_HARD_CUTOFF:
         return False
+    # Task 6: tools offered -> only models with verified tool-calling support
+    # are eligible, regardless of tier/cost. A model that can't reliably call
+    # tools is not a "cheaper" option for a tool_select step, it's a broken one.
+    if request.tools and not model.supports_tools:
+        return False
+    if request.response_format and not model.supports_structured_output:
+        return False
+    # Task 6: step_type quality floor — applied BEFORE scoring so a cheap
+    # model can never win a plan/tool_select/final_answer step purely on cost.
+    floor_tier = STEP_TYPE_FLOORS.get(analysis.step_type)
+    if floor_tier is not None and _TIER_ORDER.index(model.tier) < _TIER_ORDER.index(floor_tier):
+        return False
     return (
         all(cap in model.capabilities for cap in request.required_capabilities)
         and model.max_context_window >= analysis.total_context_needed
@@ -1213,7 +1453,13 @@ def _relaxed_filter(
     """
     Relaxed filter: drop rate-limit and streaming requirements.
     Called when the strict filter yields zero candidates.
+
+    Task 6 NOTE: tools/response_format/step_type-floor constraints are NOT
+    relaxed here — they gate actual capability (can this model call tools at
+    all?), not a soft preference like streaming, so relaxing them would hand
+    a tool_select step to a model that will fumble the tool schema.
     """
+    floor_tier = STEP_TYPE_FLOORS.get(analysis.step_type)
     return [
         m
         for m in models
@@ -1222,6 +1468,9 @@ def _relaxed_filter(
         and m.is_available
         and analysis.sensitivity_level in m.allowed_sensitivity_levels
         and _is_allowed_for_plan(m, request.plan)
+        and (not request.tools or m.supports_tools)
+        and (not request.response_format or m.supports_structured_output)
+        and (floor_tier is None or _TIER_ORDER.index(m.tier) >= _TIER_ORDER.index(floor_tier))
     ]
 
 

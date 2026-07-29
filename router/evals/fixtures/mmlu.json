@@ -1,0 +1,32 @@
+[
+  {
+    "question": "Which organelle is commonly referred to as the powerhouse of the cell?",
+    "choices": ["Nucleus", "Mitochondria", "Ribosome", "Golgi apparatus"],
+    "answer": 1,
+    "subject": "high_school_biology"
+  },
+  {
+    "question": "Which planet in our solar system is known as the Red Planet?",
+    "choices": ["Venus", "Jupiter", "Mars", "Saturn"],
+    "answer": 2,
+    "subject": "astronomy"
+  },
+  {
+    "question": "In which year did World War II end?",
+    "choices": ["1943", "1945", "1947", "1950"],
+    "answer": 1,
+    "subject": "high_school_world_history"
+  },
+  {
+    "question": "What is the derivative of x^2 with respect to x?",
+    "choices": ["x", "2x", "x^2/2", "2"],
+    "answer": 1,
+    "subject": "high_school_mathematics"
+  },
+  {
+    "question": "Which gas do plants primarily absorb from the atmosphere for photosynthesis?",
+    "choices": ["Oxygen", "Nitrogen", "Carbon dioxide", "Hydrogen"],
+    "answer": 2,
+    "subject": "high_school_biology"
+  }
+]

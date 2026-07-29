@@ -24,7 +24,48 @@ The model registry includes current-generation models from OpenAI, Anthropic, Go
 
 ## Quickstart
 
-Install (from a clone):
+### Option 1: `base_url` swap (no code changes)
+
+Run Flux as a local HTTP proxy and point your existing OpenAI SDK client at it —
+no call-site rewrites required.
+
+```bash
+pip install -e ".[server]"
+export OPENAI_API_KEY=sk-...        # + whichever other provider keys you use
+make serve                          # or: uvicorn router.server:app
+```
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="unused")
+resp = client.chat.completions.create(
+    model="flux-auto",              # or "flux-cheap" / "flux-quality"
+    messages=[{"role": "user", "content": "Explain backpropagation in two sentences."}],
+)
+print(resp.choices[0].message.content)
+print("routed to:", resp.model)
+```
+
+`model` is a routing directive, not a literal model name: `flux-auto` routes
+normally, `flux-cheap` forces cost-optimized routing, `flux-quality` forces
+quality-first routing. Passing a concrete model ID (e.g. `gpt-4o`) bypasses
+routing entirely and calls that model verbatim. Streaming (`stream: true`) is
+supported. Routing metadata (chosen model, task type, complexity, estimated
+cost, decision latency) comes back on `x-flux-*` response headers.
+
+By default the server binds to `127.0.0.1` only and logs a warning. Set
+`FLUX_SERVER_TOKEN` to require `Authorization: Bearer <token>` on every
+request and allow non-loopback binding — see `router/config.py` for the rest
+of the `SERVER_*` settings.
+
+### Option 2: Python import
+
+```bash
+pip install flux-router
+```
+
+Or from a clone, editable:
 
 ```bash
 pip install -e .
@@ -86,6 +127,32 @@ flux = make_flux(api_keys={
 Resolution order per request: explicit `api_keys=` / env var → per-request
 `provider_api_key` → legacy single `api_key=`.
 
+### Run-scoped budgets (for agent loops)
+
+Per-request cost ceilings don't stop a runaway multi-step agent loop — by the
+time any single step looks expensive, the loop has already made 40 of them.
+`flux.start_run()` caps a whole trajectory instead of one call:
+
+```python
+from router import RunBudgetExceeded
+
+with flux.start_run(max_cost_usd=0.10, max_steps=50) as run_id:
+    for step in agent_steps:
+        try:
+            resp = await flux.complete(step.prompt, run_id=run_id)
+        except RunBudgetExceeded as exc:
+            # exc.summary: steps_taken, total_cost_usd, per-step breakdown
+            break
+```
+
+As the run's spend approaches the cap, Flux automatically forces
+cost-optimized routing for the rest of the run (`RoutingDecision.budget_state
+== "degraded"`), then flags `budget_warning` so the caller can choose to wrap
+up — and only raises `RunBudgetExceeded` once a limit is actually hit,
+**before** the next step dispatches, never after it spends. On the HTTP
+proxy, tag repeated calls with the same `X-Flux-Run-Id` header to get the
+same enforcement without any Python. See `examples/agent_loop.py`.
+
 ---
 
 ## How Flux compares
@@ -94,7 +161,7 @@ Flux overlaps with LiteLLM, OpenRouter, and similar tools. The differences that 
 
 | | Flux | LiteLLM | OpenRouter |
 |---|---|---|---|
-| Routing decision | Pure-Python heuristic, sub-millisecond (~0.6 ms P50) | Config-driven, no automatic per-task selection | Server-side, network round trip |
+| Routing decision | Pure-Python heuristic, sub-millisecond (~0.23 ms P50) | Config-driven, no automatic per-task selection | Server-side, network round trip |
 | Per-task model selection | Yes (15 task types, complexity scoring) | Manual | Manual |
 | Adaptive learning from response quality | Yes (per-(model, task) EMA, optional per-customer) | No | No |
 | Typed fallback chains (rate-limit / timeout / content-filter) | Yes, separate per failure mode | Yes (single chain) | Yes |
@@ -110,6 +177,7 @@ Use LiteLLM if you want a permissively-licensed SDK and you're happy choosing mo
 - [SECURITY_ARCHITECTURE.md](./SECURITY_ARCHITECTURE.md) — data flows, code-level guarantees, multi-tenant caveats
 - [CODEBASE_MAP.md](./CODEBASE_MAP.md) — directory layout and per-file purpose
 - [FEATURES.md](./FEATURES.md) — extension points for adding providers, models, or task types
+- [EVALS.md](./EVALS.md) — cost-vs-quality eval harness (`python -m router.evals`)
 - [DEBUG.md](./DEBUG.md) — troubleshooting
 - [MIGRATIONS.md](./MIGRATIONS.md) — schema and config migration guide
 - [CHANGELOG.md](./CHANGELOG.md) — release notes

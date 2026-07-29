@@ -147,6 +147,12 @@ _CODE_FENCE_RE = re.compile(r"```")
 _MATH_SYM_RE = re.compile(r"[∑∫≥≤∀∃≠²³√∞±∇∂∈∉⊆⊇∩∪]|(?<!\w)=(?!\w)|(?<!\w)[+\-*/^](?!\w)")
 _BULLET_RE = re.compile(r"^(\s*[-*•]\s|\s*\d+\.\s)", re.MULTILINE)
 _QUESTION_RE = re.compile(r"\?")
+# Task 6: step_type inference — "reflect" language (self-critique / plan revision).
+_REFLECT_RE = re.compile(
+    r"\b(reflect\s+on|self.critique|critique\s+(your|the)|review\s+your\s+(own\s+)?"
+    r"(answer|work|response|plan)|did\s+I\s+miss|what\s+went\s+wrong|revise\s+the\s+plan)\b",
+    re.IGNORECASE,
+)
 _DOMAIN_SPECIFIC_RE = re.compile(
     r"\b(kkt\s+conditions?|lagrangian|hamiltonian|riemann|zeta\s+function|"
     r"gdpr|ecj|indemnif|tort\s+law|habeas\s+corpus|promissory|"
@@ -327,6 +333,9 @@ class RequestClassifier:
         cache_eligible = is_cache_eligible(task_type, request.temperature)
         fp = fingerprint(prompt, request.system_prompt, history, request.temperature)
 
+        # 7. Task 6: step_type (orthogonal to task_type)
+        step_type = request.step_type or self._infer_step_type(request)
+
         return TaskAnalysis(
             complexity_score=complexity,
             estimated_input_tokens=input_tokens,
@@ -345,9 +354,35 @@ class RequestClassifier:
             sensitivity_level=sensitivity,
             cache_eligible=cache_eligible,
             prompt_fingerprint=fp,
+            step_type=step_type,
         )
 
     # ── Private helpers ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _infer_step_type(request: RoutingRequest) -> str:
+        """
+        Task 6: infer step_type when the caller didn't set it explicitly.
+
+        Signal priority (most specific / highest-stakes first):
+          1. tool-result messages present -> tool_result_summarize (the model
+             is being asked to digest a tool's output, not choose one)
+          2. tools offered -> tool_select
+          3. structured response_format requested -> extract (schema-fill is
+             low-stakes to verify downstream, same floor as extraction)
+          4. "reflect"/"critique"/"review" language in the prompt -> reflect
+          5. no signal -> "unknown" (no floor applied)
+        """
+        history = request.message_history
+        if any(msg.get("role") == "tool" for msg in history):
+            return "tool_result_summarize"
+        if request.tools:
+            return "tool_select"
+        if request.response_format:
+            return "extract"
+        if _REFLECT_RE.search(request.raw_prompt):
+            return "reflect"
+        return "unknown"
 
     @staticmethod
     def _count_tokens(text: str) -> int:

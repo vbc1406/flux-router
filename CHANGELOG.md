@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Cost-vs-quality eval harness (`python -m router.evals`, `make evals`): runs GSM8K / MMLU / HumanEval / MT-Bench through the flux/premium/cheapest/mid strategies and reports cost-savings % and quality-retention % vs an always-premium baseline. Hybrid grading (objective + LLM-as-judge), offline simulated mode by default with a `--live` path; see [EVALS.md](./EVALS.md). Optional `flux-router[evals]` extra pulls the real datasets.
 - Interactive terminal chat example (`examples/chat.py`)
 - Per-provider API key loading via env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`)
 - Cross-provider fallback integration test

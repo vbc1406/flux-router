@@ -41,8 +41,19 @@ flux/
 │   ├── errors.py                  ← Typed exception hierarchy (FluxAPIError and subtypes)
 │   ├── benchmark.py               ← Routing decision benchmarks
 │   ├── demo.py                    ← Standalone demo script
+│   ├── server.py                  ← OpenAI-compatible HTTP proxy (POST /v1/chat/completions); optional `[server]` extra
+│   ├── run_budget.py              ← Run-scoped budget enforcement for agent loops (Task 3)
+│   ├── prompt_cache.py            ← Cache-aware routing: tracks which provider holds a warm prefix (Task 5)
+│   ├── cascade.py                 ← Local response verifiers + cost accounting for cascade routing (Task 8)
+│   ├── attribution.py             ← Per-run/per-tenant cost attribution: SQLite usage log + Prometheus counters (Task 7)
 │   └── tests/
 │       ├── test_routing.py        ← End-to-end routing engine tests (13 change areas)
+│       ├── test_server.py         ← HTTP proxy tests (directives, passthrough, streaming, auth, body cap)
+│       ├── test_run_budget.py     ← Run-budget ladder, eviction at scale, agent-loop integration
+│       ├── test_step_type.py      ← step_type inference, STEP_TYPE_FLOORS, tool-capability filter
+│       ├── test_cache_aware_routing.py ← PromptCacheTracker + cache-stickiness routing behavior
+│       ├── test_cascade.py        ← Cascade escalation ladder, verifiers, net-savings accounting
+│       ├── test_attribution.py    ← UsageStore, cardinality-capped Prometheus counters, wiring
 │       ├── test_adaptive_guardrails.py  ← AdaptiveWeights guardrail tests (6 issue areas)
 │       ├── test_adaptive_weights.py     ← AdaptiveWeights unit tests with metrics
 │       ├── test_cache.py          ← ResponseCache + fingerprinting tests
@@ -100,6 +111,55 @@ To add a model: edit `models.json`, no code change needed.
 Main algorithm → `router/routing_engine.py` (`RoutingEngine.route()`)
 The method is structured as 13 numbered steps with header comments.
 
+### Cache-Aware Routing
+→ `router/prompt_cache.py` (`PromptCacheTracker`) + a block inside
+`routing_engine.py` Step 9. Keyed by `conversation_id` (falling back to
+`run_id`); only engages when `system_prompt` is at least
+`CACHE_PREFIX_MIN_TOKENS`. A soft `CACHE_STICKINESS_WEIGHT` score bonus goes
+to models on the provider already holding a warm prefix; a hard constraint
+then blocks switching away from that provider unless the switch's cost
+savings clear `CACHE_SWITCH_MARGIN`. Result surfaces on
+`RoutingDecision.prompt_cache_status` (`cold` / `warm` / `would_lose_cache`).
+Not the same thing as `router/cache.py`'s `ResponseCache` (whole-response
+caching) — this tracks provider-side *prefix* caching state only, no prompt
+or response content.
+
+### Cascade / Escalation
+→ `router/cascade.py` (`verify_response`, `Verifier` protocol,
+`estimate_step_cost`) + `Flux._complete_cascade()` in `flux.py` +
+`_route_cascade_initial()` in `routing_engine.py`. `routing_priority="cascade"`
+starts at the cheapest capable tier (mirrors `always-premium`'s shortcut, but
+inverted); `Flux.complete()` then walks `decision.fallback_chain` as an
+escalation ladder, running local verifiers (no LLM judge in the hot path)
+after each attempt and stopping at the first pass. Surfaces
+`RoutingDecision.cascade_attempts` / `cascade_net_savings` — the latter can
+go negative when escalation cost more than skipping straight to the priciest
+tier tried, by design (see FEATURES.md honesty requirement). Python API
+(`Flux.complete(routing_priority="cascade")`) only for now — `router/server.py`
+calls `Flux._call_model()` directly rather than `Flux.complete()`, so the
+HTTP proxy does not yet expose a `flux-cascade` directive.
+
+### Cost Attribution
+→ `router/attribution.py` (`CostAttribution`, `SqliteUsageStore`) — "which
+customer/workflow is eating my margin." Recorded at every successful
+dispatch point (`RoutingEngine._proxy_execute()`, `Flux.complete()`,
+`Flux._complete_cascade()`, and `router/server.py`'s two response paths):
+`tenant_id`, `run_id`, `task_type`, `step_type`, `model_id`, `cost_usd` — no
+prompt or response content, ever (see SECURITY_ARCHITECTURE.md). Exposed via
+`GET /v1/usage` (paginated, filterable) and `GET /metrics` (Prometheus text,
+label-cardinality-capped at `ATTRIBUTION_METRICS_MAX_LABEL_COMBOS`). Default
+storage is SQLite `:memory:`; set `FLUX_ATTRIBUTION_DB` for a persistent file.
+
+### Step-Type Classification (agent trajectories)
+→ `RoutingRequest.step_type` / `TaskAnalysis.step_type`, inferred by
+`RequestClassifier._infer_step_type()` when unset (from `tools`,
+tool-result messages, `response_format`). Enforced as a hard constraint in
+`_passes_hard_constraints()` via `STEP_TYPE_FLOORS` (config.py) — applied
+BEFORE scoring, so a cheap model can never win a `plan`/`tool_select`/
+`final_answer` step on cost alone. `request.tools` also hard-filters
+candidates to `supports_tools=True` models; `response_format` filters to
+`supports_structured_output=True`.
+
 ### Adaptive Learning / Quality Tracking
 → `router/adaptive_weights.py` (`AdaptiveWeights` class)
 Quality is fed back via `AdaptiveWeights.record()` after each response.
@@ -112,6 +172,24 @@ Writes to `router/routing_analytics.jsonl` (append-only JSONL).
 HTTP callers → `router/provider_caller.py`
 Error types → `router/errors.py`
 Supported: Anthropic, OpenAI, Google (Gemini), Groq, Mistral
+
+### HTTP Proxy (OpenAI-compatible)
+→ `router/server.py` — `POST /v1/chat/completions`, `GET /v1/models`, `GET /health`.
+`model` in the request body is a routing directive (`flux-auto` / `flux-cheap` /
+`flux-quality`) unless it names a real registered model, in which case routing is
+bypassed and that model is called verbatim. Requires the `[server]` extra
+(fastapi/uvicorn) — not a core dependency. Run with `make serve`.
+
+### Run-Scoped Budgets (agent loops)
+→ `router/run_budget.py` (`RunBudget`, `RunLimits`, `RunBudgetExceeded`).
+A `run_id` groups N routing decisions into one multi-step trajectory. Checked
+BEFORE each step dispatches (`RoutingEngine.route()`'s Step 0): forces
+cost-optimized routing once a run crosses `RUN_DEGRADE_THRESHOLD`, sets
+`RoutingDecision.budget_warning` at `RUN_WARN_THRESHOLD`, and raises
+`RunBudgetExceeded` (with a per-step cost breakdown) once a limit is met —
+never after a step has already spent. Entry points: `Flux.start_run()` /
+`flux.complete(..., run_id=...)`, or the proxy's `X-Flux-Run-Id` header.
+See `examples/agent_loop.py`.
 
 ### Fallback and Retry Logic
 Chain construction → `router/fallback_chain.py` (`build_fallback_chain`, `build_typed_fallback_chains`)

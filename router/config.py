@@ -432,13 +432,19 @@ SCORING_WEIGHTS: dict[str, dict[str, float]] = {
     # routing_priority overrides (Change 1) — these override the latency-mode entry
     "quality-first": {"quality": 0.70, "cost": 0.20, "latency": 0.10},
     "cost-optimized": {"quality": 0.30, "cost": 0.60, "latency": 0.10},
+    # Task 8: cascade is a shortcut priority (like always-premium) that
+    # bypasses Step 9 scoring entirely — see _route_cascade_initial(). This
+    # entry exists for explainability/tooling consistency (every
+    # VALID_ROUTING_PRIORITIES value should be describable in weight terms),
+    # heavily cost-weighted since the whole point is to start cheap.
+    "cascade": {"quality": 0.20, "cost": 0.70, "latency": 0.10},
 }
 
 # Valid values for RoutingRequest.routing_priority.
 # Validated at the start of RoutingEngine.route() — invalid values raise ValueError.
 # How to tune: add new priority tags here AND add their weights to SCORING_WEIGHTS.
 VALID_ROUTING_PRIORITIES: frozenset[str] = frozenset(
-    {"always-premium", "quality-first", "balanced", "cost-optimized"}
+    {"always-premium", "quality-first", "balanced", "cost-optimized", "cascade"}
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -545,3 +551,181 @@ ANALYTICS_MAX_STARTUP_ENTRIES: int = 50_000
 # effect on budget enforcement — eviction is safe.
 # How to tune: raise if you need a longer ledger window; lower to reduce memory.
 BUDGET_LEDGER_MAX_PER_USER: int = 10_000
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HTTP PROXY SERVER (router/server.py)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Bind address for `router.server`. Defaults to loopback-only when no auth token
+# is configured, so an unauthenticated server is never reachable off-box by
+# accident. Set FLUX_SERVER_HOST to override explicitly (e.g. "0.0.0.0" behind
+# a reverse proxy that terminates auth itself).
+# What breaks if misused: setting this to 0.0.0.0 without FLUX_SERVER_TOKEN
+# exposes an unauthenticated proxy — that spends real provider API budget —
+# to anything that can reach the port.
+SERVER_HOST: str = os.environ.get(
+    "FLUX_SERVER_HOST",
+    "0.0.0.0" if os.environ.get("FLUX_SERVER_TOKEN") else "127.0.0.1",  # noqa: S104
+)
+
+# Port for `router.server`. How to tune: change FLUX_SERVER_PORT if 8000 collides
+# with something else in your stack.
+SERVER_PORT: int = int(os.environ.get("FLUX_SERVER_PORT", "8000"))
+
+# Whether the proxy requires `Authorization: Bearer <FLUX_SERVER_TOKEN>` on every
+# request (except /health). Derived from whether the token env var is set at all —
+# there is no way to run with SERVER_REQUIRE_AUTH=True and no token, since that
+# would lock every caller out.
+SERVER_REQUIRE_AUTH: bool = bool(os.environ.get("FLUX_SERVER_TOKEN"))
+
+# Hard cap on request body size for the proxy endpoint, checked against
+# Content-Length and enforced again while streaming the body off the wire (so a
+# missing/lying Content-Length header can't bypass it). Chat completion request
+# bodies (prompt + history) are rarely more than a few hundred KB; 2MB leaves
+# headroom for large message_history without allowing an unbounded upload.
+# How to tune: raise for workloads with very large system prompts / long
+# conversation histories; lower to reduce exposure to body-based DoS.
+SERVER_MAX_BODY_BYTES: int = 2 * 1024 * 1024  # 2MB
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RUN-SCOPED BUDGET ENFORCEMENT (router/run_budget.py)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Global default ceilings for a single "run" — a multi-step agent trajectory
+# sharing one run_id. Any of these can be overridden per-run via
+# Flux.start_run(max_cost_usd=..., max_steps=..., max_tokens=..., max_duration_seconds=...).
+# How to tune: these are deliberately conservative single-run defaults, not
+# fleet-wide budgets — raise for workloads with long, expensive trajectories
+# (deep research agents); lower to fail fast on runaway loops in dev/CI.
+RUN_MAX_COST_USD: float = 1.00
+RUN_MAX_STEPS: int = 100
+RUN_MAX_TOKENS: int = 500_000
+RUN_MAX_DURATION_SECONDS: float = 900.0  # 15 minutes
+
+# Graceful degradation ladder (checked as fractions of whichever limit above
+# is closest to being hit). At DEGRADE_THRESHOLD, routing_priority is forced
+# to "cost-optimized" for the rest of the run regardless of what the caller
+# requested. At WARN_THRESHOLD, the same plus RoutingDecision.budget_warning
+# is populated so the caller's agent loop can choose to wrap up early. At
+# 1.0, RunBudgetExceeded is raised — before the next step dispatches, not
+# after it spends.
+# How to tune: lower RUN_DEGRADE_THRESHOLD to downgrade earlier/more
+# conservatively; the gap between the two thresholds is the caller's window
+# to notice budget_warning and stop voluntarily before a hard stop.
+RUN_DEGRADE_THRESHOLD: float = 0.70
+RUN_WARN_THRESHOLD: float = 0.90
+
+# Max concurrent run_ids tracked in the default in-memory RunStore. Oldest
+# (least-recently-touched) run is evicted first once the cap is hit — mirrors
+# the LRU eviction pattern used by AdaptiveWeights' MAX_CUSTOMERS.
+# How to tune: raise for high-concurrency multi-tenant deployments; lower to
+# bound memory tighter on constrained hosts.
+RUN_STORE_MAX_ENTRIES: int = 50_000
+
+# A run with no activity (no check/record call) for this long is considered
+# abandoned and is evicted on the next housekeeping sweep, freeing its slot
+# even if RUN_STORE_MAX_ENTRIES hasn't been reached. Agent loops that crash
+# or hang without ever closing their run must not leak memory.
+# How to tune: raise if legitimate runs can go quiet for long stretches
+# (e.g. waiting on a human-in-the-loop step); lower to reclaim memory faster.
+RUN_TTL_SECONDS: float = 3600.0  # 1 hour
+
+# Proactive housekeeping sweep frequency: every Nth check/record call across
+# all runs, sweep for TTL-expired entries. Mirrors RoutingEngine's
+# ConversationStore housekeeping cadence (every 500 route() calls).
+RUN_HOUSEKEEPING_INTERVAL: int = 500
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP-TYPE CLASSIFICATION (Task 6: router/classifier.py, routing_engine.py)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Minimum tier (by TIER_ORDER index) a model must meet for a given step_type,
+# enforced as a hard constraint in _passes_hard_constraints() — BEFORE scoring,
+# so a cheap model can never win a plan/tool_select/final_answer step on cost
+# alone. step_types not listed here (including "unknown") have no floor.
+# How to tune: raise a step_type's floor if you see it fumbling tool schemas
+# or looping; lower tool_result_summarize/extract/format's floor (or omit
+# them entirely) to push more savings into steps where mistakes are cheap to
+# catch downstream.
+STEP_TYPE_FLOORS: dict[str, str] = {
+    "plan": "mid",
+    "tool_select": "mid",
+    "final_answer": "mid",
+    "reflect": "cheap",
+    "tool_result_summarize": "free",
+    "extract": "free",
+    "format": "free",
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CACHE-AWARE ROUTING (Task 5: router/prompt_cache.py, routing_engine.py)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Minimum shared-prefix token count before cache stickiness applies at all.
+# Below this, provider prompt caches rarely engage anyway (most providers
+# have their own minimums around 1024 tokens) so there is nothing to protect.
+CACHE_PREFIX_MIN_TOKENS: int = 1024
+
+# A switch away from the provider currently holding a warm prefix is only
+# allowed when the candidate's all-in cost (cold, no cache) is cheaper than
+# the incumbent's cache-aware cost by more than this fraction. Below it, the
+# switch is blocked even if the candidate looks nominally cheaper — losing
+# the warm cache typically costs more than it saves.
+# How to tune: raise to make the router more conservative about switching
+# (protects cache harder); lower to let routing chase small savings more
+# aggressively at the risk of thrashing a warm cache.
+CACHE_SWITCH_MARGIN: float = 0.15
+
+# Scoring bonus applied to the incumbent cache-holding model's routing_score
+# in Step 9, on the same additive scale as CONVERSATION_STICKY_BIAS_*. This is
+# the "soft" signal; CACHE_SWITCH_MARGIN above is the hard constraint that
+# actually blocks a switch.
+CACHE_STICKINESS_WEIGHT: float = 0.08
+
+# How long a provider is considered to be holding a warm prefix after last
+# use, absent a more specific model.cache_ttl_seconds. Real provider TTLs are
+# typically 5 minutes (ephemeral) or 1 hour (extended); this default assumes
+# the shorter, more common case.
+CACHE_DEFAULT_TTL_SECONDS: int = 300
+
+# Max distinct (conversation/run key) entries tracked by PromptCacheTracker.
+# Same LRU-eviction pattern as RUN_STORE_MAX_ENTRIES.
+CACHE_TRACKER_MAX_ENTRIES: int = 50_000
+
+# ══════════════════════════════════════════════════════════════════════════════
+# COST ATTRIBUTION (Task 7: router/attribution.py, router/server.py)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Path to the SQLite usage database. Defaults to ":memory:" — matching this
+# codebase's convention that new engine collaborators default to no disk I/O
+# (see ResponseCache(enabled=False), AdaptiveWeights(state_file=None)) — so
+# constructing a RoutingEngine never silently creates a file on disk. Set
+# FLUX_ATTRIBUTION_DB to a real path for cross-restart persistence; never
+# contains prompts or completions, costs and metadata only.
+ATTRIBUTION_DB_PATH: str = os.environ.get("FLUX_ATTRIBUTION_DB", ":memory:")
+
+# Prometheus label cardinality cap: distinct (tenant_id, model_id) label
+# combinations tracked before falling back to an "_overflow_" bucket. Prevents
+# a hostile or buggy caller from exploding /metrics cardinality by minting a
+# fresh tenant_id per request.
+# How to tune: raise for legitimately high-tenant-count deployments; the cost
+# is proportional memory use in the metrics registry.
+ATTRIBUTION_METRICS_MAX_LABEL_COMBOS: int = 10_000
+
+# Page size cap for GET /v1/usage on the proxy.
+ATTRIBUTION_USAGE_PAGE_MAX: int = 500
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CASCADE / ESCALATION (Task 8: router/cascade.py, flux.py)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Escalation tiers tried in order for routing_priority="cascade", cheapest
+# first. Escalation stops as soon as a tier's response passes verification.
+# How to tune: this must be a subsequence of TIER_ORDER, cheapest-first: do
+# not reorder without updating cascade.py's tier-walk logic.
+CASCADE_ESCALATION_TIERS: list[str] = ["free", "cheap", "mid", "premium"]
+
+# Hard cap on escalations per request, independent of how many tiers exist
+# above. Prevents a systematically-failing verifier from walking every tier
+# (and paying for every one) on every request.
+CASCADE_MAX_ESCALATIONS: int = 3

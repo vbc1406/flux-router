@@ -115,6 +115,30 @@ The router enforces caps on:
 
 These caps protect against memory exhaustion attacks.
 
+### Cost Attribution Stores Metadata Only (Task 7)
+
+`router/attribution.py` (`UsageRecord`, `SqliteUsageStore`) records, per
+dispatch: `tenant_id`, `run_id`, `task_type`, `step_type`, `model_id`,
+`cost_usd`, and a timestamp. **It never has access to prompt or response
+text** — the recording call sites in `flux.py` and `routing_engine.py` only
+ever pass cost/metadata values, never `text`/`response`/`prompt`. This is
+enforced structurally: `UsageRecord`'s dataclass fields have no slot that
+could hold arbitrary text, so there's no field to accidentally populate.
+
+`GET /v1/usage` on the HTTP proxy exposes this same data, filterable by
+`tenant_id`/`run_id`. As with `customer_id`/`user_id` above, `tenant_id` is a
+**trusted identifier** — if your deployment lets a client set
+`X-Flux-Tenant-Id` freely, they can read another tenant's cost data via
+`GET /v1/usage?tenant_id=...`. Populate it server-side from your
+authenticated session, same as `customer_id`.
+
+The default `SqliteUsageStore` is `:memory:` (no disk write, no
+cross-restart persistence) unless `FLUX_ATTRIBUTION_DB` is set to a file
+path. `GET /metrics` (Prometheus) caps label cardinality
+(`ATTRIBUTION_METRICS_MAX_LABEL_COMBOS`) so a client minting fresh
+`tenant_id` values per request cannot grow the metrics registry without
+bound.
+
 ---
 
 ## What Flux Does NOT Protect Against

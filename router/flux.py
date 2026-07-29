@@ -22,7 +22,10 @@ Example:
 
 from __future__ import annotations
 
+import contextlib
 import os
+import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 import structlog
@@ -33,10 +36,13 @@ from .adaptive_weights import AdaptiveWeights
 from .analytics import RoutingAnalytics
 from .budget_tracker import BudgetTracker
 from .cache import ResponseCache
+from .cascade import Verifier, estimate_step_cost, verify_response
 from .classifier import RequestClassifier
+from .config import CASCADE_MAX_ESCALATIONS
 from .context_compressor import ContextCompressor
 from .model_registry import ModelRegistry
 from .routing_engine import RoutingEngine
+from .run_budget import RunLimits
 from .schemas import ModelOption, RoutingDecision, RoutingRequest
 
 # Maps provider name (as used in models.json / ModelOption.provider) to the
@@ -122,10 +128,59 @@ class Flux:
         """Delegate to the underlying RoutingEngine."""
         return await self._engine.route(request, verbose=verbose)
 
+    @contextlib.contextmanager
+    def start_run(
+        self,
+        run_id: str | None = None,
+        max_cost_usd: float | None = None,
+        max_steps: int | None = None,
+        max_tokens: int | None = None,
+        max_duration_seconds: float | None = None,
+    ) -> Iterator[str]:
+        """
+        Task 3: open a budgeted run and yield its run_id. Pass that run_id to
+        every complete() call in the trajectory (as run_id=...) to enable
+        run-scoped enforcement: cost-optimized degradation as the budget gets
+        close, then RunBudgetExceeded raised before the next step dispatches.
+
+        Any limit left as None falls back to the RUN_MAX_* global default in
+        config.py.
+
+        Example:
+            with flux.start_run(max_cost_usd=0.10, max_steps=50) as run_id:
+                for _ in range(50):
+                    resp = await flux.complete(next_prompt, run_id=run_id)
+                    ...
+
+        The run's state is dropped when the context exits (whether the loop
+        finished, broke early, or raised) — call again with the same run_id
+        if you need it to persist across separate start_run() blocks.
+        """
+        run_id = run_id or str(uuid.uuid4())
+        defaults = RunLimits()
+        self._engine._run_budget.start(
+            run_id,
+            RunLimits(
+                max_cost_usd=max_cost_usd if max_cost_usd is not None else defaults.max_cost_usd,
+                max_steps=max_steps if max_steps is not None else defaults.max_steps,
+                max_tokens=max_tokens if max_tokens is not None else defaults.max_tokens,
+                max_duration_seconds=(
+                    max_duration_seconds
+                    if max_duration_seconds is not None
+                    else defaults.max_duration_seconds
+                ),
+            ),
+        )
+        try:
+            yield run_id
+        finally:
+            self._engine._run_budget.finish(run_id)
+
     async def complete(
         self,
         prompt: str,
         max_retries: int = 2,
+        cascade_verifier: Verifier | None = None,
         **request_kwargs,
     ) -> FluxResponse:
         """
@@ -135,13 +190,51 @@ class Flux:
         ``request_kwargs`` are forwarded to RoutingRequest (e.g. user_id, plan,
         priority, conversation_id, routing_priority …).
 
+        Task 8: when routing_priority="cascade", this delegates to
+        _complete_cascade() instead — a different escalation strategy (verify
+        locally, escalate tiers on failure) rather than the typed-error
+        fallback chain below. ``cascade_verifier`` is only used in that path.
+
         Raises:
             AuthenticationError — immediately, never retried.
             FluxAPIError        — after all retries are exhausted.
         """
+        if request_kwargs.get("routing_priority") == "cascade":
+            return await self._complete_cascade(prompt, cascade_verifier, **request_kwargs)
+
         request = self._build_request(prompt, **request_kwargs)
         decision = await self._engine.route(request)
+        text, model, fallback_used, fallback_reason = await self._dispatch_with_fallback(
+            decision, request, max_retries
+        )
+        return FluxResponse(
+            text=text,
+            model=model,
+            decision=decision,
+            fallback_used=fallback_used,
+            fallback_reason=fallback_reason,
+        )
 
+    async def _dispatch_with_fallback(
+        self,
+        decision: RoutingDecision,
+        request: RoutingRequest,
+        max_retries: int = 2,
+    ) -> tuple[str, ModelOption, bool, str | None]:
+        """
+        Call ``decision.chosen_model`` and, on a typed transient failure, walk
+        the appropriate fallback chain up to ``max_retries`` further attempts.
+
+        Shared by complete() and router.server's HTTP proxy so both paths get
+        identical retry, budget-recording, run-budget, and attribution
+        behavior — see module docstring.
+
+        Returns (text, model_used, fallback_used, fallback_reason).
+
+        Raises:
+            AuthenticationError — immediately, never retried.
+            FluxAPIError        — after all retries are exhausted.
+        """
         models_to_try: list[ModelOption] = []
         if decision.chosen_model:
             models_to_try.append(decision.chosen_model)
@@ -177,9 +270,7 @@ class Flux:
                     continue
                 if request.max_daily_cost is not None:
                     cust_id = request.customer_id or request.user_id
-                    if self._engine._daily_budget.is_cap_exceeded(
-                        cust_id, request.max_daily_cost
-                    ):
+                    if self._engine._daily_budget.is_cap_exceeded(cust_id, request.max_daily_cost):
                         last_error = "daily_cap_exceeded"
                         log.warning(
                             "flux_fallback_skipped_daily_cap",
@@ -215,13 +306,26 @@ class Flux:
                         correlation_id=request.correlation_id,
                         task_type="unknown",
                     )
-                return FluxResponse(
-                    text=text,
-                    model=model,
-                    decision=decision,
-                    fallback_used=attempts > 0,
-                    fallback_reason=last_error,
+                # Task 3: record this step against the run's cumulative budget so
+                # the NEXT call to complete(run_id=...) sees it in check_before_dispatch().
+                # Token count is estimated (~4 chars/token) since _call_model returns text only.
+                if request.run_id:
+                    self._engine._run_budget.record_step(
+                        request.run_id,
+                        model.model_id,
+                        decision.estimated_cost,
+                        max(len(text) // 4, 1),
+                    )
+                # Task 7: cost attribution — costs/metadata only, never `text`.
+                self._engine._attribution.record(
+                    tenant_id=request.tenant_id,
+                    run_id=request.run_id,
+                    task_type=decision.task_type,
+                    step_type=decision.step_type,
+                    model_id=model.model_id,
+                    cost_usd=decision.estimated_cost,
                 )
+                return text, model, attempts > 0, last_error
 
             except err.AuthenticationError:
                 # Key is wrong — retrying won't help.
@@ -272,12 +376,145 @@ class Flux:
             f"All models failed after {attempts} attempt(s). Last error: {last_error}"
         )
 
+    async def _complete_cascade(
+        self,
+        prompt: str,
+        cascade_verifier: Verifier | None,
+        **request_kwargs,
+    ) -> FluxResponse:
+        """
+        Task 8: dispatch the cheapest capable tier, verify locally, escalate
+        to the next tier in decision.fallback_chain on verification failure,
+        up to CASCADE_MAX_ESCALATIONS. Never raises on verification failure —
+        if every tier tried fails verification, the LAST (most capable)
+        response tried is returned anyway (a bad-but-present answer beats
+        none), with cascade_attempts / cascade_net_savings on the decision so
+        the caller can see what happened and decide for itself.
+        """
+        request = self._build_request(prompt, **request_kwargs)
+        decision = await self._engine.route(request)
+        if decision.chosen_model is None:
+            raise err.FluxAPIError("No model available to route this request")
+
+        tier_ladder: list[ModelOption] = [decision.chosen_model]
+        seen_ids = {decision.chosen_model.model_id}
+        for m in decision.fallback_chain:
+            if m.model_id not in seen_ids:
+                tier_ladder.append(m)
+                seen_ids.add(m.model_id)
+        tier_ladder = tier_ladder[: CASCADE_MAX_ESCALATIONS + 1]
+
+        step_breakdown: list[dict] = []
+        last_text = ""
+        last_model = decision.chosen_model
+        last_reason = "no attempts succeeded"
+        passed = False
+        got_any_response = False  # distinct from `last_text` truthiness — an
+        # empty STRING response still counts as "we got something from the
+        # provider," vs. every attempt raising and nothing coming back at all.
+
+        for model in tier_ladder:
+            try:
+                text = await self._call_model(model, request)
+            except err.AuthenticationError:
+                raise
+            except err.FluxAPIError as exc:
+                step_breakdown.append(
+                    {"model_id": model.model_id, "verified": False, "reason": str(exc)}
+                )
+                last_reason = str(exc)
+                continue
+
+            got_any_response = True
+            result = verify_response(text, request, cascade_verifier)
+            step_breakdown.append(
+                {"model_id": model.model_id, "verified": result.passed, "reason": result.reason}
+            )
+            last_text, last_model, last_reason = text, model, result.reason
+            if result.passed:
+                passed = True
+                break
+
+        if not got_any_response:
+            raise err.FluxAPIError(
+                f"Cascade exhausted all tiers without a usable response: {last_reason}"
+            )
+
+        # Task 3: run-budget accounting for the FINAL attempt only — matches
+        # the non-cascade path's convention of recording one step per
+        # complete() call, not one per internal escalation attempt.
+        self._engine._budget.record_spend(
+            user_id=request.user_id,
+            amount=decision.estimated_cost,
+            model_id=last_model.model_id,
+            correlation_id=request.correlation_id,
+            task_type="unknown",
+            plan=request.plan or "free_plan",
+        )
+        if request.run_id:
+            self._engine._run_budget.record_step(
+                request.run_id,
+                last_model.model_id,
+                decision.estimated_cost,
+                max(len(last_text) // 4, 1),
+            )
+
+        # Task 7: attribution gets ONE record per tier actually dispatched
+        # (unlike the plan/run-budget trackers above, which only count the
+        # final tier) — cascade's real economics require seeing every attempt.
+        for i in range(len(step_breakdown)):
+            self._engine._attribution.record(
+                tenant_id=request.tenant_id,
+                run_id=request.run_id,
+                task_type=decision.task_type,
+                step_type=decision.step_type,
+                model_id=tier_ladder[i].model_id,
+                cost_usd=estimate_step_cost(
+                    tier_ladder[i], decision.chosen_model, decision.estimated_cost
+                ),
+            )
+
+        # cascade_net_savings: actual cost of every tier PAID FOR (all
+        # attempts, since each one is a real API call) vs. what it would have
+        # cost to always dispatch the most expensive tier in the ladder
+        # directly. Negative means escalation cost MORE than skipping straight
+        # to premium — the honest failure mode this metric exists to surface.
+        priciest = max(tier_ladder, key=lambda m: m.cost_per_1k_input + m.cost_per_1k_output)
+        priciest_cost = estimate_step_cost(priciest, decision.chosen_model, decision.estimated_cost)
+        actual_spend = sum(
+            estimate_step_cost(tier_ladder[i], decision.chosen_model, decision.estimated_cost)
+            for i in range(len(step_breakdown))
+        )
+        decision.cascade_attempts = len(step_breakdown)
+        decision.cascade_net_savings = round(priciest_cost - actual_spend, 6)
+
+        log.info(
+            "flux_cascade_complete",
+            attempts=decision.cascade_attempts,
+            final_model=last_model.model_id,
+            passed=passed,
+            net_savings=decision.cascade_net_savings,
+        )
+        return FluxResponse(
+            text=last_text,
+            model=last_model,
+            decision=decision,
+            fallback_used=decision.cascade_attempts > 1,
+            fallback_reason=None if passed else last_reason,
+        )
+
     # ── Internal helpers ────────────────────────────────────────────────────
 
     def _build_request(self, prompt: str, **kwargs) -> RoutingRequest:
         """Build a RoutingRequest from the prompt and keyword overrides."""
         kwargs.setdefault("user_id", "flux_default")
         return RoutingRequest(raw_prompt=prompt, **kwargs)
+
+    def _resolve_api_key(self, model: ModelOption, request: RoutingRequest) -> str:
+        """Resolve the API key for ``model``'s provider: per-provider > per-request > legacy."""
+        provider = model.provider.lower()
+        secret = self._provider_keys.get(provider) or request.provider_api_key or self._api_key
+        return secret.get_secret_value() if secret is not None else ""
 
     async def _call_model(self, model: ModelOption, request: RoutingRequest) -> str:
         """
@@ -291,13 +528,7 @@ class Flux:
         """
         from .provider_caller import ProviderCallError, call_provider
 
-        provider = model.provider.lower()
-        secret = (
-            self._provider_keys.get(provider)
-            or request.provider_api_key
-            or self._api_key
-        )
-        api_key = secret.get_secret_value() if secret is not None else ""
+        api_key = self._resolve_api_key(model, request)
         try:
             return await call_provider(model, request, api_key)
         except ProviderCallError as exc:

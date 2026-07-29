@@ -1,0 +1,37 @@
+[
+  {
+    "task_id": "Fixture/add",
+    "prompt": "def add(a: int, b: int) -> int:\n    \"\"\"Return the sum of a and b.\n    >>> add(2, 3)\n    5\n    >>> add(-1, 1)\n    0\n    \"\"\"\n",
+    "canonical_solution": "    return a + b\n",
+    "test": "def check(candidate):\n    assert candidate(2, 3) == 5\n    assert candidate(-1, 1) == 0\n    assert candidate(0, 0) == 0\n    assert candidate(100, 200) == 300\n",
+    "entry_point": "add"
+  },
+  {
+    "task_id": "Fixture/greatest_common_divisor",
+    "prompt": "def greatest_common_divisor(a: int, b: int) -> int:\n    \"\"\"Return the greatest common divisor of two integers a and b.\n    >>> greatest_common_divisor(3, 5)\n    1\n    >>> greatest_common_divisor(25, 15)\n    5\n    \"\"\"\n",
+    "canonical_solution": "    while b:\n        a, b = b, a % b\n    return a\n",
+    "test": "def check(candidate):\n    assert candidate(3, 5) == 1\n    assert candidate(25, 15) == 5\n    assert candidate(12, 8) == 4\n    assert candidate(7, 7) == 7\n",
+    "entry_point": "greatest_common_divisor"
+  },
+  {
+    "task_id": "Fixture/is_palindrome",
+    "prompt": "def is_palindrome(text: str) -> bool:\n    \"\"\"Return True if the given string is a palindrome, False otherwise.\n    >>> is_palindrome('')\n    True\n    >>> is_palindrome('racecar')\n    True\n    >>> is_palindrome('hello')\n    False\n    \"\"\"\n",
+    "canonical_solution": "    return text == text[::-1]\n",
+    "test": "def check(candidate):\n    assert candidate('') == True\n    assert candidate('racecar') == True\n    assert candidate('hello') == False\n    assert candidate('a') == True\n",
+    "entry_point": "is_palindrome"
+  },
+  {
+    "task_id": "Fixture/factorial",
+    "prompt": "def factorial(n: int) -> int:\n    \"\"\"Return n! (the factorial of a non-negative integer n).\n    >>> factorial(0)\n    1\n    >>> factorial(5)\n    120\n    \"\"\"\n",
+    "canonical_solution": "    result = 1\n    for i in range(2, n + 1):\n        result *= i\n    return result\n",
+    "test": "def check(candidate):\n    assert candidate(0) == 1\n    assert candidate(1) == 1\n    assert candidate(5) == 120\n    assert candidate(6) == 720\n",
+    "entry_point": "factorial"
+  },
+  {
+    "task_id": "Fixture/count_vowels",
+    "prompt": "def count_vowels(text: str) -> int:\n    \"\"\"Return the number of vowels (a, e, i, o, u) in the given lowercase string.\n    >>> count_vowels('hello')\n    2\n    >>> count_vowels('xyz')\n    0\n    \"\"\"\n",
+    "canonical_solution": "    return sum(1 for c in text if c in 'aeiou')\n",
+    "test": "def check(candidate):\n    assert candidate('hello') == 2\n    assert candidate('xyz') == 0\n    assert candidate('aeiou') == 5\n    assert candidate('programming') == 3\n",
+    "entry_point": "count_vowels"
+  }
+]

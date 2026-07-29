@@ -47,6 +47,10 @@ adaptive_state.json
 routing_analytics.jsonl
 *.jsonl
 
+# Eval harness run artifacts
+eval_results/
+.eval_cache/
+
 # IDE
 .DS_Store
 .idea/

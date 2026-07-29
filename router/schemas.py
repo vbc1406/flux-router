@@ -151,9 +151,12 @@ class RoutingRequest(BaseModel):
     #   quality-first   → weights quality=0.70, cost=0.20, latency=0.10
     #   balanced        → default behavior (current logic, no change)
     #   cost-optimized  → weights quality=0.30, cost=0.60, latency=0.10
-    routing_priority: Literal["always-premium", "quality-first", "balanced", "cost-optimized"] = (
-        "balanced"
-    )
+    #   cascade         → Task 8: start at the cheapest capable tier; Flux
+    #                     escalates through decision.fallback_chain on
+    #                     verification failure. See router/cascade.py.
+    routing_priority: Literal[
+        "always-premium", "quality-first", "balanced", "cost-optimized", "cascade"
+    ] = "balanced"
 
     # ── Change 3: Per-customer adaptive memory ──────────────────────────────────
     # When provided, per-customer adaptive quality scores are used after 20+ samples.
@@ -186,7 +189,45 @@ class RoutingRequest(BaseModel):
     # more than the sticky bias threshold.
     conversation_id: str | None = Field(default=None, max_length=256)
 
-    @field_validator("user_id", "team_id", "customer_id", "conversation_id")
+    # ── Task 3: Run-scoped budget enforcement ────────────────────────────────
+    # A correlation ID grouping N routing decisions into one "run" (a
+    # multi-step agent trajectory). See router/run_budget.py. Auto-generated
+    # by Flux.start_run() / the proxy's X-Flux-Run-Id header if not supplied;
+    # requests with no run_id are not subject to run-budget enforcement at all.
+    run_id: str | None = Field(default=None, max_length=256)
+
+    # ── Task 7: Per-tenant cost attribution ──────────────────────────────────
+    # Which customer/workflow this request belongs to, for router/attribution.py
+    # aggregation. Independent of user_id (a tenant may have many users).
+    tenant_id: str | None = Field(default=None, max_length=256)
+
+    # ── Task 6: Step-type classification for agent trajectories ─────────────
+    # Orthogonal to task_type (which classifies the PROMPT). step_type
+    # classifies the AGENT STEP: what kind of action is being asked for.
+    # If left unset, RequestClassifier infers it from tools/response_format/
+    # message-role pattern — see classifier.py::_infer_step_type().
+    step_type: (
+        Literal[
+            "plan",
+            "tool_select",
+            "tool_result_summarize",
+            "reflect",
+            "extract",
+            "format",
+            "final_answer",
+            "unknown",
+        ]
+        | None
+    ) = None
+    # OpenAI-shaped tool definitions, if this step offers the model tools to
+    # call. Only presence/count is used by routing (capability filtering,
+    # step_type inference) — contents are not validated against a JSON schema.
+    tools: list[dict] = Field(default_factory=list)
+    # OpenAI-shaped response_format (e.g. {"type": "json_schema", ...}).
+    # Presence signals a structured-output step for step_type inference.
+    response_format: dict | None = None
+
+    @field_validator("user_id", "team_id", "customer_id", "conversation_id", "run_id", "tenant_id")
     @classmethod
     def _safe_id(cls, v: str | None) -> str | None:
         if v is not None and not _SAFE_ID_PATTERN.match(v):
@@ -263,6 +304,11 @@ class TaskAnalysis(BaseModel):
     sensitivity_level: Literal["public", "internal", "confidential", "restricted"] = "public"
     cache_eligible: bool = False
     prompt_fingerprint: str = ""
+    # ── Task 6: Step-type classification ─────────────────────────────────────
+    # Resolved step_type: request.step_type if the caller set it explicitly,
+    # otherwise inferred by RequestClassifier._infer_step_type(). Always set —
+    # "unknown" when no signal is present, never None.
+    step_type: str = "unknown"
 
 
 class ModelOption(BaseModel):
@@ -294,6 +340,25 @@ class ModelOption(BaseModel):
         default_factory=lambda: ["public", "internal", "confidential", "restricted"]
     )
 
+    # ── Task 6: Verified capability flags ────────────────────────────────────
+    # Honest defaults: False unless models.json explicitly sets them True based
+    # on the provider's public docs. A request with tools=[...] is filtered to
+    # supports_tools=True models only (hard constraint) — an unverified False
+    # here means "excluded from tool-calling steps," not "definitely can't."
+    supports_tools: bool = False
+    supports_structured_output: bool = False
+
+    # ── Task 5: Prompt-caching pricing ───────────────────────────────────────
+    # None (the default) means "caching not modeled for this model" — treated
+    # as always-cold by router/prompt_cache.py. Populate from the provider's
+    # actual prompt-caching pricing page; these are NOT derived from
+    # cost_per_1k_input automatically because write/read multipliers vary by
+    # provider and change independently of base pricing.
+    cache_write_cost_per_1m: float | None = None
+    cache_read_cost_per_1m: float | None = None
+    cache_min_tokens: int | None = None
+    cache_ttl_seconds: int | None = None
+
     # Runtime-only fields — set by the routing engine on a .model_copy()
     adjusted_quality: float = 0.5
     routing_score: float = 0.0
@@ -303,6 +368,13 @@ class RoutingDecision(BaseModel):
     """The complete output of one routing cycle."""
 
     chosen_model: ModelOption | None = None
+
+    # ── Task 7: Cost attribution ─────────────────────────────────────────────
+    # Denormalized from TaskAnalysis so callers (and router/attribution.py)
+    # don't need verbose=True / explanation populated just to see what kind
+    # of request this was.
+    task_type: str = ""
+    step_type: str = ""
 
     # ── Primary fallback chain (generic best-effort) ─────────────────────────
     fallback_chain: list[ModelOption] = Field(default_factory=list)
@@ -350,6 +422,36 @@ class RoutingDecision(BaseModel):
     # ── Fix 5: Decision explainability ───────────────────────────────────────
     # Populated only when verbose=True is passed to flux.route() or engine.route().
     explanation: RoutingExplanation | None = None
+
+    # ── Task 3: Run-scoped budget enforcement ────────────────────────────────
+    # Populated only when the request carried a run_id. run_cost_so_far and
+    # run_steps_so_far reflect the run's state BEFORE this step (this step's
+    # own cost/tokens are recorded separately, after dispatch succeeds).
+    # budget_state: "ok" (well under limits), "degraded" (routing_priority
+    # was forced to cost-optimized), "warning" (degraded + caller should
+    # consider wrapping up), or "exceeded" (only appears inside
+    # RunBudgetExceeded.summary — a request in that state never reaches here).
+    run_id: str | None = None
+    run_cost_so_far: float = 0.0
+    run_steps_so_far: int = 0
+    budget_state: Literal["ok", "degraded", "warning", "exceeded"] = "ok"
+    budget_warning: str | None = None
+
+    # ── Task 5: Cache-aware routing ──────────────────────────────────────────
+    # "cold": no relevant warm prefix known. "warm": stayed on the provider
+    # already holding a warm cache for this prefix. "would_lose_cache": a
+    # warm prefix existed on another provider but routing switched away from
+    # it anyway because the savings cleared CACHE_SWITCH_MARGIN.
+    prompt_cache_status: Literal["cold", "warm", "would_lose_cache"] = "cold"
+
+    # ── Task 8: Cascade / escalation ─────────────────────────────────────────
+    # Populated only when routing_priority == "cascade". cascade_attempts is
+    # the number of tiers actually dispatched (1 = no escalation needed).
+    # cascade_net_savings is vs. always dispatching the top escalation tier
+    # directly — negative when escalation made this request MORE expensive
+    # than skipping straight to the tier it ended up on.
+    cascade_attempts: int = 0
+    cascade_net_savings: float = 0.0
 
     def explain(self) -> str:
         """Return human-readable routing explanation, or a placeholder if not populated."""

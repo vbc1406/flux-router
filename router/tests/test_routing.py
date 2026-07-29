@@ -531,12 +531,18 @@ class TestAlwaysPremiumRouting:
         assert d.confidence >= 0.0
 
     def test_cost_optimized_routes_cheaper(self):
+        # exploration_rate=0: this test asserts a cost ORDERING between the two
+        # priorities, which Step 10's random A/B exploration can otherwise
+        # violate on an unlucky draw (it uses the shared, unseeded `random`
+        # module, so this is sensitive to how many prior route() calls ran
+        # elsewhere in the suite) — not a cost-optimized vs. quality-first bug.
         d1 = rr(
             self.engine.route(
                 _req(
                     "Write a 500-word analysis",
                     routing_priority="cost-optimized",
                     plan="business_plan",
+                    exploration_rate=0.0,
                 )
             )
         )
@@ -546,6 +552,7 @@ class TestAlwaysPremiumRouting:
                     "Write a 500-word analysis",
                     routing_priority="quality-first",
                     plan="business_plan",
+                    exploration_rate=0.0,
                 )
             )
         )
