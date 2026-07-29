@@ -37,7 +37,9 @@
         "long_document": 0.6,
         "unknown": 0.6,
         "general": 0.6
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "google",
@@ -75,7 +77,9 @@
         "long_document": 0.78,
         "unknown": 0.72,
         "general": 0.72
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "groq",
@@ -111,7 +115,9 @@
         "long_document": 0.74,
         "unknown": 0.76,
         "general": 0.78
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "groq",
@@ -149,7 +155,9 @@
         "long_document": 0.86,
         "unknown": 0.76,
         "general": 0.78
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "mistral",
@@ -188,7 +196,9 @@
         "long_document": 0.78,
         "unknown": 0.8,
         "general": 0.82
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "mistral",
@@ -224,7 +234,9 @@
         "long_document": 0.7,
         "unknown": 0.72,
         "general": 0.72
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "anthropic",
@@ -265,7 +277,9 @@
         "long_document": 0.8,
         "unknown": 0.82,
         "general": 0.82
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "openai",
@@ -306,7 +320,9 @@
         "long_document": 0.8,
         "unknown": 0.82,
         "general": 0.83
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "openai",
@@ -347,7 +363,9 @@
         "long_document": 0.74,
         "unknown": 0.74,
         "general": 0.76
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "google",
@@ -386,7 +404,9 @@
         "long_document": 0.84,
         "unknown": 0.8,
         "general": 0.82
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "google",
@@ -425,7 +445,9 @@
         "long_document": 0.82,
         "unknown": 0.76,
         "general": 0.78
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "anthropic",
@@ -466,7 +488,9 @@
         "long_document": 0.86,
         "unknown": 0.86,
         "general": 0.88
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "anthropic",
@@ -507,7 +531,9 @@
         "long_document": 0.82,
         "unknown": 0.82,
         "general": 0.84
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "openai",
@@ -548,7 +574,9 @@
         "long_document": 0.86,
         "unknown": 0.88,
         "general": 0.9
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "openai",
@@ -589,7 +617,9 @@
         "long_document": 0.82,
         "unknown": 0.82,
         "general": 0.84
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "google",
@@ -629,7 +659,9 @@
         "long_document": 0.88,
         "unknown": 0.86,
         "general": 0.88
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "google",
@@ -669,7 +701,9 @@
         "long_document": 0.92,
         "unknown": 0.85,
         "general": 0.88
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "anthropic",
@@ -710,7 +744,9 @@
         "long_document": 0.92,
         "unknown": 0.92,
         "general": 0.94
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "anthropic",
@@ -751,7 +787,9 @@
         "long_document": 0.88,
         "unknown": 0.88,
         "general": 0.9
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "openai",
@@ -792,7 +830,9 @@
         "long_document": 0.88,
         "unknown": 0.9,
         "general": 0.92
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "openai",
@@ -834,7 +874,9 @@
         "long_document": 0.84,
         "unknown": 0.86,
         "general": 0.88
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "google",
@@ -874,7 +916,9 @@
         "long_document": 0.94,
         "unknown": 0.9,
         "general": 0.92
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "google",
@@ -914,7 +958,9 @@
         "long_document": 0.92,
         "unknown": 0.88,
         "general": 0.9
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "openai",
@@ -955,7 +1001,9 @@
         "long_document": 0.84,
         "unknown": 0.88,
         "general": 0.9
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "openai",
@@ -996,7 +1044,9 @@
         "long_document": 0.8,
         "unknown": 0.84,
         "general": 0.86
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     },
     {
       "provider": "anthropic",
@@ -1037,7 +1087,9 @@
         "long_document": 0.9,
         "unknown": 0.9,
         "general": 0.92
-      }
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
     }
   ]
 }

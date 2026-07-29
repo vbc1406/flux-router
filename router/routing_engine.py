@@ -95,6 +95,7 @@ from .config import (
     MIN_CONFIDENCE_THRESHOLD,
     MIN_QUALITY_THRESHOLD,
     SCORING_WEIGHTS,
+    STEP_TYPE_FLOORS,
     TIER_BOUNDARIES,
     TIER_ORDER,
     VALID_ROUTING_PRIORITIES,
@@ -1258,6 +1259,18 @@ def _passes_hard_constraints(
     # the model would likely truncate or fail even before output tokens are added.
     if analysis.estimated_input_tokens > model.max_context_window * CONTEXT_PENALTY_HARD_CUTOFF:
         return False
+    # Task 6: tools offered -> only models with verified tool-calling support
+    # are eligible, regardless of tier/cost. A model that can't reliably call
+    # tools is not a "cheaper" option for a tool_select step, it's a broken one.
+    if request.tools and not model.supports_tools:
+        return False
+    if request.response_format and not model.supports_structured_output:
+        return False
+    # Task 6: step_type quality floor — applied BEFORE scoring so a cheap
+    # model can never win a plan/tool_select/final_answer step purely on cost.
+    floor_tier = STEP_TYPE_FLOORS.get(analysis.step_type)
+    if floor_tier is not None and _TIER_ORDER.index(model.tier) < _TIER_ORDER.index(floor_tier):
+        return False
     return (
         all(cap in model.capabilities for cap in request.required_capabilities)
         and model.max_context_window >= analysis.total_context_needed
@@ -1277,7 +1290,13 @@ def _relaxed_filter(
     """
     Relaxed filter: drop rate-limit and streaming requirements.
     Called when the strict filter yields zero candidates.
+
+    Task 6 NOTE: tools/response_format/step_type-floor constraints are NOT
+    relaxed here — they gate actual capability (can this model call tools at
+    all?), not a soft preference like streaming, so relaxing them would hand
+    a tool_select step to a model that will fumble the tool schema.
     """
+    floor_tier = STEP_TYPE_FLOORS.get(analysis.step_type)
     return [
         m
         for m in models
@@ -1286,6 +1305,9 @@ def _relaxed_filter(
         and m.is_available
         and analysis.sensitivity_level in m.allowed_sensitivity_levels
         and _is_allowed_for_plan(m, request.plan)
+        and (not request.tools or m.supports_tools)
+        and (not request.response_format or m.supports_structured_output)
+        and (floor_tier is None or _TIER_ORDER.index(m.tier) >= _TIER_ORDER.index(floor_tier))
     ]
 
 

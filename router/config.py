@@ -628,3 +628,95 @@ RUN_TTL_SECONDS: float = 3600.0  # 1 hour
 # all runs, sweep for TTL-expired entries. Mirrors RoutingEngine's
 # ConversationStore housekeeping cadence (every 500 route() calls).
 RUN_HOUSEKEEPING_INTERVAL: int = 500
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP-TYPE CLASSIFICATION (Task 6: router/classifier.py, routing_engine.py)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Minimum tier (by TIER_ORDER index) a model must meet for a given step_type,
+# enforced as a hard constraint in _passes_hard_constraints() — BEFORE scoring,
+# so a cheap model can never win a plan/tool_select/final_answer step on cost
+# alone. step_types not listed here (including "unknown") have no floor.
+# How to tune: raise a step_type's floor if you see it fumbling tool schemas
+# or looping; lower tool_result_summarize/extract/format's floor (or omit
+# them entirely) to push more savings into steps where mistakes are cheap to
+# catch downstream.
+STEP_TYPE_FLOORS: dict[str, str] = {
+    "plan": "mid",
+    "tool_select": "mid",
+    "final_answer": "mid",
+    "reflect": "cheap",
+    "tool_result_summarize": "free",
+    "extract": "free",
+    "format": "free",
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CACHE-AWARE ROUTING (Task 5: router/prompt_cache.py, routing_engine.py)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Minimum shared-prefix token count before cache stickiness applies at all.
+# Below this, provider prompt caches rarely engage anyway (most providers
+# have their own minimums around 1024 tokens) so there is nothing to protect.
+CACHE_PREFIX_MIN_TOKENS: int = 1024
+
+# A switch away from the provider currently holding a warm prefix is only
+# allowed when the candidate's all-in cost (cold, no cache) is cheaper than
+# the incumbent's cache-aware cost by more than this fraction. Below it, the
+# switch is blocked even if the candidate looks nominally cheaper — losing
+# the warm cache typically costs more than it saves.
+# How to tune: raise to make the router more conservative about switching
+# (protects cache harder); lower to let routing chase small savings more
+# aggressively at the risk of thrashing a warm cache.
+CACHE_SWITCH_MARGIN: float = 0.15
+
+# Scoring bonus applied to the incumbent cache-holding model's routing_score
+# in Step 9, on the same additive scale as CONVERSATION_STICKY_BIAS_*. This is
+# the "soft" signal; CACHE_SWITCH_MARGIN above is the hard constraint that
+# actually blocks a switch.
+CACHE_STICKINESS_WEIGHT: float = 0.08
+
+# How long a provider is considered to be holding a warm prefix after last
+# use, absent a more specific model.cache_ttl_seconds. Real provider TTLs are
+# typically 5 minutes (ephemeral) or 1 hour (extended); this default assumes
+# the shorter, more common case.
+CACHE_DEFAULT_TTL_SECONDS: int = 300
+
+# Max distinct (conversation/run key) entries tracked by PromptCacheTracker.
+# Same LRU-eviction pattern as RUN_STORE_MAX_ENTRIES.
+CACHE_TRACKER_MAX_ENTRIES: int = 50_000
+
+# ══════════════════════════════════════════════════════════════════════════════
+# COST ATTRIBUTION (Task 7: router/attribution.py, router/server.py)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Path to the SQLite usage database. ":memory:" for tests / ephemeral
+# deployments (no cross-restart history); a file path persists across
+# restarts. Never contains prompts or completions — costs and metadata only.
+ATTRIBUTION_DB_PATH: str = os.environ.get("FLUX_ATTRIBUTION_DB", "flux_usage.db")
+
+# Prometheus label cardinality cap: distinct (tenant_id, model_id) label
+# combinations tracked before falling back to an "_overflow_" bucket. Prevents
+# a hostile or buggy caller from exploding /metrics cardinality by minting a
+# fresh tenant_id per request.
+# How to tune: raise for legitimately high-tenant-count deployments; the cost
+# is proportional memory use in the metrics registry.
+ATTRIBUTION_METRICS_MAX_LABEL_COMBOS: int = 10_000
+
+# Page size cap for GET /v1/usage on the proxy.
+ATTRIBUTION_USAGE_PAGE_MAX: int = 500
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CASCADE / ESCALATION (Task 8: router/cascade.py, flux.py)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Escalation tiers tried in order for routing_priority="cascade", cheapest
+# first. Escalation stops as soon as a tier's response passes verification.
+# How to tune: this must be a subsequence of TIER_ORDER, cheapest-first: do
+# not reorder without updating cascade.py's tier-walk logic.
+CASCADE_ESCALATION_TIERS: list[str] = ["free", "cheap", "mid", "premium"]
+
+# Hard cap on escalations per request, independent of how many tiers exist
+# above. Prevents a systematically-failing verifier from walking every tier
+# (and paying for every one) on every request.
+CASCADE_MAX_ESCALATIONS: int = 3

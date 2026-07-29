@@ -146,6 +146,11 @@ def _build_routing_request(body: dict[str, Any], run_id: str) -> tuple[RoutingRe
         "temperature": body.get("temperature"),
         "max_tokens_requested": body.get("max_tokens"),
         "run_id": run_id,
+        # Task 6: passed through verbatim for step_type inference + capability
+        # filtering. Not forwarded to the provider call itself in this proxy —
+        # tool-calling over the proxy is a routing-only signal for now.
+        "tools": body.get("tools") or [],
+        "response_format": body.get("response_format"),
     }
 
     is_literal_model = False

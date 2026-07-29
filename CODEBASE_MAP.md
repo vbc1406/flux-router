@@ -47,6 +47,7 @@ flux/
 │       ├── test_routing.py        ← End-to-end routing engine tests (13 change areas)
 │       ├── test_server.py         ← HTTP proxy tests (directives, passthrough, streaming, auth, body cap)
 │       ├── test_run_budget.py     ← Run-budget ladder, eviction at scale, agent-loop integration
+│       ├── test_step_type.py      ← step_type inference, STEP_TYPE_FLOORS, tool-capability filter
 │       ├── test_adaptive_guardrails.py  ← AdaptiveWeights guardrail tests (6 issue areas)
 │       ├── test_adaptive_weights.py     ← AdaptiveWeights unit tests with metrics
 │       ├── test_cache.py          ← ResponseCache + fingerprinting tests
@@ -103,6 +104,16 @@ To add a model: edit `models.json`, no code change needed.
 ### Routing Logic
 Main algorithm → `router/routing_engine.py` (`RoutingEngine.route()`)
 The method is structured as 13 numbered steps with header comments.
+
+### Step-Type Classification (agent trajectories)
+→ `RoutingRequest.step_type` / `TaskAnalysis.step_type`, inferred by
+`RequestClassifier._infer_step_type()` when unset (from `tools`,
+tool-result messages, `response_format`). Enforced as a hard constraint in
+`_passes_hard_constraints()` via `STEP_TYPE_FLOORS` (config.py) — applied
+BEFORE scoring, so a cheap model can never win a `plan`/`tool_select`/
+`final_answer` step on cost alone. `request.tools` also hard-filters
+candidates to `supports_tools=True` models; `response_format` filters to
+`supports_structured_output=True`.
 
 ### Adaptive Learning / Quality Tracking
 → `router/adaptive_weights.py` (`AdaptiveWeights` class)
