@@ -61,7 +61,11 @@ of the `SERVER_*` settings.
 
 ### Option 2: Python import
 
-Install (from a clone):
+```bash
+pip install flux-router
+```
+
+Or from a clone, editable:
 
 ```bash
 pip install -e .
