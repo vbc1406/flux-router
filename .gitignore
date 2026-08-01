@@ -50,6 +50,7 @@ routing_analytics.jsonl
 # Eval harness run artifacts
 eval_results/
 .eval_cache/
+evals/results/
 
 # IDE
 .DS_Store
