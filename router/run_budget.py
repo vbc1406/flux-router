@@ -37,21 +37,24 @@ Enforcement model:
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from collections import OrderedDict
-from dataclasses import dataclass, field
-from typing import Protocol
+from dataclasses import asdict, dataclass, field
+from typing import Any, Protocol
 
 import structlog
 
 from .config import (
+    REDIS_URL,
     RUN_DEGRADE_THRESHOLD,
     RUN_HOUSEKEEPING_INTERVAL,
     RUN_MAX_COST_USD,
     RUN_MAX_DURATION_SECONDS,
     RUN_MAX_STEPS,
     RUN_MAX_TOKENS,
+    RUN_STORE_BACKEND,
     RUN_STORE_MAX_ENTRIES,
     RUN_TTL_SECONDS,
     RUN_WARN_THRESHOLD,
@@ -166,11 +169,159 @@ class InMemoryRunStore:
         return len(expired)
 
 
+class RedisRunStore:
+    """
+    Redis-backed RunStore for multi-worker/multi-instance deployments, where
+    InMemoryRunStore's process-local state lets each worker enforce a run's
+    budget against only the steps IT personally handled — silently
+    under-counting the run's true cumulative spend once requests for the
+    same run_id land on different workers (the normal case behind a load
+    balancer or multiple uvicorn workers). Select it with FLUX_RUN_STORE=redis
+    (config.RUN_STORE_BACKEND) rather than constructing it directly in most
+    cases — see RunBudget's default-store wiring below.
+
+    Same eviction semantics as InMemoryRunStore:
+      - LRU cap at `max_entries`: a Redis sorted set (`{key_prefix}lru`,
+        member=run_id, score=last-touched wall-clock time) tracks recency;
+        inserting a genuinely NEW run_id while at capacity evicts the
+        lowest-scored (least-recently-touched) member first — mirrors
+        InMemoryRunStore.set()'s OrderedDict.popitem(last=False).
+      - `sweep_expired(ttl_seconds)` evicts anything idle longer than
+        ttl_seconds, same contract as InMemoryRunStore, implemented via a
+        ZRANGEBYSCORE cutoff query instead of a full scan.
+      - A native Redis key TTL (`ttl_seconds` at construction) is set on each
+        state entry purely as a defense-in-depth backstop for a worker that
+        crashes before the next housekeeping sweep runs; the manual sweep
+        above is the actual source of truth for the Protocol's eviction count.
+
+    Concurrency note: the "is this run_id new" check and the LRU-cap eviction
+    are two separate round trips, not one atomic transaction — under heavy
+    concurrent writers from many workers, max_entries is a soft/approximate
+    cap (as it effectively already is for InMemoryRunStore across a fleet,
+    which only bounds ONE process's local state). Not pursuing a Lua-script
+    atomic version here; correctness of budget enforcement itself does not
+    depend on this bound being exact.
+
+    Clock-domain note: `_RunState.started_at` / `.last_touched` are
+    `time.monotonic()` values, which are only meaningful WITHIN the process
+    that produced them — comparing one process's monotonic clock reading to
+    another's is meaningless (each process's monotonic epoch is arbitrary).
+    Values are translated to wall-clock time before being written to Redis,
+    and translated back to an equivalent-for-THIS-process monotonic value on
+    read, so cross-process elapsed-time math (duration limits, TTL sweep)
+    stays correct within normal clock-computation tolerances (sub-millisecond
+    in practice) rather than being silently nonsensical.
+    """
+
+    def __init__(
+        self,
+        redis_client: Any | None = None,
+        max_entries: int = RUN_STORE_MAX_ENTRIES,
+        ttl_seconds: float = RUN_TTL_SECONDS,
+        key_prefix: str = "flux:run_budget:",
+        url: str = REDIS_URL,
+    ) -> None:
+        if redis_client is not None:
+            self._redis = redis_client
+        else:
+            try:
+                import redis
+            except ImportError as exc:
+                raise ImportError(
+                    "RedisRunStore requires the 'redis' package. Install it with "
+                    "`pip install flux-router[redis]`, or pass an explicit "
+                    "redis_client= (e.g. a fakeredis instance in tests)."
+                ) from exc
+            self._redis = redis.Redis.from_url(url, decode_responses=True)
+        self._max_entries = max_entries
+        self._ttl_seconds = ttl_seconds
+        self._state_prefix = key_prefix + "state:"
+        self._lru_key = key_prefix + "lru"
+
+    # ── Clock translation (see class docstring) ─────────────────────────────
+
+    @staticmethod
+    def _mono_to_wall(mono_value: float) -> float:
+        return mono_value + (time.time() - time.monotonic())
+
+    @staticmethod
+    def _wall_to_mono(wall_value: float) -> float:
+        return wall_value - (time.time() - time.monotonic())
+
+    def _serialize(self, state: _RunState) -> str:
+        d = asdict(state)
+        d["started_at"] = self._mono_to_wall(d["started_at"])
+        d["last_touched"] = self._mono_to_wall(d["last_touched"])
+        return json.dumps(d)
+
+    def _deserialize(self, raw: str) -> _RunState:
+        d = json.loads(raw)
+        return _RunState(
+            limits=RunLimits(**d["limits"]),
+            started_at=self._wall_to_mono(d["started_at"]),
+            last_touched=self._wall_to_mono(d["last_touched"]),
+            steps=[StepRecord(**s) for s in d["steps"]],
+            cost_so_far=d["cost_so_far"],
+            tokens_so_far=d["tokens_so_far"],
+        )
+
+    # ── RunStore Protocol ────────────────────────────────────────────────────
+
+    def get(self, run_id: str) -> _RunState | None:
+        raw = self._redis.get(self._state_prefix + run_id)
+        if raw is None:
+            return None
+        # Recency bump for LRU purposes only, mirroring InMemoryRunStore.get()'s
+        # move_to_end() — last_touched itself is only ever refreshed by set().
+        self._redis.zadd(self._lru_key, {run_id: time.time()})
+        return self._deserialize(raw)
+
+    def set(self, run_id: str, state: _RunState) -> None:
+        is_new = self._redis.zscore(self._lru_key, run_id) is None
+        if is_new and self._redis.zcard(self._lru_key) >= self._max_entries:
+            evicted = self._redis.zpopmin(self._lru_key)
+            if evicted:
+                evicted_id = evicted[0][0]
+                self._redis.delete(self._state_prefix + evicted_id)
+                log.info("run_budget_evicted_lru", limit=self._max_entries, evicted=evicted_id)
+        self._redis.set(
+            self._state_prefix + run_id,
+            self._serialize(state),
+            ex=max(int(self._ttl_seconds), 1),
+        )
+        self._redis.zadd(self._lru_key, {run_id: time.time()})
+
+    def delete(self, run_id: str) -> None:
+        self._redis.delete(self._state_prefix + run_id)
+        self._redis.zrem(self._lru_key, run_id)
+
+    def sweep_expired(self, ttl_seconds: float) -> int:
+        cutoff = time.time() - ttl_seconds
+        expired = self._redis.zrangebyscore(self._lru_key, "-inf", cutoff)
+        if not expired:
+            return 0
+        for run_id in expired:
+            self._redis.delete(self._state_prefix + run_id)
+        self._redis.zrem(self._lru_key, *expired)
+        log.info("run_budget_evicted_ttl", count=len(expired), ttl_seconds=ttl_seconds)
+        return len(expired)
+
+
+def _default_store() -> RunStore:
+    """Bugfix: RunBudget() used to always hardcode InMemoryRunStore, which is
+    unsafe for multi-worker deployments (see RedisRunStore's docstring) with
+    no way to opt out short of manually constructing RunBudget(store=...).
+    FLUX_RUN_STORE=redis now selects RedisRunStore here instead."""
+    if RUN_STORE_BACKEND == "redis":
+        return RedisRunStore()
+    return InMemoryRunStore()
+
+
 class RunBudget:
     """Public API for run-scoped budget enforcement. See module docstring."""
 
     def __init__(self, store: RunStore | None = None) -> None:
-        self._store: RunStore = store or InMemoryRunStore()
+        self._store: RunStore = store or _default_store()
         self._lock = threading.Lock()
         self._call_count = 0
 

@@ -303,6 +303,46 @@ class TestRunBudget:
         assert "steps_taken" in body["error"]
         assert resp.headers["x-flux-run-id"] == run_id
 
+    # ── Bugfix coverage: loud auto-generated run_id ─────────────────────────
+
+    def test_missing_run_id_header_sets_missing_flag_and_header(self, client):
+        resp = client.post("/v1/chat/completions", json=_body())
+        assert resp.status_code == 200
+        assert resp.headers["x-flux-run-id"] != ""
+        assert resp.headers["x-flux-run-id-missing"] == "true"
+
+    def test_missing_run_id_header_logs_a_warning(self, client, monkeypatch):
+        events: list[tuple[str, dict]] = []
+        monkeypatch.setattr(
+            server.log, "warning", lambda ev, **kw: events.append((ev, kw))
+        )
+        resp = client.post("/v1/chat/completions", json=_body())
+        assert resp.status_code == 200
+        assert any(ev == "flux_run_id_auto_generated" for ev, _ in events)
+        matching = [kw for ev, kw in events if ev == "flux_run_id_auto_generated"]
+        assert matching[0]["run_id"] == resp.headers["x-flux-run-id"]
+
+    def test_supplied_run_id_header_does_not_set_missing_flag_or_warn(self, client, monkeypatch):
+        events: list[tuple[str, dict]] = []
+        monkeypatch.setattr(
+            server.log, "warning", lambda ev, **kw: events.append((ev, kw))
+        )
+        resp = client.post(
+            "/v1/chat/completions", json=_body(), headers={"X-Flux-Run-Id": "explicit-run"}
+        )
+        assert resp.status_code == 200
+        assert "x-flux-run-id-missing" not in resp.headers
+        assert not any(ev == "flux_run_id_auto_generated" for ev, _ in events)
+
+    def test_missing_run_id_flag_survives_streaming_path(self, client, monkeypatch):
+        async def fake_call(model, request):
+            return "streamed text"
+
+        monkeypatch.setattr(server._flux, "_call_model", fake_call)
+        resp = client.post("/v1/chat/completions", json=_body(stream=True))
+        assert resp.status_code == 200
+        assert resp.headers["x-flux-run-id-missing"] == "true"
+
 
 class TestAttribution:
     def test_chat_completion_records_usage_under_tenant_header(self, client):

@@ -677,6 +677,18 @@ RUN_TTL_SECONDS: float = 3600.0  # 1 hour
 # ConversationStore housekeeping cadence (every 500 route() calls).
 RUN_HOUSEKEEPING_INTERVAL: int = 500
 
+# Bugfix: which RunStore backend RunBudget() constructs by default when no
+# store is injected explicitly. "memory" (InMemoryRunStore) is process-local
+# — safe for a single worker, WRONG for a multi-worker/multi-instance
+# deployment, where each worker would enforce run budgets against only the
+# steps it personally handled, silently under-counting the run's true
+# cumulative spend. Set FLUX_RUN_STORE=redis (+ FLUX_REDIS_URL) to share run
+# state across workers via RedisRunStore. See router/run_budget.py.
+RUN_STORE_BACKEND: str = os.environ.get("FLUX_RUN_STORE", "memory").lower()
+
+# Connection URL for RedisRunStore, only read when RUN_STORE_BACKEND == "redis".
+REDIS_URL: str = os.environ.get("FLUX_REDIS_URL", "redis://localhost:6379/0")
+
 # ══════════════════════════════════════════════════════════════════════════════
 # STEP-TYPE CLASSIFICATION (Task 6: router/classifier.py, routing_engine.py)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -781,3 +793,18 @@ CASCADE_ESCALATION_TIERS: list[str] = ["free", "cheap", "mid", "premium"]
 # above. Prevents a systematically-failing verifier from walking every tier
 # (and paying for every one) on every request.
 CASCADE_MAX_ESCALATIONS: int = 3
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MODEL REGISTRY FRESHNESS (router/model_registry.py)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Bugfix: models.json's "last_updated" field used to be write-only — nothing
+# ever read it, so the catalog could silently go stale (missing new model
+# SKUs, wrong pricing) with no signal short of a human noticing. If
+# last_updated is older than this many days when the registry loads, a
+# startup warning is logged (model_registry_json_stale). Purely observational
+# — never blocks startup or falls back to the hardcoded registry.
+# How to tune: lower for a team that ships new model pricing frequently and
+# wants an earlier nudge; raise if 60 days produces noise for a slow-moving
+# deployment.
+MODELS_JSON_STALE_AFTER_DAYS: int = 60

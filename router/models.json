@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-05-10",
+  "last_updated": "2026-08-01",
   "models": [
     {
       "provider": "google",
@@ -1144,6 +1144,147 @@
       "supports_structured_output": true,
       "cache_read_cost_per_1m": 1.5,
       "cache_write_cost_per_1m": 18.75,
+      "cache_min_tokens": 1024,
+      "cache_ttl_seconds": 300
+    },
+    {
+      "provider": "anthropic",
+      "model_id": "claude-fable-5",
+      "display_name": "Claude Fable 5",
+      "tier": "cheap",
+      "cost_per_1k_input": 0.0009,
+      "cost_per_1k_output": 0.0045,
+      "max_context_window": 200000,
+      "max_output_tokens": 8192,
+      "capabilities": [
+        "vision",
+        "function_calling"
+      ],
+      "supports_streaming": true,
+      "avg_latency_ms": 650,
+      "rate_limit_rpm": 1000,
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ],
+      "quality_ratings": {
+        "simple_qa": 0.84,
+        "conversation": 0.9,
+        "translation": 0.85,
+        "classification": 0.84,
+        "extraction": 0.82,
+        "summarization": 0.85,
+        "code_generation": 0.8,
+        "code_review": 0.76,
+        "creative_writing": 0.92,
+        "analysis": 0.8,
+        "reasoning": 0.74,
+        "function_calling": 0.82,
+        "vision": 0.78,
+        "long_document": 0.82,
+        "unknown": 0.8,
+        "general": 0.84
+      },
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "cache_read_cost_per_1m": 0.09,
+      "cache_write_cost_per_1m": 1.125,
+      "cache_min_tokens": 1024,
+      "cache_ttl_seconds": 300
+    },
+    {
+      "provider": "anthropic",
+      "model_id": "claude-sonnet-5",
+      "display_name": "Claude Sonnet 5",
+      "tier": "mid",
+      "cost_per_1k_input": 0.0028,
+      "cost_per_1k_output": 0.014,
+      "max_context_window": 1000000,
+      "max_output_tokens": 16384,
+      "capabilities": [
+        "vision",
+        "function_calling"
+      ],
+      "supports_streaming": true,
+      "avg_latency_ms": 1700,
+      "rate_limit_rpm": 500,
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ],
+      "quality_ratings": {
+        "simple_qa": 0.9,
+        "conversation": 0.92,
+        "translation": 0.88,
+        "classification": 0.9,
+        "extraction": 0.89,
+        "summarization": 0.9,
+        "code_generation": 0.96,
+        "code_review": 0.93,
+        "creative_writing": 0.91,
+        "analysis": 0.9,
+        "reasoning": 0.87,
+        "function_calling": 0.9,
+        "vision": 0.86,
+        "long_document": 0.88,
+        "unknown": 0.88,
+        "general": 0.9
+      },
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "cache_read_cost_per_1m": 0.28,
+      "cache_write_cost_per_1m": 3.5,
+      "cache_min_tokens": 1024,
+      "cache_ttl_seconds": 300
+    },
+    {
+      "provider": "anthropic",
+      "model_id": "claude-opus-5",
+      "display_name": "Claude Opus 5",
+      "tier": "premium",
+      "cost_per_1k_input": 0.0055,
+      "cost_per_1k_output": 0.028,
+      "max_context_window": 200000,
+      "max_output_tokens": 16000,
+      "capabilities": [
+        "vision",
+        "function_calling"
+      ],
+      "supports_streaming": true,
+      "avg_latency_ms": 3300,
+      "rate_limit_rpm": 200,
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ],
+      "quality_ratings": {
+        "simple_qa": 0.93,
+        "conversation": 0.94,
+        "translation": 0.91,
+        "classification": 0.93,
+        "extraction": 0.93,
+        "summarization": 0.94,
+        "code_generation": 0.97,
+        "code_review": 0.96,
+        "creative_writing": 0.96,
+        "analysis": 0.95,
+        "reasoning": 0.95,
+        "function_calling": 0.93,
+        "vision": 0.95,
+        "long_document": 0.93,
+        "unknown": 0.93,
+        "general": 0.95
+      },
+      "supports_tools": true,
+      "supports_structured_output": true,
+      "cache_read_cost_per_1m": 0.55,
+      "cache_write_cost_per_1m": 6.875,
       "cache_min_tokens": 1024,
       "cache_ttl_seconds": 300
     }

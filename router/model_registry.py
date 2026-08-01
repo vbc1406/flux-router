@@ -17,11 +17,12 @@ import json
 import threading
 import time
 from collections import defaultdict, deque
+from datetime import date, datetime
 from pathlib import Path
 
 import structlog
 
-from .config import RATE_LIMIT_SAFETY_MARGIN
+from .config import MODELS_JSON_STALE_AFTER_DAYS, RATE_LIMIT_SAFETY_MARGIN
 from .schemas import ModelOption
 
 log = structlog.get_logger(__name__)
@@ -323,6 +324,32 @@ _NO_RESTRICTED = ["public", "internal", "confidential"]
 _PUBLIC_INTERNAL = ["public", "internal"]
 
 
+def _check_staleness(last_updated: str | None) -> None:
+    """
+    Bugfix: models.json's "last_updated" field used to be write-only — loaded
+    and immediately discarded. Log a loud startup warning once the catalog is
+    more than MODELS_JSON_STALE_AFTER_DAYS old, so a forgotten pricing/model
+    refresh doesn't just silently drift out of date. Never raises: a missing
+    or malformed field is itself worth a warning, not a load failure.
+    """
+    if not last_updated:
+        log.warning("model_registry_json_missing_last_updated")
+        return
+    try:
+        parsed = date.fromisoformat(last_updated)
+    except (TypeError, ValueError):
+        log.warning("model_registry_json_invalid_last_updated", last_updated=last_updated)
+        return
+    age_days = (datetime.now().date() - parsed).days
+    if age_days > MODELS_JSON_STALE_AFTER_DAYS:
+        log.warning(
+            "model_registry_json_stale",
+            last_updated=last_updated,
+            age_days=age_days,
+            stale_after_days=MODELS_JSON_STALE_AFTER_DAYS,
+        )
+
+
 def _load_registry_from_json() -> dict[str, ModelOption] | None:
     """Load model registry from models.json if present; return None on any failure."""
     config_path = Path(__file__).parent / "models.json"
@@ -331,6 +358,7 @@ def _load_registry_from_json() -> dict[str, ModelOption] | None:
     try:
         with open(config_path, encoding="utf-8") as f:
             data = json.load(f)
+        _check_staleness(data.get("last_updated"))
         models = []
         for m in data["models"]:
             models.append(ModelOption(**m))

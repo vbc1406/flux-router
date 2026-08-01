@@ -191,6 +191,18 @@ never after a step has already spent. Entry points: `Flux.start_run()` /
 `flux.complete(..., run_id=...)`, or the proxy's `X-Flux-Run-Id` header.
 See `examples/agent_loop.py`.
 
+**Storage backend:** `RunBudget` stores run state via a `RunStore` Protocol.
+The default, `InMemoryRunStore`, is **process-local only** — it is UNSAFE
+for multi-worker or multi-instance deployments (multiple uvicorn workers,
+multiple replicas behind a load balancer), because each worker would only
+see the steps it personally handled and silently under-count a run's true
+cumulative spend once requests for the same `run_id` are split across
+workers. For any deployment with more than one worker process, set
+`FLUX_RUN_STORE=redis` (`config.RUN_STORE_BACKEND`, + `FLUX_REDIS_URL`) to
+use `RedisRunStore` instead, which shares state across workers with the same
+LRU/TTL eviction semantics. Requires the `[redis]` extra
+(`pip install flux-router[redis]`).
+
 ### Fallback and Retry Logic
 Chain construction → `router/fallback_chain.py` (`build_fallback_chain`, `build_typed_fallback_chains`)
 Execution with retry → `router/fallback_chain.py` (`FallbackExecutor`)

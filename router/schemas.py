@@ -434,6 +434,16 @@ class RoutingDecision(BaseModel):
     run_id: str | None = None
     run_cost_so_far: float = 0.0
     run_steps_so_far: int = 0
+
+    # Bugfix: True when the caller didn't supply a run_id (no X-Flux-Run-Id
+    # header / no run_id kwarg) and one was auto-generated for this single
+    # request. A request in this state gets its own one-step "run" — it is
+    # NOT grouped with any other step, so run-scoped budget enforcement is
+    # effectively a no-op for it. Set by router/server.py (the only place
+    # that currently auto-generates a run_id) so callers who actually intend
+    # cross-step enforcement can detect they aren't getting it, instead of
+    # this failing silently. See x-flux-run-id-missing response header.
+    run_id_missing: bool = False
     budget_state: Literal["ok", "degraded", "warning", "exceeded"] = "ok"
     budget_warning: str | None = None
 

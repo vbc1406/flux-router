@@ -19,7 +19,15 @@ Test classes:
 
 from __future__ import annotations
 
-from router.model_registry import ModelRegistry, _build_hardcoded_registry, _load_registry_from_json
+import datetime as dt
+from pathlib import Path
+
+from router.model_registry import (
+    ModelRegistry,
+    _build_hardcoded_registry,
+    _check_staleness,
+    _load_registry_from_json,
+)
 
 _HARDCODED_COUNT = len(_build_hardcoded_registry())
 
@@ -63,3 +71,87 @@ class TestRegistryLoadsFromJson:
         assert from_json is not None, "models.json not found"
         missing = set(from_code) - set(from_json)
         assert not missing, f"models.json missing hardcoded fallback models: {missing}"
+
+    def test_registry_includes_current_gen_claude_models(self):
+        # Bugfix coverage: models.json used to be missing the current Claude
+        # 5-family SKUs. Assert they're present with sane tiers, not just
+        # that SOME models exist.
+        reg = ModelRegistry()
+        expected_tiers = {
+            "claude-fable-5": "cheap",
+            "claude-sonnet-5": "mid",
+            "claude-opus-5": "premium",
+        }
+        for model_id, tier in expected_tiers.items():
+            m = reg.get_model(model_id)
+            assert m is not None, f"{model_id} missing from models.json"
+            assert m.tier == tier
+            assert m.is_available
+
+
+class TestModelsJsonStaleness:
+    """Bugfix coverage: models.json's last_updated field used to be
+    write-only — loaded and never checked. _check_staleness() now logs a
+    warning once the catalog is older than MODELS_JSON_STALE_AFTER_DAYS."""
+
+    def test_recent_date_does_not_warn(self, monkeypatch):
+        import router.model_registry as mr
+
+        events: list[tuple[str, dict]] = []
+        monkeypatch.setattr(mr.log, "warning", lambda ev, **kw: events.append((ev, kw)))
+        today = dt.date.today().isoformat()
+        _check_staleness(today)
+        assert events == []
+
+    def test_date_just_past_threshold_warns(self, monkeypatch):
+        import router.model_registry as mr
+        from router.config import MODELS_JSON_STALE_AFTER_DAYS
+
+        events: list[tuple[str, dict]] = []
+        monkeypatch.setattr(mr.log, "warning", lambda ev, **kw: events.append((ev, kw)))
+        old_date = (
+            dt.date.today() - dt.timedelta(days=MODELS_JSON_STALE_AFTER_DAYS + 1)
+        ).isoformat()
+        _check_staleness(old_date)
+        assert any(ev == "model_registry_json_stale" for ev, _ in events)
+        kw = next(kw for ev, kw in events if ev == "model_registry_json_stale")
+        assert kw["age_days"] == MODELS_JSON_STALE_AFTER_DAYS + 1
+
+    def test_date_just_under_threshold_does_not_warn(self, monkeypatch):
+        import router.model_registry as mr
+        from router.config import MODELS_JSON_STALE_AFTER_DAYS
+
+        events: list[tuple[str, dict]] = []
+        monkeypatch.setattr(mr.log, "warning", lambda ev, **kw: events.append((ev, kw)))
+        recent_date = (
+            dt.date.today() - dt.timedelta(days=MODELS_JSON_STALE_AFTER_DAYS)
+        ).isoformat()
+        _check_staleness(recent_date)
+        assert events == []
+
+    def test_missing_last_updated_warns(self, monkeypatch):
+        import router.model_registry as mr
+
+        events: list[tuple[str, dict]] = []
+        monkeypatch.setattr(mr.log, "warning", lambda ev, **kw: events.append((ev, kw)))
+        _check_staleness(None)
+        assert any(ev == "model_registry_json_missing_last_updated" for ev, _ in events)
+
+    def test_malformed_date_warns_but_does_not_raise(self, monkeypatch):
+        import router.model_registry as mr
+
+        events: list[tuple[str, dict]] = []
+        monkeypatch.setattr(mr.log, "warning", lambda ev, **kw: events.append((ev, kw)))
+        _check_staleness("not-a-date")
+        assert any(ev == "model_registry_json_invalid_last_updated" for ev, _ in events)
+
+    def test_real_models_json_last_updated_parses_as_a_valid_date(self):
+        """Guards against the field silently rotting into an unparseable
+        format, independent of whether the actual value happens to be stale
+        (that's a real-clock concern for the warning, not the test suite)."""
+        import json
+
+        import router.model_registry as mr
+
+        raw = json.loads((Path(mr.__file__).parent / "models.json").read_text())
+        dt.date.fromisoformat(raw["last_updated"])

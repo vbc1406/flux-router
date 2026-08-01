@@ -45,6 +45,8 @@ dev = [
     "safety>=3.0,<4.0",
     "pip-audit>=2.0,<3.0",
     "hypothesis>=6.0,<7.0",
+    # In-memory Redis fake for RedisRunStore tests — no real server required.
+    "fakeredis>=2.20,<3.0",
 ]
 # Only needed to pull the full public benchmarks for `python -m router.evals
 # --live --source hub`. The harness runs offline (fixtures + simulated
@@ -58,6 +60,12 @@ evals = [
 server = [
     "fastapi>=0.110,<1.0",
     "uvicorn[standard]>=0.27,<1.0",
+]
+# RedisRunStore (router/run_budget.py) — only needed when FLUX_RUN_STORE=redis
+# selects a shared run-budget store for multi-worker deployments. The default
+# InMemoryRunStore has no extra dependencies.
+redis = [
+    "redis>=5.0,<6.0",
 ]
 
 [tool.setuptools.packages.find]

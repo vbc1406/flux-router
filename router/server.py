@@ -220,6 +220,8 @@ def _flux_headers(decision, decision_latency_ms: float) -> dict[str, str]:
     }
     if decision.budget_warning:
         headers["x-flux-budget-warning"] = decision.budget_warning
+    if decision.run_id_missing:
+        headers["x-flux-run-id-missing"] = "true"
     return headers
 
 
@@ -320,10 +322,23 @@ async def chat_completions(
     tenant_id = bound_tenant if bound_tenant is not None else x_flux_tenant_id
 
     # Task 3: every request belongs to a run — X-Flux-Run-Id groups repeated
-    # calls into one budgeted trajectory; a request with no header gets its
-    # own single-step run (harmless: checked against the generous global
-    # RUN_MAX_* defaults, evicted quickly by the RunStore's TTL/LRU).
+    # calls into one budgeted trajectory. Bugfix: a request with no header
+    # used to silently get its own single-step run, which makes run-scoped
+    # budget enforcement a no-op for it (a run of one step never crosses any
+    # threshold) — indistinguishable from a caller who forgot to propagate
+    # the header across their agent loop. Loud now: warn here, and surface
+    # it on the response (decision.run_id_missing / x-flux-run-id-missing)
+    # so callers can detect they aren't getting cross-step enforcement.
+    run_id_missing = x_flux_run_id is None
     run_id = x_flux_run_id or str(uuid.uuid4())
+    if run_id_missing:
+        log.warning(
+            "flux_run_id_auto_generated",
+            run_id=run_id,
+            tenant_id=tenant_id,
+            reason="no X-Flux-Run-Id header on request; run-scoped budget "
+            "enforcement will not span multiple steps for this call",
+        )
     routing_request, _ = _build_routing_request(body, run_id, tenant_id)
     stream = bool(body.get("stream", False))
 
@@ -338,6 +353,7 @@ async def chat_completions(
             headers={"x-flux-run-id": run_id},
         )
     decision_latency_ms = (time.monotonic() - start) * 1000
+    decision.run_id_missing = run_id_missing
 
     if decision.chosen_model is None:
         raise HTTPException(status_code=502, detail="No model available to route this request")

@@ -153,6 +153,15 @@ _REFLECT_RE = re.compile(
     r"(answer|work|response|plan)|did\s+I\s+miss|what\s+went\s+wrong|revise\s+the\s+plan)\b",
     re.IGNORECASE,
 )
+# Task 6 bugfix: explicit "final answer" language in the prompt — highest-
+# confidence signal, checked before anything else so it can't be shadowed by
+# a stale tool-result message sitting earlier in history.
+_FINAL_ANSWER_RE = re.compile(
+    r"\b(final\s+answer|final\s+response|here(?:'s|\s+is)\s+(?:my|the)\s+(?:final\s+)?answer|"
+    r"provide\s+(?:your|the)\s+(?:final\s+)?answer|respond\s+to\s+the\s+user|"
+    r"give\s+(?:your|the)\s+final\s+(?:answer|response))\b",
+    re.IGNORECASE,
+)
 _DOMAIN_SPECIFIC_RE = re.compile(
     r"\b(kkt\s+conditions?|lagrangian|hamiltonian|riemann|zeta\s+function|"
     r"gdpr|ecj|indemnif|tort\s+law|habeas\s+corpus|promissory|"
@@ -365,16 +374,35 @@ class RequestClassifier:
         Task 6: infer step_type when the caller didn't set it explicitly.
 
         Signal priority (most specific / highest-stakes first):
-          1. tool-result messages present -> tool_result_summarize (the model
-             is being asked to digest a tool's output, not choose one)
-          2. tools offered -> tool_select
-          3. structured response_format requested -> extract (schema-fill is
+          1. explicit "final answer" language in raw_prompt -> final_answer
+             (the most confident signal available; must win even over a
+             tool-result message sitting in history, see bugfix note below)
+          2. the MOST RECENT history message is a tool result -> tool_result_summarize
+             (the model is being asked to digest a tool's output right now,
+             not choose one). Bugfix: this used to scan the ENTIRE history for
+             any tool-role message, so a tool call from several turns back
+             would misclassify the actual final-answer turn as
+             tool_result_summarize, stripping its quality floor. Only the
+             latest message is evidence of "a tool result just came back."
+          3. tools offered -> tool_select
+          4. structured response_format requested -> extract (schema-fill is
              low-stakes to verify downstream, same floor as extraction)
-          4. "reflect"/"critique"/"review" language in the prompt -> reflect
-          5. no signal -> "unknown" (no floor applied)
+          5. "reflect"/"critique"/"review" language in the prompt -> reflect
+          6. fail-safe: mid-run (run_id set) with history already underway and
+             no tools offered this step -> final_answer. An agent step that
+             can't be confidently classified any other way but is clearly
+             part of a tracked trajectory defaults to the highest defined
+             floor rather than "unknown" (no floor at all) — better to
+             occasionally over-protect a cheap step than silently leave a
+             real final-answer step unprotected. Single-shot, non-run
+             requests (the common case for plain chat use of Flux) are
+             unaffected and still resolve to "unknown".
+          7. no signal and not part of a run -> "unknown" (no floor applied)
         """
+        if _FINAL_ANSWER_RE.search(request.raw_prompt):
+            return "final_answer"
         history = request.message_history
-        if any(msg.get("role") == "tool" for msg in history):
+        if history and history[-1].get("role") == "tool":
             return "tool_result_summarize"
         if request.tools:
             return "tool_select"
@@ -382,6 +410,8 @@ class RequestClassifier:
             return "extract"
         if _REFLECT_RE.search(request.raw_prompt):
             return "reflect"
+        if request.run_id and history and not request.tools:
+            return "final_answer"
         return "unknown"
 
     @staticmethod
