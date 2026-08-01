@@ -42,6 +42,7 @@ from .config import (
     SERVER_REQUIRE_AUTH,
     SERVER_TOKENS,
     TENANT_DAILY_CAP_USD,
+    ServerTokenBinding,
 )
 from .errors import AuthenticationError, FluxAPIError
 from .flux import Flux, make_flux
@@ -91,22 +92,28 @@ app = FastAPI(title="Flux Router", version="1.0.0")
 _flux: Flux = make_flux()
 
 
-def _check_auth(authorization: str | None) -> str | None:
-    """Validate the bearer token and return the tenant_id it's bound to, if
-    any (FLUX_SERVER_TOKENS multi-tenant mode). None means either auth is
-    disabled or the legacy single-shared-token mode is in effect, where the
-    caller's self-declared tenant_id/user fields are trusted as-is — see
-    SECURITY_ARCHITECTURE.md."""
+def _check_auth(authorization: str | None) -> ServerTokenBinding | None:
+    """Validate the bearer token and return the ServerTokenBinding (tenant_id
+    + plan) it's bound to, if any (FLUX_SERVER_TOKENS multi-tenant mode).
+    None means either auth is disabled or the legacy single-shared-token mode
+    is in effect, where the caller's self-declared tenant_id/user/plan fields
+    are trusted as-is — see SECURITY_ARCHITECTURE.md."""
     if not SERVER_REQUIRE_AUTH:
         return None
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or malformed Authorization header")
     token = authorization.removeprefix("Bearer ").strip()
     if SERVER_TOKENS:
-        bound_tenant = SERVER_TOKENS.get(token)
-        if bound_tenant is None:
+        binding = SERVER_TOKENS.get(token)
+        if binding is None:
             raise HTTPException(status_code=401, detail="Invalid bearer token")
-        return bound_tenant
+        # Accept a bare tenant_id string too (legacy shorthand / tests that
+        # construct SERVER_TOKENS by hand) — keeps the pre-existing
+        # "pro_plan" default rather than silently tightening it for callers
+        # who never asked for per-tenant plan enforcement.
+        if isinstance(binding, str):
+            binding = ServerTokenBinding(tenant_id=binding)
+        return binding
     if token != _SERVER_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid bearer token")
     return None
@@ -145,7 +152,26 @@ def _messages_to_request_fields(
             raise HTTPException(
                 status_code=400, detail=f"messages[{i}] must be an object, got {type(m).__name__}"
             )
-    system_parts = [m.get("content", "") for m in messages if m.get("role") == "system"]
+    # Bugfix: `m.get("content", "")` only supplies the default when the key
+    # is absent — an explicit `"content": null` (or any other non-string
+    # JSON type) survived as None/non-str here and crashed the "\n".join()
+    # below with an uncaught TypeError (500) instead of a clean 400.
+    system_parts: list[str] = []
+    for i, m in enumerate(messages):
+        if m.get("role") != "system":
+            continue
+        content = m.get("content")
+        if content is None:
+            content = ""
+        if not isinstance(content, str):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"messages[{i}].content must be a string for role=system, "
+                    f"got {type(content).__name__}"
+                ),
+            )
+        system_parts.append(content)
     non_system = [m for m in messages if m.get("role") != "system"]
     if not non_system:
         raise HTTPException(
@@ -160,17 +186,37 @@ def _messages_to_request_fields(
 
 
 def _build_routing_request(
-    body: dict[str, Any], run_id: str, tenant_id: str | None = None
+    body: dict[str, Any], run_id: str, tenant_id: str | None = None, plan: str | None = None
 ) -> tuple[RoutingRequest, bool]:
     """Translate an OpenAI chat-completion request body into a RoutingRequest.
 
     Returns (request, is_literal_model) — is_literal_model is True when `model`
     named a concrete registered model rather than a flux-* routing directive.
+
+    `plan` is never taken from the request body — the client cannot grant
+    itself a higher budget tier. It comes from the bearer token's
+    ServerTokenBinding (FLUX_SERVER_TOKENS multi-tenant mode) via the caller,
+    when the operator has opted into per-tenant plan binding (the
+    {"tenant_id":..., "plan":...} token form — see config.ServerTokenBinding).
+    Bugfix: this used to be left unset entirely regardless of token, so an
+    operator had no way to actually cap a tenant at free_plan through this
+    API even if they wanted to. Defaults to "pro_plan" — the same default
+    RoutingRequest always had — whenever no explicit plan binding is
+    configured (auth disabled, legacy shared-token mode, or a legacy
+    string-shorthand FLUX_SERVER_TOKENS entry), so existing deployments that
+    haven't opted in see no behavior change.
     """
     if "messages" not in body or not isinstance(body["messages"], list):
         raise HTTPException(status_code=400, detail="'messages' is required and must be a list")
 
     model_field = body.get("model", "flux-auto")
+    if not isinstance(model_field, str):
+        # Bugfix: an unhashable JSON type here (list/dict) used to blow up
+        # `model_field in _ROUTING_DIRECTIVES` with an uncaught TypeError
+        # ("unhashable type") — an uncaught-500 instead of a 400.
+        raise HTTPException(
+            status_code=400, detail=f"'model' must be a string, got {type(model_field).__name__}"
+        )
     system_prompt, raw_prompt, history = _messages_to_request_fields(body["messages"])
 
     kwargs: dict[str, Any] = {
@@ -182,6 +228,7 @@ def _build_routing_request(
         "run_id": run_id,
         # Task 7: X-Flux-Tenant-Id, for router/attribution.py aggregation.
         "tenant_id": tenant_id,
+        "plan": plan or "pro_plan",
         # Task 6: passed through verbatim for step_type inference + capability
         # filtering. Not forwarded to the provider call itself in this proxy —
         # tool-calling over the proxy is a routing-only signal for now.
@@ -285,9 +332,9 @@ async def get_usage(
     always wins over ?tenant_id= — a caller can only ever see their own
     tenant's usage, regardless of what they pass on the query string.
     """
-    bound_tenant = _check_auth(authorization)
-    if bound_tenant is not None:
-        tenant_id = bound_tenant
+    binding = _check_auth(authorization)
+    if binding is not None:
+        tenant_id = binding.tenant_id
     limit = max(1, min(limit, ATTRIBUTION_USAGE_PAGE_MAX))
     offset = max(0, offset)
     records, total = _flux._engine._attribution.usage(
@@ -324,8 +371,10 @@ async def metrics(authorization: str | None = Header(default=None)) -> Response:
     mode (auth disabled, or the legacy shared-token mode where tenant_id is
     self-declared and unverified) all series are rendered, same as before.
     """
-    bound_tenant = _check_auth(authorization)
-    body = _flux._engine._attribution.render_prometheus(tenant_filter=bound_tenant)
+    binding = _check_auth(authorization)
+    body = _flux._engine._attribution.render_prometheus(
+        tenant_filter=binding.tenant_id if binding is not None else None
+    )
     return Response(content=body, media_type="text/plain; version=0.0.4")
 
 
@@ -336,7 +385,9 @@ async def chat_completions(
     x_flux_run_id: str | None = Header(default=None, alias="X-Flux-Run-Id"),
     x_flux_tenant_id: str | None = Header(default=None, alias="X-Flux-Tenant-Id"),
 ) -> Any:
-    bound_tenant = _check_auth(authorization)
+    binding = _check_auth(authorization)
+    bound_tenant = binding.tenant_id if binding is not None else None
+    bound_plan = binding.plan if binding is not None else None
     raw_body = await _read_bounded_body(request)
     try:
         body = json.loads(raw_body.decode("utf-8"))
@@ -390,7 +441,7 @@ async def chat_completions(
             reason="no X-Flux-Run-Id header on request; run-scoped budget "
             "enforcement will not span multiple steps for this call",
         )
-    routing_request, _ = _build_routing_request(body, run_id, tenant_id)
+    routing_request, _ = _build_routing_request(body, run_id, tenant_id, plan=bound_plan)
     stream = bool(body.get("stream", False))
 
     start = time.monotonic()

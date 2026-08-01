@@ -17,6 +17,7 @@ Things NOT to change without discussion:
 
 import json
 import os
+from dataclasses import dataclass
 
 # ══════════════════════════════════════════════════════════════════════════════
 # COMPLEXITY SCORING
@@ -606,7 +607,22 @@ SERVER_REQUIRE_AUTH: bool = bool(
     os.environ.get("FLUX_SERVER_TOKEN") or os.environ.get("FLUX_SERVER_TOKENS")
 )
 
-# Optional multi-tenant token map: FLUX_SERVER_TOKENS='{"tok-acme":"acme",...}'.
+@dataclass(frozen=True)
+class ServerTokenBinding:
+    """What a bearer token is authenticated as, server-side: a tenant_id and
+    a budget plan. Both come from FLUX_SERVER_TOKENS (never the client), so
+    a caller can't self-declare either one — see FLUX_SERVER_TOKENS below."""
+
+    tenant_id: str
+    plan: str = "pro_plan"
+
+
+_VALID_SERVER_TOKEN_PLANS: frozenset[str] = frozenset({"free_plan", "pro_plan", "business_plan"})
+
+# Optional multi-tenant token map. Two accepted value shapes per entry:
+#   FLUX_SERVER_TOKENS='{"tok-acme":{"tenant_id":"acme","plan":"business_plan"}}'
+#   FLUX_SERVER_TOKENS='{"tok-acme":"acme"}'   (legacy shorthand — unchanged
+#                                                behavior, see below)
 # With a single shared FLUX_SERVER_TOKEN, every caller who holds it is
 # authenticated as every tenant — X-Flux-Tenant-Id is a bare, self-declared
 # claim (see SECURITY_ARCHITECTURE.md: "identity fields must come from
@@ -614,10 +630,19 @@ SERVER_REQUIRE_AUTH: bool = bool(
 # bearer token to exactly one tenant_id server-side; the proxy then ignores
 # any client-supplied X-Flux-Tenant-Id and uses the token's bound tenant, so
 # a caller can no longer read another tenant's /v1/usage or rotate identities
-# to dodge per-tenant budget caps by forging the header. Takes priority over
-# FLUX_SERVER_TOKEN when both are set. Malformed JSON is treated as unset
-# (logged, not raised) rather than failing startup.
-def _parse_server_tokens() -> dict[str, str]:
+# to dodge per-tenant budget caps by forging the header.
+# Bugfix: RoutingRequest.plan used to be left at its schema default
+# ("pro_plan") for EVERY proxy caller with no way to override it per tenant,
+# so a tenant that should be capped at free_plan's tighter daily/monthly caps
+# had no way to actually get them enforced through this API. The dict form
+# above lets an operator bind a token to a specific plan; the legacy
+# string-shorthand form (tenant_id only) and no-FLUX_SERVER_TOKENS mode both
+# keep the prior "pro_plan" default UNCHANGED — this is an opt-in tightening,
+# not a behavior change for existing deployments that don't ask for it.
+# Takes priority over FLUX_SERVER_TOKEN when both are set. Malformed JSON, or
+# an entry with an unrecognized `plan` value, is treated as unset / defaulted
+# to "pro_plan" (logged, not raised) rather than failing startup.
+def _parse_server_tokens() -> dict[str, ServerTokenBinding]:
     raw = os.environ.get("FLUX_SERVER_TOKENS")
     if not raw:
         return {}
@@ -627,10 +652,22 @@ def _parse_server_tokens() -> dict[str, str]:
         return {}
     if not isinstance(parsed, dict):
         return {}
-    return {str(k): str(v) for k, v in parsed.items()}
+    bindings: dict[str, ServerTokenBinding] = {}
+    for k, v in parsed.items():
+        token = str(k)
+        if isinstance(v, str):
+            bindings[token] = ServerTokenBinding(tenant_id=v)
+        elif isinstance(v, dict) and "tenant_id" in v:
+            plan = v.get("plan", "pro_plan")
+            if plan not in _VALID_SERVER_TOKEN_PLANS:
+                plan = "pro_plan"
+            bindings[token] = ServerTokenBinding(tenant_id=str(v["tenant_id"]), plan=plan)
+        # Any other shape (missing tenant_id, wrong type) is skipped rather
+        # than raised, matching the existing malformed-JSON-is-unset stance.
+    return bindings
 
 
-SERVER_TOKENS: dict[str, str] = _parse_server_tokens()
+SERVER_TOKENS: dict[str, ServerTokenBinding] = _parse_server_tokens()
 
 # Hard cap on request body size for the proxy endpoint, checked against
 # Content-Length and enforced again while streaming the body off the wire (so a

@@ -45,6 +45,8 @@ from router.cache import ResponseCache
 from router.circuit_breaker import CircuitBreaker
 from router.classifier import RequestClassifier
 from router.context_compressor import ContextCompressor
+from router.errors import ProviderDownError
+from router.flux import Flux
 from router.model_registry import ModelRegistry
 from router.routing_engine import RoutingEngine
 from router.schemas import RoutingRequest
@@ -282,3 +284,93 @@ class TestCircuitBreakerFiltersModels:
         assert d2.chosen_model is not None
         # Now anthropic is available again — router may choose it.
         # (It might not be chosen if another premium model scores higher; that's OK.)
+
+
+class TestCircuitBreakerWiredIntoFluxDispatch:
+    """
+    Regression: Flux._call_model / Flux._dispatch_with_fallback_inner — the
+    dispatch path actually used by Flux.complete() and router/server.py's
+    HTTP proxy (i.e. real production traffic) — never fed the circuit
+    breaker. Only RoutingEngine._proxy_execute_inner (an internal path
+    neither Flux nor server.py calls) did, so Step 4's is_available() filter
+    never saw a real failure on the path that matters and the circuit could
+    never open. These tests drive failures through Flux.complete() itself
+    (mocking only _call_model, not the circuit breaker) to prove the wiring
+    reaches the engine's real CircuitBreaker instance.
+    """
+
+    def setup_method(self):
+        self.engine = _engine()
+        self.flux = Flux(self.engine, api_key="test-key")
+        self.target_provider = "anthropic"
+        self.target_model = next(
+            m
+            for m in self.engine._registry.all_available_models()
+            if m.provider == self.target_provider
+        )
+
+    def test_repeated_failures_open_the_circuit(self):
+        async def mock_call(model, request):
+            if model.provider == self.target_provider:
+                raise ProviderDownError("503 from provider")
+            return "ok"
+
+        self.flux._call_model = mock_call  # type: ignore[method-assign]
+
+        assert self.engine._circuit_breaker.get_state(self.target_provider) == "closed"
+        for _ in range(5):
+            rr(
+                self.flux.complete(
+                    "Write a complex algorithm",
+                    user_id="u_cb_wired",
+                    plan="business_plan",
+                    exploration_rate=0.0,
+                    metadata={"model": self.target_model.model_id},
+                )
+            )
+        assert self.engine._circuit_breaker.get_state(self.target_provider) == "open"
+
+    def test_open_circuit_from_flux_dispatch_then_excludes_provider_from_routing(self):
+        async def mock_call(model, request):
+            if model.provider == self.target_provider:
+                raise ProviderDownError("503 from provider")
+            return "ok"
+
+        self.flux._call_model = mock_call  # type: ignore[method-assign]
+        for _ in range(5):
+            rr(
+                self.flux.complete(
+                    "Write a complex algorithm",
+                    user_id="u_cb_wired2",
+                    plan="business_plan",
+                    exploration_rate=0.0,
+                    metadata={"model": self.target_model.model_id},
+                )
+            )
+        assert self.engine._circuit_breaker.get_state(self.target_provider) == "open"
+
+        d = rr(self.engine.route(_req("Write a Python function")))
+        assert d.chosen_model is not None
+        assert d.chosen_model.provider != self.target_provider
+
+    def test_success_records_on_the_real_circuit_breaker(self):
+        async def mock_call(model, request):
+            return "ok"
+
+        self.flux._call_model = mock_call  # type: ignore[method-assign]
+        self.engine._circuit_breaker.record_failure(self.target_provider)
+        self.engine._circuit_breaker.record_failure(self.target_provider)
+        assert self.engine._circuit_breaker.get_failure_count(self.target_provider) == 2
+
+        rr(
+            self.flux.complete(
+                "Write a complex algorithm",
+                user_id="u_cb_wired3",
+                plan="business_plan",
+                exploration_rate=0.0,
+                metadata={"model": self.target_model.model_id},
+            )
+        )
+        # A successful dispatch through Flux.complete() must reset the
+        # failure counter on the engine's real CircuitBreaker instance.
+        assert self.engine._circuit_breaker.get_failure_count(self.target_provider) == 0

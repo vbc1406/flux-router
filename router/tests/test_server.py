@@ -34,6 +34,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import router.server as server  # noqa: E402
 from router import config  # noqa: E402
+from router.config import ServerTokenBinding  # noqa: E402
 from router.errors import AuthenticationError, RateLimitError  # noqa: E402
 
 
@@ -286,6 +287,111 @@ class TestMultiTenantTokens:
         assert resp.status_code == 429
 
 
+class TestPerTenantPlanBinding:
+    """Regression: RoutingRequest.plan used to be left unset for every proxy
+    request, so it always fell back to RoutingRequest's schema default
+    ("pro_plan") regardless of the caller's token — an operator had no way
+    to actually cap a tenant at free_plan's tighter tier/budget limits
+    through this API. FLUX_SERVER_TOKENS now optionally binds a token to a
+    specific plan via ServerTokenBinding; legacy string-shorthand entries and
+    no-auth mode keep the old "pro_plan" default unchanged (opt-in, not a
+    breaking default change)."""
+
+    def _enable(self, monkeypatch, tokens: dict):
+        monkeypatch.setattr(server, "SERVER_REQUIRE_AUTH", True)
+        monkeypatch.setattr(server, "SERVER_TOKENS", tokens)
+
+    def test_legacy_string_token_keeps_pro_plan_default(self, client, monkeypatch, _mock_call_model):
+        """No behavior change for existing deployments that haven't opted in:
+        a bare tenant_id string still gets pro_plan-level model access."""
+        self._enable(monkeypatch, {"tok-acme": "acme"})
+        resp = client.post(
+            "/v1/chat/completions",
+            json=_body("gpt-4o"),
+            headers={"Authorization": "Bearer tok-acme"},
+        )
+        assert resp.status_code == 200
+        assert resp.headers["x-flux-model"] == "gpt-4o"
+
+    def test_explicit_free_plan_binding_blocks_mid_tier_model(
+        self, client, monkeypatch, _mock_call_model
+    ):
+        """A token explicitly bound to free_plan cannot reach a mid-tier
+        model even by naming it directly — Step 4's plan-tier hard
+        constraint filters it out before the explicit-override shortcut ever
+        sees it, so routing falls back to a free/cheap-tier model instead."""
+        self._enable(
+            monkeypatch, {"tok-acme": ServerTokenBinding(tenant_id="acme", plan="free_plan")}
+        )
+        resp = client.post(
+            "/v1/chat/completions",
+            json=_body("gpt-4o"),
+            headers={"Authorization": "Bearer tok-acme"},
+        )
+        assert resp.status_code == 200
+        assert resp.headers["x-flux-model"] != "gpt-4o"
+
+    def test_explicit_business_plan_binding_allows_mid_tier_model(
+        self, client, monkeypatch, _mock_call_model
+    ):
+        self._enable(
+            monkeypatch, {"tok-acme": ServerTokenBinding(tenant_id="acme", plan="business_plan")}
+        )
+        resp = client.post(
+            "/v1/chat/completions",
+            json=_body("gpt-4o"),
+            headers={"Authorization": "Bearer tok-acme"},
+        )
+        assert resp.status_code == 200
+        assert resp.headers["x-flux-model"] == "gpt-4o"
+
+    def test_no_auth_mode_keeps_pro_plan_default(self, client, _mock_call_model):
+        """Unauthenticated / no-FLUX_SERVER_TOKENS deployments (the common
+        solo/local case) see no behavior change either."""
+        resp = client.post("/v1/chat/completions", json=_body("gpt-4o"))
+        assert resp.status_code == 200
+        assert resp.headers["x-flux-model"] == "gpt-4o"
+
+
+class TestParseServerTokens:
+    """Unit tests for config._parse_server_tokens()'s two accepted shapes."""
+
+    def test_legacy_string_shape_defaults_to_pro_plan(self, monkeypatch):
+        monkeypatch.setenv("FLUX_SERVER_TOKENS", '{"tok-acme": "acme"}')
+        tokens = config._parse_server_tokens()
+        assert tokens["tok-acme"] == ServerTokenBinding(tenant_id="acme", plan="pro_plan")
+
+    def test_dict_shape_with_explicit_plan(self, monkeypatch):
+        monkeypatch.setenv(
+            "FLUX_SERVER_TOKENS",
+            '{"tok-acme": {"tenant_id": "acme", "plan": "free_plan"}}',
+        )
+        tokens = config._parse_server_tokens()
+        assert tokens["tok-acme"] == ServerTokenBinding(tenant_id="acme", plan="free_plan")
+
+    def test_dict_shape_without_plan_defaults_to_pro_plan(self, monkeypatch):
+        monkeypatch.setenv("FLUX_SERVER_TOKENS", '{"tok-acme": {"tenant_id": "acme"}}')
+        tokens = config._parse_server_tokens()
+        assert tokens["tok-acme"] == ServerTokenBinding(tenant_id="acme", plan="pro_plan")
+
+    def test_invalid_plan_value_falls_back_to_pro_plan(self, monkeypatch):
+        monkeypatch.setenv(
+            "FLUX_SERVER_TOKENS",
+            '{"tok-acme": {"tenant_id": "acme", "plan": "unlimited_plan"}}',
+        )
+        tokens = config._parse_server_tokens()
+        assert tokens["tok-acme"].plan == "pro_plan"
+
+    def test_entry_missing_tenant_id_is_skipped(self, monkeypatch):
+        monkeypatch.setenv("FLUX_SERVER_TOKENS", '{"tok-acme": {"plan": "business_plan"}}')
+        tokens = config._parse_server_tokens()
+        assert "tok-acme" not in tokens
+
+    def test_malformed_json_returns_empty(self, monkeypatch):
+        monkeypatch.setenv("FLUX_SERVER_TOKENS", "{not valid json")
+        assert config._parse_server_tokens() == {}
+
+
 class TestBodySize:
     def test_oversized_body_rejected(self, client, monkeypatch):
         monkeypatch.setattr(config, "SERVER_MAX_BODY_BYTES", 100)
@@ -335,6 +441,47 @@ class TestMisc:
         }
         resp = client.post("/v1/chat/completions", json=body)
         assert resp.status_code == 200
+
+    def test_system_message_null_content_treated_as_empty(self, client, _mock_call_model):
+        """Regression: `"content": null` on a system message is legal JSON but
+        m.get("content", "") only supplies the default when the key is absent
+        (not when it's explicitly null) -- "\\n".join() then hit an uncaught
+        TypeError -> bare 500. Fixed to behave the same as an absent `content`
+        key (empty system prompt, 200), not a 500."""
+        body = {
+            "model": "flux-auto",
+            "messages": [
+                {"role": "system", "content": None},
+                {"role": "user", "content": "hi"},
+            ],
+        }
+        resp = client.post("/v1/chat/completions", json=body)
+        assert resp.status_code == 200
+
+    def test_system_message_non_string_content_returns_400_not_500(self, client):
+        """Non-string, non-null content (e.g. an int) on a system message
+        must also be rejected cleanly rather than reaching the join()."""
+        body = {
+            "model": "flux-auto",
+            "messages": [
+                {"role": "system", "content": 5},
+                {"role": "user", "content": "hi"},
+            ],
+        }
+        resp = client.post("/v1/chat/completions", json=body)
+        assert resp.status_code == 400
+
+    def test_non_string_model_field_returns_400_not_500(self, client):
+        """Regression: `model_field in _ROUTING_DIRECTIVES` (a dict) raised an
+        uncaught TypeError ("unhashable type") for a list/dict `model` value
+        -> bare 500 instead of a clean 400."""
+        body = {"model": ["not", "a", "string"], "messages": [{"role": "user", "content": "hi"}]}
+        resp = client.post("/v1/chat/completions", json=body)
+        assert resp.status_code == 400
+
+        body2 = {"model": {"nested": "object"}, "messages": [{"role": "user", "content": "hi"}]}
+        resp2 = client.post("/v1/chat/completions", json=body2)
+        assert resp2.status_code == 400
 
 
 class TestRunBudget:

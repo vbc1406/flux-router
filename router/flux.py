@@ -312,6 +312,14 @@ class Flux:
                     attempt=attempts,
                     fallback=attempts > 0,
                 )
+                # Bugfix: this dispatch path (used by Flux.complete() and
+                # router/server.py's HTTP proxy — i.e. actual production
+                # traffic) never fed the circuit breaker, so Step 4's
+                # is_available() filter never saw a real failure and the
+                # circuit could never open. Mirrors what
+                # RoutingEngine._proxy_execute_inner already does for its
+                # (unused-in-production) internal proxy path.
+                self._engine._circuit_breaker.record_success(model.provider)
                 # A fallback may have dispatched a different model than
                 # decision.chosen_model, at a different rate — rescale the
                 # estimate to the model actually called instead of recording
@@ -359,7 +367,11 @@ class Flux:
                 return text, model, attempts > 0, last_error
 
             except err.AuthenticationError:
-                # Key is wrong — retrying won't help.
+                # Key is wrong — retrying won't help, but it's still evidence
+                # against this provider for circuit-breaker purposes (matches
+                # _proxy_execute_inner, which doesn't special-case auth
+                # failures either).
+                self._engine._circuit_breaker.record_failure(model.provider)
                 raise
 
             except err.RateLimitError:
@@ -394,6 +406,7 @@ class Flux:
             except err.FluxAPIError:
                 last_error = "unknown"
 
+            self._engine._circuit_breaker.record_failure(model.provider)
             log.warning(
                 "flux_complete_failed_trying_fallback",
                 model=model.model_id,
@@ -468,14 +481,20 @@ class Flux:
             try:
                 text = await self._call_model(model, request)
             except err.AuthenticationError:
+                # See _dispatch_with_fallback_inner's equivalent comment —
+                # still evidence against the provider for circuit-breaker
+                # purposes even though it's never retried.
+                self._engine._circuit_breaker.record_failure(model.provider)
                 raise
             except err.FluxAPIError as exc:
+                self._engine._circuit_breaker.record_failure(model.provider)
                 step_breakdown.append(
                     {"model_id": model.model_id, "verified": False, "reason": str(exc)}
                 )
                 last_reason = str(exc)
                 continue
 
+            self._engine._circuit_breaker.record_success(model.provider)
             got_any_response = True
             result = verify_response(text, request, cascade_verifier)
             step_breakdown.append(

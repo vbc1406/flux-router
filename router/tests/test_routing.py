@@ -349,6 +349,38 @@ class TestModelOverride:
         d = rr(self.engine.route(req))
         assert d.routing_rule_matched != "explicit_model_override"
 
+    def test_override_respects_budget_walkdown(self):
+        """Regression: explicit model override used to skip Step 12's budget
+        check entirely, letting a caller who named a model directly keep
+        dispatching the priciest model regardless of exhausted plan budget."""
+        priciest = max(
+            self.engine._registry.all_available_models(),
+            key=lambda m: m.cost_per_1k_input + m.cost_per_1k_output,
+        )
+        self.engine._budget.record_spend(
+            "over_budget_user", 49.99, "prev", "prev", plan="pro_plan"
+        )
+        req = _req(
+            "Explain in extreme depth " * 200,
+            user_id="over_budget_user",
+            plan="pro_plan",
+            metadata={"model": priciest.model_id},
+        )
+        d = rr(self.engine.route(req))
+        assert d.chosen_model is not None
+        assert d.chosen_model.model_id != priciest.model_id
+        assert d.routing_rule_matched.startswith("explicit_model_override")
+        assert "budget_downgraded" in d.routing_rule_matched
+
+    def test_override_dispatches_named_model_when_within_budget(self):
+        """A caller with budget headroom still gets the exact model they named."""
+        req = _req("Write some code", metadata={"model": "gpt-4o-mini"})
+        d = rr(self.engine.route(req))
+        assert d.chosen_model is not None
+        assert d.chosen_model.model_id == "gpt-4o-mini"
+        assert d.routing_rule_matched == "explicit_model_override"
+        assert d.budget_exhausted is False
+
 
 # ── Sensitivity / provider filtering ─────────────────────────────────────────
 

@@ -517,21 +517,36 @@ class RoutingEngine:
         if override_id := request.metadata.get("model"):
             match = _find_model(override_id, candidates)
             if match:
+                rule = "explicit_model_override"
+                # Bugfix: this shortcut used to return straight to the caller
+                # without ever consulting BudgetTracker (Step 12 below), so a
+                # caller naming a model explicitly (e.g. any OpenAI-SDK client
+                # that passes a real model id instead of a flux-* directive)
+                # could keep dispatching the priciest model regardless of
+                # having already exhausted their plan's daily/monthly budget.
+                # Apply the same walk-down used by Step 12 so an explicit
+                # override is still capped by budget, not exempt from it.
+                cost = _estimate_cost(analysis, match)
+                budget_exhausted = False
+                if self._budget.would_exceed_budget(request.user_id, cost, request.plan):
+                    match, rule, budget_exhausted = _budget_tier_walkdown(
+                        match, candidates, analysis, request.user_id, self._budget, rule, request.plan
+                    )
+                    cost = _estimate_cost(analysis, match)
                 chain = build_fallback_chain(match, candidates, analysis)
                 rl, cs, to = build_typed_fallback_chains(match, candidates, analysis)
-                cost = _estimate_cost(analysis, match)
                 log.info("explicit_override", cid=cid, model=match.model_id)
                 decision = self._finalise(
                     chosen=match,
                     chain=chain,
                     analysis=analysis,
                     request=request,
-                    rule="explicit_model_override",
+                    rule=rule,
                     compressed=context_was_compressed,
                     cost=cost,
                     priority_applied=request.routing_priority,
                     confidence_fallback=False,
-                    budget_exhausted=False,
+                    budget_exhausted=budget_exhausted,
                     fallback_on_rate_limit=rl,
                     fallback_on_content_safety=cs,
                     fallback_on_timeout=to,
