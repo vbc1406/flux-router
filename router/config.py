@@ -641,6 +641,22 @@ SERVER_TOKENS: dict[str, str] = _parse_server_tokens()
 # conversation histories; lower to reduce exposure to body-based DoS.
 SERVER_MAX_BODY_BYTES: int = 2 * 1024 * 1024  # 2MB
 
+# Optional per-tenant daily spend cap (USD), enforced ONLY in FLUX_SERVER_TOKENS
+# multi-tenant mode, keyed by the bearer token's bound tenant_id — never by the
+# client-supplied `user` field. Every plan/daily budget elsewhere in this file
+# keys spend by RoutingRequest.user_id, which the OpenAI-compatible proxy takes
+# straight from the client-supplied `user` field (see server.py::
+# _build_routing_request) — an authenticated caller can mint a fresh `user` per
+# request and each one gets its own untouched budget, evading per-user caps
+# entirely while still hitting the same tenant. This cap closes that gap by
+# enforcing a ceiling the caller cannot rotate around. None (default) disables
+# it — set FLUX_TENANT_DAILY_CAP_USD to enable.
+TENANT_DAILY_CAP_USD = (
+    float(os.environ["FLUX_TENANT_DAILY_CAP_USD"])
+    if os.environ.get("FLUX_TENANT_DAILY_CAP_USD")
+    else None
+)
+
 # ══════════════════════════════════════════════════════════════════════════════
 # RUN-SCOPED BUDGET ENFORCEMENT (router/run_budget.py)
 # ══════════════════════════════════════════════════════════════════════════════

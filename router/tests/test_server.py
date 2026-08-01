@@ -213,6 +213,42 @@ class TestMultiTenantTokens:
         )
         assert resp.status_code == 401
 
+    def test_tenant_daily_cap_blocks_regardless_of_rotated_user_field(
+        self, client, monkeypatch, _mock_call_model
+    ):
+        """Regression: plan/daily budgets are keyed by the client-supplied
+        `user` field, so an authenticated caller could mint a fresh `user`
+        per request and evade every per-user cap while still hitting the
+        same tenant. TENANT_DAILY_CAP_USD is keyed by the bearer token's
+        bound tenant instead, which the caller cannot rotate around."""
+        self._enable(monkeypatch)
+        monkeypatch.setattr(server, "TENANT_DAILY_CAP_USD", 0.0000001)
+
+        # A literal (non-free) model guarantees estimated_cost > 0, so the
+        # first call actually records spend against the tenant cap.
+        body = _body("gpt-4o")
+        body["user"] = "rotated-user-1"
+        resp = client.post(
+            "/v1/chat/completions", json=body, headers={"Authorization": "Bearer tok-acme"}
+        )
+        assert resp.status_code == 200
+
+        # A brand-new `user` on the same tenant is still blocked — the cap
+        # doesn't reset just because the client claims to be someone new.
+        body["user"] = "rotated-user-2"
+        resp = client.post(
+            "/v1/chat/completions", json=body, headers={"Authorization": "Bearer tok-acme"}
+        )
+        assert resp.status_code == 429
+        assert resp.json()["error"]["type"] == "tenant_daily_cap_exceeded"
+
+        # A different tenant (different bound token) is unaffected.
+        body["user"] = "rotated-user-3"
+        resp = client.post(
+            "/v1/chat/completions", json=body, headers={"Authorization": "Bearer tok-globex"}
+        )
+        assert resp.status_code == 200
+
     def test_run_budget_state_isolated_across_tenants_sharing_run_id(
         self, client, monkeypatch, _mock_call_model
     ):

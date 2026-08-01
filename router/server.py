@@ -41,6 +41,7 @@ from .config import (
     SERVER_MAX_BODY_BYTES,
     SERVER_REQUIRE_AUTH,
     SERVER_TOKENS,
+    TENANT_DAILY_CAP_USD,
 )
 from .errors import AuthenticationError, FluxAPIError
 from .flux import Flux, make_flux
@@ -225,6 +226,23 @@ def _flux_headers(decision, decision_latency_ms: float) -> dict[str, str]:
     return headers
 
 
+def _record_tenant_daily_spend(bound_tenant: str | None, cost_usd: float, model_id: str) -> None:
+    """Record spend toward the tenant-level daily cap (see
+    config.TENANT_DAILY_CAP_USD). No-op unless both the caller authenticated
+    into a bound tenant AND the cap is configured — this tracker is
+    independent of (and in addition to) request.max_daily_cost/customer_id,
+    which stay keyed by the client-supplied, rotatable `user` field."""
+    if bound_tenant is None or TENANT_DAILY_CAP_USD is None:
+        return
+    _flux._engine._daily_budget.record_spend(
+        customer_id=bound_tenant,
+        amount=cost_usd,
+        model_id=model_id,
+        correlation_id=str(uuid.uuid4()),
+        task_type="unknown",
+    )
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     """Liveness probe. Never requires auth."""
@@ -328,6 +346,27 @@ async def chat_completions(
     # tenant_id regardless of which token they authenticated with.
     tenant_id = bound_tenant if bound_tenant is not None else x_flux_tenant_id
 
+    # Every other budget in this proxy is keyed by the client-supplied `user`
+    # field (RoutingRequest.user_id), which an authenticated caller can
+    # rotate per-request to mint itself a fresh, untouched budget bucket —
+    # see config.TENANT_DAILY_CAP_USD's docstring. This check is keyed by the
+    # bearer token's bound tenant instead, which the caller cannot rotate.
+    if bound_tenant is not None and TENANT_DAILY_CAP_USD is not None:
+        daily_budget = _flux._engine._daily_budget
+        if daily_budget.is_cap_exceeded(bound_tenant, TENANT_DAILY_CAP_USD):
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": {
+                        "message": (
+                            f"Tenant '{bound_tenant}' has reached its daily spend cap "
+                            f"(${TENANT_DAILY_CAP_USD:.2f})."
+                        ),
+                        "type": "tenant_daily_cap_exceeded",
+                    }
+                },
+            )
+
     # Task 3: every request belongs to a run — X-Flux-Run-Id groups repeated
     # calls into one budgeted trajectory. Bugfix: a request with no header
     # used to silently get its own single-step run, which makes run-scoped
@@ -379,7 +418,9 @@ async def chat_completions(
         # once the provider call is confirmed to have actually produced
         # output — see its docstring for why that beats recording up front.
         return StreamingResponse(
-            _stream_completion(routing_request, decision, completion_id, created, headers),
+            _stream_completion(
+                routing_request, decision, completion_id, created, headers, bound_tenant
+            ),
             media_type="text/event-stream",
             headers=headers,
         )
@@ -401,6 +442,7 @@ async def chat_completions(
     # fired — reflect the model that actually served the request.
     model_id = used_model.model_id
     headers["x-flux-model"] = model_id
+    _record_tenant_daily_spend(bound_tenant, decision.estimated_cost, model_id)
 
     response_body = {
         "id": completion_id,
@@ -424,7 +466,9 @@ async def chat_completions(
     return JSONResponse(content=response_body, headers=headers)
 
 
-async def _stream_completion(routing_request, decision, completion_id, created, headers):
+async def _stream_completion(
+    routing_request, decision, completion_id, created, headers, bound_tenant=None
+):
     """Yield SSE chunks for a chat completion.
 
     For providers that speak OpenAI-native SSE (openai/groq/mistral), each
@@ -490,6 +534,7 @@ async def _stream_completion(routing_request, decision, completion_id, created, 
             model_id=model_id,
             cost_usd=cost_usd,
         )
+        _record_tenant_daily_spend(bound_tenant, cost_usd, model_id)
 
     # check_before_dispatch() (Step 0 of route(), already run before this
     # generator starts) reserved one run-budget step slot for this request.
