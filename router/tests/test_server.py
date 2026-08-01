@@ -313,6 +313,14 @@ class TestMisc:
         resp = client.post("/v1/chat/completions", json={"model": "flux-auto"})
         assert resp.status_code == 400
 
+    def test_non_object_message_element_returns_400_not_500(self, client):
+        """Regression: a non-dict element in `messages` (e.g. a bare string)
+        used to hit m.get(...) unconditionally, raising an uncaught
+        AttributeError -> bare 500 instead of a clean 400."""
+        body = {"model": "flux-auto", "messages": ["not an object", {"role": "user", "content": "hi"}]}
+        resp = client.post("/v1/chat/completions", json=body)
+        assert resp.status_code == 400
+
     def test_system_message_without_content_returns_400_not_500(self, client, _mock_call_model):
         """Regression: a system message with no `content` key is legal per
         OpenAI's schema (some SDKs omit it), but system_parts used m["content"]

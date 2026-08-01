@@ -140,6 +140,11 @@ def _messages_to_request_fields(
     messages: list[dict[str, Any]],
 ) -> tuple[str | None, str, list[dict]]:
     """Split an OpenAI `messages` array into (system_prompt, raw_prompt, message_history)."""
+    for i, m in enumerate(messages):
+        if not isinstance(m, dict):
+            raise HTTPException(
+                status_code=400, detail=f"messages[{i}] must be an object, got {type(m).__name__}"
+            )
     system_parts = [m.get("content", "") for m in messages if m.get("role") == "system"]
     non_system = [m for m in messages if m.get("role") != "system"]
     if not non_system:
