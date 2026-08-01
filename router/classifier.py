@@ -281,6 +281,31 @@ def estimate_tokens(text: str) -> int:
     return max(tokens, word_count)
 
 
+def _cache_scope_key(request: RoutingRequest, sensitivity: str) -> str:
+    """
+    Isolation boundary for the shared, process-wide ResponseCache (see
+    cache.py::fingerprint()'s scope_key parameter). Without this, two
+    different callers issuing byte-identical prompts (a very real scenario
+    for shared system prompts / templated agent steps) would be served each
+    other's cached response — a cross-tenant/cross-user information
+    disclosure if the cache is ever enabled in a multi-tenant deployment.
+
+    Built from every dimension a cache hit must not cross: tenant (if set),
+    user, plan (a cached response bought on one budget must not be handed
+    out "for free" under another), and sensitivity level (an internal/
+    confidential answer must never surface from a public-labelled cache
+    lookup or vice versa).
+    """
+    return "|".join(
+        [
+            f"tenant:{request.tenant_id or ''}",
+            f"user:{request.user_id}",
+            f"plan:{request.plan}",
+            f"sensitivity:{sensitivity}",
+        ]
+    )
+
+
 class RequestClassifier:
     """
     Multi-signal classifier that converts a RoutingRequest into a TaskAnalysis.
@@ -344,7 +369,13 @@ class RequestClassifier:
 
         # 6. Cache eligibility + fingerprint
         cache_eligible = is_cache_eligible(task_type, request.temperature)
-        fp = fingerprint(prompt, request.system_prompt, history, request.temperature)
+        fp = fingerprint(
+            prompt,
+            request.system_prompt,
+            history,
+            request.temperature,
+            scope_key=_cache_scope_key(request, sensitivity),
+        )
 
         # 7. Task 6: step_type (orthogonal to task_type)
         step_type = request.step_type or self._infer_step_type(request)

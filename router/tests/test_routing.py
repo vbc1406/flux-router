@@ -203,17 +203,44 @@ class TestCacheIntegration:
 
     def test_cache_hit_returns_zero_cost(self):
         from router.cache import fingerprint as fp_fn
+        from router.classifier import _cache_scope_key
         from router.model_registry import ModelRegistry
 
         reg = ModelRegistry()
         model = reg.all_available_models()[0]
         prompt = "What is the capital of Germany?"
-        fp = fp_fn(prompt, None, [], None)
-        self.cache.set(fp, "Berlin", model, original_cost=0.001)
         req = _req(prompt, temperature=None)
+        # Fingerprints are scoped by tenant/user/plan/sensitivity (see
+        # classifier.py::_cache_scope_key()) — must match what route() below
+        # computes for this same request, or this is a guaranteed cache miss.
+        fp = fp_fn(prompt, None, [], None, scope_key=_cache_scope_key(req, "public"))
+        self.cache.set(fp, "Berlin", model, original_cost=0.001)
         d = rr(self.engine.route(req))
         assert d.cache_hit is True
         assert d.estimated_cost == 0.0
+
+    def test_cache_hit_does_not_cross_users(self):
+        """Regression: cache fingerprints used to omit user/tenant/plan/
+        sensitivity entirely, so two different callers issuing the same
+        prompt would share one cache entry — a cross-user information
+        disclosure risk if the (opt-in) cache is ever enabled in a
+        multi-tenant deployment."""
+        from router.cache import fingerprint as fp_fn
+        from router.classifier import _cache_scope_key
+        from router.model_registry import ModelRegistry
+
+        reg = ModelRegistry()
+        model = reg.all_available_models()[0]
+        prompt = "What is the capital of Germany?"
+
+        req_a = _req(prompt, temperature=None, user_id="user-a")
+        fp_a = fp_fn(prompt, None, [], None, scope_key=_cache_scope_key(req_a, "public"))
+        self.cache.set(fp_a, "Berlin", model, original_cost=0.001)
+
+        assert rr(self.engine.route(req_a)).cache_hit is True
+
+        req_b = _req(prompt, temperature=None, user_id="user-b")
+        assert rr(self.engine.route(req_b)).cache_hit is False
 
     def test_high_temp_skips_cache(self):
         from router.cache import fingerprint as fp_fn

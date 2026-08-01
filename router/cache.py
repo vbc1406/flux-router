@@ -89,6 +89,7 @@ def fingerprint(
     system_prompt: str | None,
     history: list[dict],
     temperature: float | None,
+    scope_key: str = "",
 ) -> str:
     """
     Produce a stable SHA-256 hex digest for cache lookup.
@@ -99,6 +100,14 @@ def fingerprint(
 
     Only the last two history turns are included; including the full history
     would cause too many cache misses on long conversations.
+
+    scope_key: identity/isolation boundary the cache entry must not cross —
+    see classifier.py::_cache_scope_key() for what it's built from (tenant,
+    user, plan, sensitivity level). Two requests with identical prompts but
+    different scope_key values get different fingerprints, so the shared
+    process-wide cache never serves one caller's response to another. Empty
+    string (the default) reproduces pre-scoping fingerprints exactly, for
+    any caller that constructs a fingerprint directly without a request.
     """
     parts: list[str] = [_normalize(prompt)]
 
@@ -118,6 +127,9 @@ def fingerprint(
         parts.append("temp:default")
     else:
         parts.append(f"temp:t{temperature:.2f}")
+
+    if scope_key:
+        parts.append(f"scope:{scope_key}")
 
     combined = "|".join(parts)
     return hashlib.sha256(combined.encode("utf-8")).hexdigest()
@@ -179,10 +191,13 @@ class ResponseCache:
         if self._enabled and not _CACHE_ENABLED_WARNING_EMITTED:
             _CACHE_ENABLED_WARNING_EMITTED = True
             warnings.warn(
-                "Response cache is enabled. The current cache key does not segment "
-                "by user_id, plan, or sensitivity level. Do NOT enable in multi-tenant "
-                "deployments without first reading SECURITY_ARCHITECTURE.md and "
-                "implementing tenant-scoped cache keys.",
+                "Response cache is enabled. Cache keys are scoped by tenant_id/"
+                "user_id/plan/sensitivity level when populated through the normal "
+                "classifier path (see classifier.py::_cache_scope_key()) — but ANY "
+                "caller invoking cache.fingerprint()/ResponseCache.get()/.set() "
+                "directly, bypassing the classifier, gets NO isolation unless it "
+                "supplies its own scope_key. Review SECURITY_ARCHITECTURE.md before "
+                "enabling in a multi-tenant deployment.",
                 UserWarning,
                 stacklevel=2,
             )
