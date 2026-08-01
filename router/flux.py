@@ -491,32 +491,52 @@ class Flux:
                 f"Cascade exhausted all tiers without a usable response: {last_reason}"
             )
 
-        # Task 3: run-budget accounting for the FINAL attempt only — matches
-        # the non-cascade path's convention of recording one step per
-        # complete() call, not one per internal escalation attempt. Rescaled
-        # to last_model's rate, since an escalated tier can cost far more
-        # than decision.chosen_model (the cheapest tier cascade starts at).
-        final_cost = estimate_step_cost(last_model, decision.chosen_model, decision.estimated_cost)
+        # Every tier in step_breakdown was a REAL, separately-billed provider
+        # call — cascade escalation means paying for the failed cheap
+        # attempt(s) AND the escalation, not just whichever one happened to
+        # verify. Bugfix: plan/daily/run budgets used to record only the
+        # final tier's cost, so a cascade that escalated through e.g. 3 paid
+        # tiers before verifying would only ever be charged for the last one
+        # against every cap — silently undercounting real spend and letting
+        # cascade traffic blow through budgets that non-cascade traffic
+        # can't. Attribution already summed every attempt (below); every
+        # other tracker now uses the same total.
+        per_tier_costs = [
+            estimate_step_cost(tier_ladder[i], decision.chosen_model, decision.estimated_cost)
+            for i in range(len(step_breakdown))
+        ]
+        total_actual_cost = sum(per_tier_costs)
         self._engine._budget.record_spend(
             user_id=request.user_id,
-            amount=final_cost,
+            amount=total_actual_cost,
             model_id=last_model.model_id,
             correlation_id=request.correlation_id,
             task_type="unknown",
             plan=request.plan or "free_plan",
         )
+        if request.max_daily_cost is not None:
+            self._engine._daily_budget.record_spend(
+                customer_id=request.customer_id or request.user_id,
+                amount=total_actual_cost,
+                model_id=last_model.model_id,
+                correlation_id=request.correlation_id,
+                task_type="unknown",
+            )
+        # Task 3: run-budget still gets ONE step recorded per complete() call
+        # (matches the non-cascade path's convention, and the ONE reservation
+        # check_before_dispatch() made for this call) but now carries the
+        # TOTAL cost of every tier actually dispatched, not just the last.
         if request.run_id:
             self._engine._run_budget.record_step(
                 request.run_id,
                 last_model.model_id,
-                final_cost,
+                total_actual_cost,
                 max(len(last_text) // 4, 1),
                 tenant_id=request.tenant_id,
             )
 
-        # Task 7: attribution gets ONE record per tier actually dispatched
-        # (unlike the plan/run-budget trackers above, which only count the
-        # final tier) — cascade's real economics require seeing every attempt.
+        # Task 7: attribution gets ONE record per tier actually dispatched —
+        # cascade's real economics require seeing every attempt.
         for i in range(len(step_breakdown)):
             self._engine._attribution.record(
                 tenant_id=request.tenant_id,
@@ -524,9 +544,7 @@ class Flux:
                 task_type=decision.task_type,
                 step_type=decision.step_type,
                 model_id=tier_ladder[i].model_id,
-                cost_usd=estimate_step_cost(
-                    tier_ladder[i], decision.chosen_model, decision.estimated_cost
-                ),
+                cost_usd=per_tier_costs[i],
             )
 
         # cascade_net_savings: actual cost of every tier PAID FOR (all
@@ -536,12 +554,8 @@ class Flux:
         # to premium — the honest failure mode this metric exists to surface.
         priciest = max(tier_ladder, key=lambda m: m.cost_per_1k_input + m.cost_per_1k_output)
         priciest_cost = estimate_step_cost(priciest, decision.chosen_model, decision.estimated_cost)
-        actual_spend = sum(
-            estimate_step_cost(tier_ladder[i], decision.chosen_model, decision.estimated_cost)
-            for i in range(len(step_breakdown))
-        )
         decision.cascade_attempts = len(step_breakdown)
-        decision.cascade_net_savings = round(priciest_cost - actual_spend, 6)
+        decision.cascade_net_savings = round(priciest_cost - total_actual_cost, 6)
 
         log.info(
             "flux_cascade_complete",

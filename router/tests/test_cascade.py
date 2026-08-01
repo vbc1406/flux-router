@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from router.adaptive_weights import AdaptiveWeights
 from router.analytics import RoutingAnalytics
 from router.budget_tracker import BudgetTracker
@@ -245,6 +247,49 @@ class TestCascadeNetSavings:
         # Paid for free + mid + premium, vs. just paying for premium once ->
         # net savings must be negative (or at best zero): escalation cost MORE.
         assert resp.decision.cascade_net_savings <= 0
+
+
+class TestCascadeFullSpendAccounting:
+    """Regression: cascade escalation makes multiple REAL, separately-billed
+    provider calls (one per tier tried), but plan/daily-cap budgets used to
+    record only the final tier's cost — undercharging every attempt before
+    the one that verified, and letting cascade traffic evade budget caps
+    that non-cascade traffic can't."""
+
+    def test_plan_spend_reflects_every_tier_dispatched_not_just_the_last(self):
+        flux = _flux()
+
+        async def mock_call(model, request):
+            return ""  # every tier fails verification -> escalate through all
+
+        flux._call_model = mock_call  # type: ignore[method-assign]
+        resp = rr(flux.complete("do something", **_KWARGS))
+        assert resp.decision.cascade_attempts == 3
+
+        # attribution.usage() gives the per-tier truth to compare against.
+        records, _ = flux._engine._attribution.usage(limit=10)
+        total_attributed = sum(r.cost_usd for r in records)
+        assert total_attributed > 0
+
+        plan_recorded = flux._engine._budget.get_daily_spend("u_cascade")
+        assert plan_recorded == pytest.approx(total_attributed)
+
+    def test_daily_cap_is_charged_for_the_full_cascade_not_skipped(self):
+        flux = _flux()
+
+        async def mock_call(model, request):
+            return ""  # every tier fails verification -> escalate through all
+
+        flux._call_model = mock_call  # type: ignore[method-assign]
+        kwargs = dict(_KWARGS, customer_id="cust_cascade", max_daily_cost=1000.0)
+        rr(flux.complete("do something", **kwargs))
+
+        records, _ = flux._engine._attribution.usage(limit=10)
+        total_attributed = sum(r.cost_usd for r in records)
+
+        daily_recorded = flux._engine._daily_budget.get_daily_spend("cust_cascade")
+        assert daily_recorded > 0
+        assert daily_recorded == pytest.approx(total_attributed)
 
 
 class TestVerifiers:
