@@ -290,14 +290,23 @@ class CostAttribution:
         total = self._store.count(tenant_id=tenant_id, run_id=run_id)
         return records, total
 
-    def render_prometheus(self) -> str:
-        """Render current counters in Prometheus text exposition format."""
+    def render_prometheus(self, tenant_filter: str | None = None) -> str:
+        """Render current counters in Prometheus text exposition format.
+
+        tenant_filter: when provided, only series for that (already-normalized,
+        see _tenant_for) tenant label are rendered. Used by GET /metrics in
+        FLUX_SERVER_TOKENS multi-tenant mode so an authenticated caller can
+        only ever see their own bound tenant's spend/usage, not every
+        tenant's — see server.py::metrics().
+        """
         lines = [
             "# HELP flux_cost_usd_total Total estimated cost in USD, labelled by tenant and model.",
             "# TYPE flux_cost_usd_total counter",
         ]
         with self._lock:
             for (tenant, model), cost in sorted(self._cost_by_label.items()):
+                if tenant_filter is not None and tenant != tenant_filter:
+                    continue
                 lines.append(
                     f'flux_cost_usd_total{{tenant_id="{_escape_label(tenant)}",'
                     f'model_id="{_escape_label(model)}"}} {cost:.6f}'
@@ -307,12 +316,16 @@ class CostAttribution:
                 "# TYPE flux_run_steps counter",
             ]
             for tenant, count in sorted(self._run_steps_by_tenant.items()):
+                if tenant_filter is not None and tenant != tenant_filter:
+                    continue
                 lines.append(f'flux_run_steps{{tenant_id="{_escape_label(tenant)}"}} {count}')
             lines += [
                 "# HELP flux_budget_exceeded_total Run-budget exceeded events, labelled by tenant.",
                 "# TYPE flux_budget_exceeded_total counter",
             ]
             for tenant, count in sorted(self._budget_exceeded_by_tenant.items()):
+                if tenant_filter is not None and tenant != tenant_filter:
+                    continue
                 lines.append(
                     f'flux_budget_exceeded_total{{tenant_id="{_escape_label(tenant)}"}} {count}'
                 )

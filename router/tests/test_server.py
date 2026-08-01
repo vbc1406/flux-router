@@ -213,6 +213,42 @@ class TestMultiTenantTokens:
         )
         assert resp.status_code == 401
 
+    def test_run_budget_state_isolated_across_tenants_sharing_run_id(
+        self, client, monkeypatch, _mock_call_model
+    ):
+        """Regression: X-Flux-Run-Id is client-controlled. Two different
+        tenants colliding on the same run_id must not share run-budget state
+        — otherwise one tenant could exhaust or observe another's run
+        accounting by guessing/reusing a run_id."""
+        self._enable(monkeypatch)
+        from router.run_budget import RunLimits
+
+        shared_run_id = "shared-run-id"
+        rb = server._flux._engine._run_budget
+        # Exhaust the run budget for globex only.
+        rb.start(
+            shared_run_id,
+            RunLimits(max_cost_usd=0.0001, max_steps=1000, max_tokens=10**9, max_duration_seconds=10**9),
+            tenant_id="globex",
+        )
+        rb.record_step(shared_run_id, "m", 1.0, 10, tenant_id="globex")
+
+        # acme, using the SAME run_id, must be unaffected.
+        resp = client.post(
+            "/v1/chat/completions",
+            json=_body(),
+            headers={"Authorization": "Bearer tok-acme", "X-Flux-Run-Id": shared_run_id},
+        )
+        assert resp.status_code == 200
+
+        # globex's own request against that run_id still hits its exhausted budget.
+        resp = client.post(
+            "/v1/chat/completions",
+            json=_body(),
+            headers={"Authorization": "Bearer tok-globex", "X-Flux-Run-Id": shared_run_id},
+        )
+        assert resp.status_code == 429
+
 
 class TestBodySize:
     def test_oversized_body_rejected(self, client, monkeypatch):
@@ -399,14 +435,18 @@ class TestAttribution:
         from router.run_budget import RunLimits
 
         run_id = "metrics-exceeded-run"
+        tenant_id = "budget-blown-co"
         rb = server._flux._engine._run_budget
+        # Run budget state is scoped by tenant_id (see run_budget.py::RunBudget._key)
+        # so seeding it here must match the tenant the request below authenticates as.
         rb.start(
             run_id,
             RunLimits(
                 max_cost_usd=0.0001, max_steps=1000, max_tokens=10**9, max_duration_seconds=10**9
             ),
+            tenant_id=tenant_id,
         )
-        rb.record_step(run_id, "m", 1.0, 10)
+        rb.record_step(run_id, "m", 1.0, 10, tenant_id=tenant_id)
         client.post(
             "/v1/chat/completions",
             json=_body(),

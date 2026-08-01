@@ -325,17 +325,32 @@ class RunBudget:
         self._lock = threading.Lock()
         self._call_count = 0
 
-    def start(self, run_id: str, limits: RunLimits | None = None) -> None:
+    @staticmethod
+    def _key(run_id: str, tenant_id: str | None) -> str:
+        """Storage key for a run. run_id is client-controlled (X-Flux-Run-Id)
+        and is NOT namespaced by itself — two different tenants (or two
+        callers under no-tenant auth) supplying the same run_id would
+        otherwise share one run's budget state, letting one exhaust or
+        inspect another's run accounting. When tenant_id is known (verified
+        server-side in FLUX_SERVER_TOKENS mode — see server.py), the storage
+        key is scoped by it. tenant_id is never itself attacker-controlled in
+        that mode, so this closes the collision. Falls back to the raw run_id
+        when tenant_id is unset, unchanged from prior behavior."""
+        return f"{tenant_id}\x00{run_id}" if tenant_id else run_id
+
+    def start(
+        self, run_id: str, limits: RunLimits | None = None, tenant_id: str | None = None
+    ) -> None:
         """Explicitly (re)initialize a run with its own limits. Optional —
         check_before_dispatch() lazily creates a run with global defaults if
         start() was never called."""
-        self._store.set(run_id, _RunState(limits=limits or RunLimits()))
+        self._store.set(self._key(run_id, tenant_id), _RunState(limits=limits or RunLimits()))
 
-    def finish(self, run_id: str) -> None:
+    def finish(self, run_id: str, tenant_id: str | None = None) -> None:
         """Drop a run's state immediately rather than waiting for TTL eviction."""
-        self._store.delete(run_id)
+        self._store.delete(self._key(run_id, tenant_id))
 
-    def check_before_dispatch(self, run_id: str) -> str:
+    def check_before_dispatch(self, run_id: str, tenant_id: str | None = None) -> str:
         """
         Evaluate this run's state from steps recorded so far and return the
         budget_state for the step about to be dispatched: "ok", "degraded",
@@ -343,14 +358,17 @@ class RunBudget:
         met/exceeded — the caller must not dispatch in that case.
         """
         self._maybe_housekeep()
-        state = self._store.get(run_id)
+        key = self._key(run_id, tenant_id)
+        state = self._store.get(key)
         if state is None:
             state = _RunState(limits=RunLimits())
         state.last_touched = time.monotonic()
-        self._store.set(run_id, state)
+        self._store.set(key, state)
 
         frac, reason = _worst_fraction(state)
         if frac >= 1.0:
+            # run_id here is the caller-facing (unscoped) id — never leak the
+            # tenant-scoped storage key into the exception/response.
             raise RunBudgetExceeded(run_id, _summary(run_id, state, reason))
         if frac >= RUN_WARN_THRESHOLD:
             return "warning"
@@ -358,9 +376,17 @@ class RunBudget:
             return "degraded"
         return "ok"
 
-    def record_step(self, run_id: str, model_id: str, cost_usd: float, tokens: int) -> None:
+    def record_step(
+        self,
+        run_id: str,
+        model_id: str,
+        cost_usd: float,
+        tokens: int,
+        tenant_id: str | None = None,
+    ) -> None:
         """Record a completed step's actual cost/tokens. Never raises."""
-        state = self._store.get(run_id)
+        key = self._key(run_id, tenant_id)
+        state = self._store.get(key)
         if state is None:
             state = _RunState(limits=RunLimits())
         state.steps.append(
@@ -371,11 +397,11 @@ class RunBudget:
         state.cost_so_far += cost_usd
         state.tokens_so_far += tokens
         state.last_touched = time.monotonic()
-        self._store.set(run_id, state)
+        self._store.set(key, state)
 
-    def snapshot(self, run_id: str) -> tuple[float, int]:
+    def snapshot(self, run_id: str, tenant_id: str | None = None) -> tuple[float, int]:
         """Return (cost_so_far, steps_so_far) for a run, or (0.0, 0) if unknown."""
-        state = self._store.get(run_id)
+        state = self._store.get(self._key(run_id, tenant_id))
         if state is None:
             return 0.0, 0
         return state.cost_so_far, len(state.steps)

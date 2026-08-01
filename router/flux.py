@@ -322,6 +322,7 @@ class Flux:
                         model.model_id,
                         actual_cost,
                         max(len(text) // 4, 1),
+                        tenant_id=request.tenant_id,
                     )
                 # Task 7: cost attribution — costs/metadata only, never `text`.
                 self._engine._attribution.record(
@@ -467,6 +468,7 @@ class Flux:
                 last_model.model_id,
                 final_cost,
                 max(len(last_text) // 4, 1),
+                tenant_id=request.tenant_id,
             )
 
         # Task 7: attribution gets ONE record per tier actually dispatched

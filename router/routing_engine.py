@@ -247,8 +247,8 @@ class RoutingEngine:
             return await self._route_core(request, verbose=verbose)
 
         run_id = request.run_id
-        budget_state = self._run_budget.check_before_dispatch(run_id)
-        cost_so_far, steps_so_far = self._run_budget.snapshot(run_id)
+        budget_state = self._run_budget.check_before_dispatch(run_id, tenant_id=request.tenant_id)
+        cost_so_far, steps_so_far = self._run_budget.snapshot(run_id, tenant_id=request.tenant_id)
 
         effective_request = request
         budget_warning: str | None = None
@@ -1097,6 +1097,7 @@ class RoutingEngine:
                         model.model_id,
                         actual_cost,
                         max(len(response) // 4, 1),
+                        tenant_id=request.tenant_id,
                     )
                 # Task 7: cost attribution — costs/metadata only, never the
                 # prompt or the `response` text itself.

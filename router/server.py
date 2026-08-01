@@ -293,9 +293,16 @@ async def get_usage(
 @app.get("/metrics")
 async def metrics(authorization: str | None = Header(default=None)) -> Response:
     """Task 7: Prometheus text-exposition metrics — flux_cost_usd_total,
-    flux_run_steps, flux_budget_exceeded_total, labelled by tenant/model."""
-    _check_auth(authorization)
-    body = _flux._engine._attribution.render_prometheus()
+    flux_run_steps, flux_budget_exceeded_total, labelled by tenant/model.
+
+    In FLUX_SERVER_TOKENS multi-tenant mode, the bearer token's bound tenant
+    restricts the rendered series to that tenant only — otherwise any
+    authenticated caller could read every tenant's spend/usage. Outside that
+    mode (auth disabled, or the legacy shared-token mode where tenant_id is
+    self-declared and unverified) all series are rendered, same as before.
+    """
+    bound_tenant = _check_auth(authorization)
+    body = _flux._engine._attribution.render_prometheus(tenant_filter=bound_tenant)
     return Response(content=body, media_type="text/plain; version=0.0.4")
 
 
@@ -464,7 +471,13 @@ async def _stream_completion(routing_request, decision, completion_id, created, 
                 task_type="unknown",
             )
         if routing_request.run_id:
-            engine._run_budget.record_step(routing_request.run_id, model_id, cost_usd, tokens)
+            engine._run_budget.record_step(
+                routing_request.run_id,
+                model_id,
+                cost_usd,
+                tokens,
+                tenant_id=routing_request.tenant_id,
+            )
         engine._attribution.record(
             tenant_id=routing_request.tenant_id,
             run_id=routing_request.run_id,
