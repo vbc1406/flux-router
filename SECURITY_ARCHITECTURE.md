@@ -132,11 +132,17 @@ These caps protect against memory exhaustion attacks.
 
 `router/attribution.py` (`UsageRecord`, `SqliteUsageStore`) records, per
 dispatch: `tenant_id`, `run_id`, `task_type`, `step_type`, `model_id`,
-`cost_usd`, and a timestamp. **It never has access to prompt or response
-text** — the recording call sites in `flux.py` and `routing_engine.py` only
-ever pass cost/metadata values, never `text`/`response`/`prompt`. This is
-enforced structurally: `UsageRecord`'s dataclass fields have no slot that
-could hold arbitrary text, so there's no field to accidentally populate.
+`cost_usd`, a timestamp, and — since actual (provider-reported) usage
+recording was added — `usage_source` (`"provider"` or `"estimated"`) plus
+`input_tokens`/`output_tokens` (counts only). **It never has access to
+prompt or response text** — the recording call sites in `flux.py`,
+`routing_engine.py`, and `server.py` only ever pass cost/token-count/metadata
+values, never `text`/`response`/`prompt`. This is enforced structurally:
+`UsageRecord`'s dataclass fields have no slot that could hold arbitrary
+text, so there's no field to accidentally populate — `input_tokens`/
+`output_tokens` are integer counts extracted from a provider's `usage`/
+`usageMetadata` object (see `provider_caller.py::_extract_usage`), never
+the token contents themselves.
 
 `GET /v1/usage` on the HTTP proxy exposes this same data, filterable by
 `tenant_id`/`run_id`. As with `customer_id`/`user_id` above, `tenant_id` is a

@@ -79,11 +79,11 @@ async def live_score(
     prompt = _RUBRIC_PROMPT.format(prompt=task.prompt, rubric=task.rubric, answer=answer_text)
     request = RoutingRequest(raw_prompt=prompt, user_id="flux-eval-priority-judge", temperature=0.0)
     try:
-        raw = await call_provider(judge_model, request, judge_api_key)
+        result = await call_provider(judge_model, request, judge_api_key)
     except ProviderCallError as exc:
         log.warning("judge_call_failed", model=judge_model.model_id, task=task.id, error=str(exc))
         return 1.0
-    return _parse_score(raw)
+    return _parse_score(result.text)
 
 
 def resolve_judge_model(registry: ModelRegistry, judge_model_id: str) -> ModelOption:

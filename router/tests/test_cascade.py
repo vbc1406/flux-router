@@ -27,8 +27,15 @@ from router.context_compressor import ContextCompressor
 from router.errors import FluxAPIError
 from router.flux import Flux
 from router.model_registry import ModelRegistry
+from router.provider_caller import ProviderResult
 from router.routing_engine import RoutingEngine
 from router.schemas import ModelOption, RoutingRequest
+
+
+def _pr(text: str) -> ProviderResult:
+    return ProviderResult(
+        text=text, input_tokens=None, output_tokens=None, usage_source="estimated"
+    )
 
 
 def _models() -> list[ModelOption]:
@@ -157,7 +164,7 @@ class TestCascadeEscalation:
         flux = _flux()
 
         async def mock_call(model, request):
-            return "A perfectly good, complete answer."
+            return _pr("A perfectly good, complete answer.")
 
         flux._call_model = mock_call  # type: ignore[method-assign]
         resp = rr(flux.complete("do something", **_KWARGS))
@@ -173,8 +180,8 @@ class TestCascadeEscalation:
         # [free (initial), cheap, premium]; "mid" is never in the ladder.
         async def mock_call(model, request):
             if model.tier == "free":
-                return ""  # empty -> fails verification
-            return "A perfectly good, complete answer from a bigger model."
+                return _pr("")  # empty -> fails verification
+            return _pr("A perfectly good, complete answer from a bigger model.")
 
         flux._call_model = mock_call  # type: ignore[method-assign]
         resp = rr(flux.complete("do something", **_KWARGS))
@@ -187,7 +194,7 @@ class TestCascadeEscalation:
         flux = _flux()
 
         async def mock_call(model, request):
-            return "I'm sorry, but I cannot help with that."  # always a refusal
+            return _pr("I'm sorry, but I cannot help with that.")  # always a refusal
 
         flux._call_model = mock_call  # type: ignore[method-assign]
         resp = rr(flux.complete("do something", **_KWARGS))
@@ -202,7 +209,7 @@ class TestCascadeEscalation:
         async def mock_call(model, request):
             if model.tier == "free":
                 raise FluxAPIError("simulated provider outage")
-            return "A perfectly good, complete answer."
+            return _pr("A perfectly good, complete answer.")
 
         flux._call_model = mock_call  # type: ignore[method-assign]
         resp = rr(flux.complete("do something", **_KWARGS))
@@ -228,7 +235,7 @@ class TestCascadeNetSavings:
         flux = _flux()
 
         async def mock_call(model, request):
-            return "A perfectly good, complete answer."
+            return _pr("A perfectly good, complete answer.")
 
         flux._call_model = mock_call  # type: ignore[method-assign]
         resp = rr(flux.complete("do something", **_KWARGS))
@@ -240,7 +247,7 @@ class TestCascadeNetSavings:
         flux = _flux()
 
         async def mock_call(model, request):
-            return ""  # every tier fails verification -> escalate through all
+            return _pr("")  # every tier fails verification -> escalate through all
 
         flux._call_model = mock_call  # type: ignore[method-assign]
         resp = rr(flux.complete("do something", **_KWARGS))
@@ -260,7 +267,7 @@ class TestCascadeFullSpendAccounting:
         flux = _flux()
 
         async def mock_call(model, request):
-            return ""  # every tier fails verification -> escalate through all
+            return _pr("")  # every tier fails verification -> escalate through all
 
         flux._call_model = mock_call  # type: ignore[method-assign]
         resp = rr(flux.complete("do something", **_KWARGS))
@@ -278,7 +285,7 @@ class TestCascadeFullSpendAccounting:
         flux = _flux()
 
         async def mock_call(model, request):
-            return ""  # every tier fails verification -> escalate through all
+            return _pr("")  # every tier fails verification -> escalate through all
 
         flux._call_model = mock_call  # type: ignore[method-assign]
         kwargs = dict(_KWARGS, customer_id="cust_cascade", max_daily_cost=1000.0)

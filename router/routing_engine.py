@@ -530,7 +530,13 @@ class RoutingEngine:
                 budget_exhausted = False
                 if self._budget.would_exceed_budget(request.user_id, cost, request.plan):
                     match, rule, budget_exhausted = _budget_tier_walkdown(
-                        match, candidates, analysis, request.user_id, self._budget, rule, request.plan
+                        match,
+                        candidates,
+                        analysis,
+                        request.user_id,
+                        self._budget,
+                        rule,
+                        request.plan,
                     )
                     cost = _estimate_cost(analysis, match)
                 chain = build_fallback_chain(match, candidates, analysis)
@@ -1058,7 +1064,7 @@ class RoutingEngine:
         decision: RoutingDecision,
         request: RoutingRequest,
     ) -> RoutingDecision:
-        from .provider_caller import ProviderCallError, call_provider
+        from .provider_caller import ProviderCallError, call_provider, compute_actual_cost
 
         if not request.provider_api_key:
             log.warning("proxy_mode_no_api_key", cid=request.correlation_id)
@@ -1083,9 +1089,10 @@ class RoutingEngine:
 
         for attempt, model in enumerate(models_to_try):
             try:
-                response = await call_provider(
+                result = await call_provider(
                     model, request, request.provider_api_key.get_secret_value()
                 )
+                response = result.text
                 log.info(
                     "proxy_call_success",
                     cid=request.correlation_id,
@@ -1094,19 +1101,29 @@ class RoutingEngine:
                 )
                 # Fix 4: Record success on the circuit breaker.
                 self._circuit_breaker.record_success(model.provider)
-                # A fallback may have dispatched a different model than
-                # decision.chosen_model, at a different rate — rescale the
-                # estimate to the model actually called rather than recording
-                # the originally-chosen model's (possibly much cheaper) cost.
-                actual_cost = estimate_step_cost(
-                    model, decision.chosen_model, decision.estimated_cost
-                )
+                # Bill from the provider's own reported usage when it gave us
+                # one; otherwise fall back to the pre-dispatch estimate
+                # rescaled to the model actually called (a fallback may have
+                # dispatched a different model than decision.chosen_model, at
+                # a different rate) — mirrors Flux._dispatch_with_fallback_inner.
+                if result.input_tokens is not None and result.output_tokens is not None:
+                    billed_cost = compute_actual_cost(
+                        model, result.input_tokens, result.output_tokens
+                    )
+                    billed_tokens = result.input_tokens + result.output_tokens
+                    usage_source = "provider"
+                else:
+                    billed_cost = estimate_step_cost(
+                        model, decision.chosen_model, decision.estimated_cost
+                    )
+                    billed_tokens = max(len(response) // 4, 1)
+                    usage_source = "estimated"
                 # Record actual spend so budget caps hold for proxy-mode calls.
                 # Without this, proxy traffic spends untracked money and
                 # would_exceed_budget always passes. Mirrors Flux.complete().
                 self._budget.record_spend(
                     user_id=request.user_id,
-                    amount=actual_cost,
+                    amount=billed_cost,
                     model_id=model.model_id,
                     correlation_id=request.correlation_id,
                     task_type="unknown",
@@ -1115,31 +1132,35 @@ class RoutingEngine:
                 if request.max_daily_cost is not None:
                     self._daily_budget.record_spend(
                         customer_id=request.customer_id or request.user_id,
-                        amount=actual_cost,
+                        amount=billed_cost,
                         model_id=model.model_id,
                         correlation_id=request.correlation_id,
                         task_type="unknown",
                     )
                 # Task 3: record this step against the run's cumulative budget so
-                # the NEXT step's check_before_dispatch() sees it. Token count is
-                # estimated (~4 chars/token) since call_provider returns text only.
+                # the NEXT step's check_before_dispatch() sees it. Tokens are the
+                # provider's own reported total when known, else the ~4-chars/
+                # token estimate.
                 if request.run_id:
                     self._run_budget.record_step(
                         request.run_id,
                         model.model_id,
-                        actual_cost,
-                        max(len(response) // 4, 1),
+                        billed_cost,
+                        billed_tokens,
                         tenant_id=request.tenant_id,
                     )
-                # Task 7: cost attribution — costs/metadata only, never the
-                # prompt or the `response` text itself.
+                # Task 7: cost attribution — costs/token counts/metadata only,
+                # never the prompt or the `response` text itself.
                 self._attribution.record(
                     tenant_id=request.tenant_id,
                     run_id=request.run_id,
                     task_type=decision.task_type,
                     step_type=decision.step_type,
                     model_id=model.model_id,
-                    cost_usd=actual_cost,
+                    cost_usd=billed_cost,
+                    usage_source=usage_source,
+                    input_tokens=result.input_tokens,
+                    output_tokens=result.output_tokens,
                 )
                 decision.proxy_response = response
                 decision.proxy_model_used = model

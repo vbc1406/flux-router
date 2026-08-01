@@ -38,6 +38,7 @@ from router.classifier import RequestClassifier
 from router.context_compressor import ContextCompressor
 from router.flux import Flux
 from router.model_registry import ModelRegistry
+from router.provider_caller import ProviderResult
 from router.routing_engine import RoutingEngine
 from router.run_budget import InMemoryRunStore, RunBudget, RunBudgetExceeded, RunLimits
 
@@ -61,6 +62,12 @@ def _engine() -> RoutingEngine:
 
 def _flux() -> Flux:
     return Flux(_engine(), api_key="sk-test")
+
+
+def _pr(text: str) -> ProviderResult:
+    return ProviderResult(
+        text=text, input_tokens=None, output_tokens=None, usage_source="estimated"
+    )
 
 
 # ── Unit tests: degradation ladder + raise-before-not-after ────────────────
@@ -306,7 +313,7 @@ class TestEviction:
 class TestAgentLoopIntegration:
     def test_50_step_loop_degrades_then_stops_before_exceeding(self):
         flux = _flux()
-        mock_call = AsyncMock(return_value="ok")
+        mock_call = AsyncMock(return_value=_pr("ok"))
         flux._call_model = mock_call  # type: ignore[method-assign]
 
         budget_states: list[str] = []
@@ -354,7 +361,7 @@ class TestAgentLoopIntegration:
 
     def test_run_state_is_isolated_between_two_concurrent_runs(self):
         flux = _flux()
-        flux._call_model = AsyncMock(return_value="ok")  # type: ignore[method-assign]
+        flux._call_model = AsyncMock(return_value=_pr("ok"))  # type: ignore[method-assign]
 
         async def drive(run_id: str, n: int):
             for _ in range(n):
@@ -373,3 +380,83 @@ class TestAgentLoopIntegration:
         (cost_x, steps_x), (cost_y, steps_y) = rr(both())
         assert steps_x == 5
         assert steps_y == 3
+
+
+# ── Token ceiling with mixed actual/estimated steps ─────────────────────────
+
+
+class TestTokenCeilingWithMixedUsageSources:
+    """Regression: run_budget.record_step()'s token count now reflects the
+    provider's own reported usage when available (see flux.py's
+    billed_tokens), not always the ~4-chars/token estimate. A run mixing
+    actual-usage steps and estimated-fallback steps must still trip
+    RUN_MAX_TOKENS correctly against the true cumulative total."""
+
+    def test_run_trips_token_ceiling_using_actual_usage(self):
+        flux = _flux()
+        calls: list[int] = []
+
+        async def mock_call(model, request):
+            calls.append(1)
+            if len(calls) == 1:
+                # Actual usage: 100 + 100 = 200 tokens.
+                return ProviderResult(
+                    text="step one", input_tokens=100, output_tokens=100, usage_source="provider"
+                )
+            # No provider usage -> falls back to char-math estimate. 100
+            # chars -> ~25 estimated tokens; combined with step one's 200
+            # ACTUAL tokens (225 total), this must trip a 220-token ceiling
+            # on the third call — a char-math guess for step one's own
+            # 8-char text ("step one" -> ~2 tokens) would never get there.
+            return ProviderResult(
+                text="x" * 100, input_tokens=None, output_tokens=None, usage_source="estimated"
+            )
+
+        flux._call_model = mock_call  # type: ignore[method-assign]
+
+        exceeded: RunBudgetExceeded | None = None
+
+        async def run_loop():
+            nonlocal exceeded
+            with flux.start_run(
+                max_cost_usd=1000.0, max_steps=1000, max_tokens=220
+            ) as run_id:
+                for _ in range(5):
+                    try:
+                        await flux.complete("go", run_id=run_id, user_id="u_tokens")
+                    except RunBudgetExceeded as exc:
+                        exceeded = exc
+                        return
+
+        rr(run_loop())
+
+        assert exceeded is not None, "220-token ceiling should trip within 5 steps"
+        # Step 1 alone (200 actual tokens) is under the 250 ceiling, so the
+        # ceiling could only have tripped because step 1's ACTUAL 200 tokens
+        # were counted, not a smaller char-math guess for "step one" (an
+        # 8-char string -> ~2 estimated tokens, which would never trip a
+        # 250-token ceiling within 5 short steps at all).
+        assert exceeded.summary["total_tokens"] >= 200
+
+    def test_step_breakdown_reflects_actual_tokens_not_char_math(self):
+        flux = _flux()
+
+        async def mock_call(model, request):
+            return ProviderResult(
+                text="x", input_tokens=500, output_tokens=500, usage_source="provider"
+            )
+
+        flux._call_model = mock_call  # type: ignore[method-assign]
+
+        async def run_loop():
+            with flux.start_run(max_cost_usd=1000.0, max_steps=1000, max_tokens=100) as run_id:
+                with pytest.raises(RunBudgetExceeded) as exc_info:
+                    for _ in range(3):
+                        await flux.complete("go", run_id=run_id, user_id="u_tokens2")
+                return exc_info.value
+
+        exc = rr(run_loop())
+        # "x" alone char-math estimates to ~1 token — only the actual 1000
+        # (500+500) reported by the provider explains tripping a 100-token
+        # ceiling on the very first step.
+        assert exc.summary["step_breakdown"][0]["tokens"] == 1000

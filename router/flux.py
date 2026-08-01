@@ -27,6 +27,7 @@ import os
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import structlog
 from pydantic import SecretStr
@@ -41,9 +42,13 @@ from .classifier import RequestClassifier
 from .config import CASCADE_MAX_ESCALATIONS
 from .context_compressor import ContextCompressor
 from .model_registry import ModelRegistry
+from .provider_caller import compute_actual_cost
 from .routing_engine import RoutingEngine
 from .run_budget import RunLimits
 from .schemas import ModelOption, RoutingDecision, RoutingRequest
+
+if TYPE_CHECKING:
+    from .provider_caller import ProviderResult
 
 # Maps provider name (as used in models.json / ModelOption.provider) to the
 # environment variable users set their key in. Order doesn't matter; lookup
@@ -69,6 +74,26 @@ def _load_keys_from_env() -> dict[str, SecretStr]:
 log = structlog.get_logger(__name__)
 
 
+@dataclass(frozen=True)
+class DispatchUsage:
+    """What was actually billed for one dispatch (or, for cascade, the
+    aggregate across every tier attempted).
+
+    usage_source is "provider" when cost_usd was computed from the
+    provider's own reported usage, "estimated" when it fell back to the
+    pre-dispatch estimate (rescaled to whichever model actually served the
+    request), or "mixed" for a cascade response whose tiers didn't all agree
+    (see Flux._complete_cascade_inner). input_tokens/output_tokens are the
+    provider-reported totals when known, else None — never a guess dressed
+    up as a real count.
+    """
+
+    cost_usd: float
+    usage_source: str  # "provider" | "estimated" | "mixed"
+    input_tokens: int | None
+    output_tokens: int | None
+
+
 @dataclass
 class FluxResponse:
     """
@@ -80,6 +105,10 @@ class FluxResponse:
         decision        — The full RoutingDecision (for inspection / logging).
         fallback_used   — True if the primary model failed and a fallback was used.
         fallback_reason — The error category that triggered fallback, or None.
+        usage           — What was actually billed for this call — see
+                          DispatchUsage. None only if somehow no dispatch
+                          recording occurred (should not happen on any
+                          successful response).
     """
 
     text: str
@@ -87,6 +116,7 @@ class FluxResponse:
     decision: RoutingDecision
     fallback_used: bool = False
     fallback_reason: str | None = None
+    usage: DispatchUsage | None = None
 
 
 class Flux:
@@ -204,7 +234,7 @@ class Flux:
 
         request = self._build_request(prompt, **request_kwargs)
         decision = await self._engine.route(request)
-        text, model, fallback_used, fallback_reason = await self._dispatch_with_fallback(
+        text, model, fallback_used, fallback_reason, usage = await self._dispatch_with_fallback(
             decision, request, max_retries
         )
         return FluxResponse(
@@ -213,6 +243,7 @@ class Flux:
             decision=decision,
             fallback_used=fallback_used,
             fallback_reason=fallback_reason,
+            usage=usage,
         )
 
     async def _dispatch_with_fallback(
@@ -220,7 +251,7 @@ class Flux:
         decision: RoutingDecision,
         request: RoutingRequest,
         max_retries: int = 2,
-    ) -> tuple[str, ModelOption, bool, str | None]:
+    ) -> tuple[str, ModelOption, bool, str | None, DispatchUsage]:
         """
         Call ``decision.chosen_model`` and, on a typed transient failure, walk
         the appropriate fallback chain up to ``max_retries`` further attempts.
@@ -229,7 +260,7 @@ class Flux:
         identical retry, budget-recording, run-budget, and attribution
         behavior — see module docstring.
 
-        Returns (text, model_used, fallback_used, fallback_reason).
+        Returns (text, model_used, fallback_used, fallback_reason, usage).
 
         Raises:
             AuthenticationError — immediately, never retried.
@@ -257,7 +288,7 @@ class Flux:
         decision: RoutingDecision,
         request: RoutingRequest,
         max_retries: int = 2,
-    ) -> tuple[str, ModelOption, bool, str | None]:
+    ) -> tuple[str, ModelOption, bool, str | None, DispatchUsage]:
         models_to_try: list[ModelOption] = []
         if decision.chosen_model:
             models_to_try.append(decision.chosen_model)
@@ -305,7 +336,8 @@ class Flux:
                         continue
 
             try:
-                text = await self._call_model(model, request)
+                result = await self._call_model(model, request)
+                text = result.text
                 log.info(
                     "flux_complete_success",
                     model=model.model_id,
@@ -320,17 +352,30 @@ class Flux:
                 # RoutingEngine._proxy_execute_inner already does for its
                 # (unused-in-production) internal proxy path.
                 self._engine._circuit_breaker.record_success(model.provider)
-                # A fallback may have dispatched a different model than
-                # decision.chosen_model, at a different rate — rescale the
-                # estimate to the model actually called instead of recording
-                # the originally-chosen (possibly much cheaper) model's cost.
-                actual_cost = estimate_step_cost(
-                    model, decision.chosen_model, decision.estimated_cost
-                )
+
+                # Bill from the provider's own reported usage when it gave
+                # us one — actual tokens at the actual model's rates. Only
+                # fall back to the pre-dispatch estimate (rescaled to
+                # whichever model actually served the request, since a
+                # fallback may differ from decision.chosen_model at a
+                # different rate) when the provider didn't report usage.
+                if result.input_tokens is not None and result.output_tokens is not None:
+                    billed_cost = compute_actual_cost(
+                        model, result.input_tokens, result.output_tokens
+                    )
+                    billed_tokens = result.input_tokens + result.output_tokens
+                    usage_source = "provider"
+                else:
+                    billed_cost = estimate_step_cost(
+                        model, decision.chosen_model, decision.estimated_cost
+                    )
+                    billed_tokens = max(len(text) // 4, 1)
+                    usage_source = "estimated"
+
                 # SS#4: record actual plan-level spend after a successful provider call.
                 self._engine._budget.record_spend(
                     user_id=request.user_id,
-                    amount=actual_cost,
+                    amount=billed_cost,
                     model_id=model.model_id,
                     correlation_id=request.correlation_id,
                     task_type="unknown",
@@ -339,20 +384,21 @@ class Flux:
                 if request.max_daily_cost is not None:
                     self._engine._daily_budget.record_spend(
                         customer_id=request.customer_id or request.user_id,
-                        amount=actual_cost,
+                        amount=billed_cost,
                         model_id=model.model_id,
                         correlation_id=request.correlation_id,
                         task_type="unknown",
                     )
                 # Task 3: record this step against the run's cumulative budget so
                 # the NEXT call to complete(run_id=...) sees it in check_before_dispatch().
-                # Token count is estimated (~4 chars/token) since _call_model returns text only.
+                # billed_tokens is the provider's own reported total when
+                # known, else the ~4-chars/token estimate.
                 if request.run_id:
                     self._engine._run_budget.record_step(
                         request.run_id,
                         model.model_id,
-                        actual_cost,
-                        max(len(text) // 4, 1),
+                        billed_cost,
+                        billed_tokens,
                         tenant_id=request.tenant_id,
                     )
                 # Task 7: cost attribution — costs/metadata only, never `text`.
@@ -362,9 +408,18 @@ class Flux:
                     task_type=decision.task_type,
                     step_type=decision.step_type,
                     model_id=model.model_id,
-                    cost_usd=actual_cost,
+                    cost_usd=billed_cost,
+                    usage_source=usage_source,
+                    input_tokens=result.input_tokens,
+                    output_tokens=result.output_tokens,
                 )
-                return text, model, attempts > 0, last_error
+                usage = DispatchUsage(
+                    cost_usd=billed_cost,
+                    usage_source=usage_source,
+                    input_tokens=result.input_tokens,
+                    output_tokens=result.output_tokens,
+                )
+                return text, model, attempts > 0, last_error, usage
 
             except err.AuthenticationError:
                 # Key is wrong — retrying won't help, but it's still evidence
@@ -469,6 +524,10 @@ class Flux:
         tier_ladder = tier_ladder[: CASCADE_MAX_ESCALATIONS + 1]
 
         step_breakdown: list[dict] = []
+        # Parallel to step_breakdown (same index, same length): the
+        # ProviderResult for a tier that got a response, None for a tier
+        # whose call raised FluxAPIError outright (no text, no usage).
+        step_provider_results: list[ProviderResult | None] = []
         last_text = ""
         last_model = decision.chosen_model
         last_reason = "no attempts succeeded"
@@ -479,7 +538,7 @@ class Flux:
 
         for model in tier_ladder:
             try:
-                text = await self._call_model(model, request)
+                provider_result = await self._call_model(model, request)
             except err.AuthenticationError:
                 # See _dispatch_with_fallback_inner's equivalent comment —
                 # still evidence against the provider for circuit-breaker
@@ -491,17 +550,24 @@ class Flux:
                 step_breakdown.append(
                     {"model_id": model.model_id, "verified": False, "reason": str(exc)}
                 )
+                step_provider_results.append(None)
                 last_reason = str(exc)
                 continue
 
             self._engine._circuit_breaker.record_success(model.provider)
             got_any_response = True
-            result = verify_response(text, request, cascade_verifier)
+            text = provider_result.text
+            verify_result = verify_response(text, request, cascade_verifier)
             step_breakdown.append(
-                {"model_id": model.model_id, "verified": result.passed, "reason": result.reason}
+                {
+                    "model_id": model.model_id,
+                    "verified": verify_result.passed,
+                    "reason": verify_result.reason,
+                }
             )
-            last_text, last_model, last_reason = text, model, result.reason
-            if result.passed:
+            step_provider_results.append(provider_result)
+            last_text, last_model, last_reason = text, model, verify_result.reason
+            if verify_result.passed:
                 passed = True
                 break
 
@@ -520,11 +586,41 @@ class Flux:
         # cascade traffic blow through budgets that non-cascade traffic
         # can't. Attribution already summed every attempt (below); every
         # other tracker now uses the same total.
-        per_tier_costs = [
-            estimate_step_cost(tier_ladder[i], decision.chosen_model, decision.estimated_cost)
-            for i in range(len(step_breakdown))
-        ]
+        #
+        # Per tier: bill from the provider's own reported usage when the
+        # call succeeded and reported it; fall back to the rescaled estimate
+        # otherwise (a failed tier has no text/usage at all; a succeeded one
+        # that didn't report usage still has text, so char-math tokens beat
+        # nothing).
+        per_tier_costs: list[float] = []
+        per_tier_tokens: list[int] = []
+        per_tier_sources: list[str] = []
+        for i in range(len(step_breakdown)):
+            pr = step_provider_results[i]
+            if pr is not None and pr.input_tokens is not None and pr.output_tokens is not None:
+                per_tier_costs.append(
+                    compute_actual_cost(tier_ladder[i], pr.input_tokens, pr.output_tokens)
+                )
+                per_tier_tokens.append(pr.input_tokens + pr.output_tokens)
+                per_tier_sources.append("provider")
+            elif pr is not None:
+                per_tier_costs.append(
+                    estimate_step_cost(
+                        tier_ladder[i], decision.chosen_model, decision.estimated_cost
+                    )
+                )
+                per_tier_tokens.append(max(len(pr.text) // 4, 1))
+                per_tier_sources.append("estimated")
+            else:
+                per_tier_costs.append(
+                    estimate_step_cost(
+                        tier_ladder[i], decision.chosen_model, decision.estimated_cost
+                    )
+                )
+                per_tier_tokens.append(0)
+                per_tier_sources.append("estimated")
         total_actual_cost = sum(per_tier_costs)
+        total_tokens = sum(per_tier_tokens)
         self._engine._budget.record_spend(
             user_id=request.user_id,
             amount=total_actual_cost,
@@ -544,19 +640,21 @@ class Flux:
         # Task 3: run-budget still gets ONE step recorded per complete() call
         # (matches the non-cascade path's convention, and the ONE reservation
         # check_before_dispatch() made for this call) but now carries the
-        # TOTAL cost of every tier actually dispatched, not just the last.
+        # TOTAL cost/tokens of every tier actually dispatched, not just the
+        # last — RUN_MAX_TOKENS is enforced against actual usage where known.
         if request.run_id:
             self._engine._run_budget.record_step(
                 request.run_id,
                 last_model.model_id,
                 total_actual_cost,
-                max(len(last_text) // 4, 1),
+                max(total_tokens, 1),
                 tenant_id=request.tenant_id,
             )
 
         # Task 7: attribution gets ONE record per tier actually dispatched —
         # cascade's real economics require seeing every attempt.
         for i in range(len(step_breakdown)):
+            pr = step_provider_results[i]
             self._engine._attribution.record(
                 tenant_id=request.tenant_id,
                 run_id=request.run_id,
@@ -564,6 +662,9 @@ class Flux:
                 step_type=decision.step_type,
                 model_id=tier_ladder[i].model_id,
                 cost_usd=per_tier_costs[i],
+                usage_source=per_tier_sources[i],
+                input_tokens=pr.input_tokens if pr is not None else None,
+                output_tokens=pr.output_tokens if pr is not None else None,
             )
 
         # cascade_net_savings: actual cost of every tier PAID FOR (all
@@ -583,12 +684,36 @@ class Flux:
             passed=passed,
             net_savings=decision.cascade_net_savings,
         )
+        distinct_sources = set(per_tier_sources)
+        usage = DispatchUsage(
+            cost_usd=total_actual_cost,
+            usage_source=(
+                distinct_sources.pop() if len(distinct_sources) == 1 else "mixed"
+            ),
+            input_tokens=(
+                sum(
+                    pr.input_tokens
+                    for pr in step_provider_results
+                    if pr and pr.input_tokens is not None
+                )
+                or None
+            ),
+            output_tokens=(
+                sum(
+                    pr.output_tokens
+                    for pr in step_provider_results
+                    if pr and pr.output_tokens is not None
+                )
+                or None
+            ),
+        )
         return FluxResponse(
             text=last_text,
             model=last_model,
             decision=decision,
             fallback_used=decision.cascade_attempts > 1,
             fallback_reason=None if passed else last_reason,
+            usage=usage,
         )
 
     # ── Internal helpers ────────────────────────────────────────────────────
@@ -604,15 +729,19 @@ class Flux:
         secret = self._provider_keys.get(provider) or request.provider_api_key or self._api_key
         return secret.get_secret_value() if secret is not None else ""
 
-    async def _call_model(self, model: ModelOption, request: RoutingRequest) -> str:
+    async def _call_model(self, model: ModelOption, request: RoutingRequest) -> ProviderResult:
         """
-        Call the provider API for ``model`` and return the response text.
+        Call the provider API for ``model`` and return a ProviderResult
+        (response text plus actual token usage, when the provider reported
+        it — see provider_caller.ProviderResult).
 
         Translates ProviderCallError into the appropriate typed Flux error so
         complete() can dispatch to the right fallback chain.
 
         This method is intentionally small and mockable — patch it in tests to
-        simulate any failure scenario without real HTTP calls.
+        simulate any failure scenario without real HTTP calls. Return a
+        ProviderResult from the mock (not a bare str) to match the real
+        signature.
         """
         from .provider_caller import ProviderCallError, call_provider
 

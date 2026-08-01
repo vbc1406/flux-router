@@ -42,7 +42,15 @@ def _engine() -> RoutingEngine:
 
 
 def _req(prompt: str, **kw: Any) -> RoutingRequest:
-    defaults: dict[str, Any] = {"user_id": "u_step_type", "plan": "business_plan"}
+    # exploration_rate=0.0: without this, A/B exploration can randomly route
+    # either call in a same-prompt tier-comparison test to a cheaper tier,
+    # making the comparison flaky depending on accumulated global random
+    # state across the whole test run — not just this file's own tests.
+    defaults: dict[str, Any] = {
+        "user_id": "u_step_type",
+        "plan": "business_plan",
+        "exploration_rate": 0.0,
+    }
     defaults.update(kw)
     return RoutingRequest(raw_prompt=prompt, correlation_id=str(uuid.uuid4()), **defaults)
 

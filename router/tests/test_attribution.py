@@ -25,6 +25,7 @@ from router.classifier import RequestClassifier
 from router.context_compressor import ContextCompressor
 from router.flux import Flux
 from router.model_registry import ModelRegistry
+from router.provider_caller import ProviderResult
 from router.routing_engine import RoutingEngine
 
 
@@ -45,6 +46,12 @@ def _engine() -> RoutingEngine:
 
 def _flux() -> Flux:
     return Flux(_engine(), api_key="test-key")
+
+
+def _pr(text: str) -> ProviderResult:
+    return ProviderResult(
+        text=text, input_tokens=None, output_tokens=None, usage_source="estimated"
+    )
 
 
 class TestSqliteUsageStore:
@@ -124,7 +131,82 @@ class TestSqliteUsageStore:
             "model_id",
             "cost_usd",
             "timestamp",
+            "usage_source",
+            "input_tokens",
+            "output_tokens",
         }
+
+
+class TestSqliteUsageStoreMigration:
+    """Regression: an on-disk usage.db predating usage_source/input_tokens/
+    output_tokens must open cleanly and migrate in place — see
+    MIGRATIONS.md's "Attribution Usage Database" section."""
+
+    def _make_old_schema_db(self, path: str) -> None:
+        import sqlite3
+
+        conn = sqlite3.connect(path)
+        conn.execute(
+            """
+            CREATE TABLE usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id TEXT,
+                run_id TEXT,
+                task_type TEXT,
+                step_type TEXT,
+                model_id TEXT NOT NULL,
+                cost_usd REAL NOT NULL,
+                timestamp REAL NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO usage (tenant_id, run_id, task_type, step_type, model_id, "
+            "cost_usd, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("old-tenant", "old-run", "code_generation", "plan", "gpt-4o", 0.05, 1000.0),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_old_schema_file_opens_and_migrates_cleanly(self, tmp_path):
+        db_path = str(tmp_path / "usage.db")
+        self._make_old_schema_db(db_path)
+
+        store = SqliteUsageStore(db_path)  # must not raise
+        records = store.query(tenant_id="old-tenant")
+        assert len(records) == 1
+        record = records[0]
+        # A pre-migration row has no usage_source column at insert time, but
+        # the ADD COLUMN ... DEFAULT 'estimated' backfills it automatically.
+        assert record.usage_source == "estimated"
+        assert record.input_tokens is None
+        assert record.output_tokens is None
+        assert record.cost_usd == 0.05
+
+    def test_new_rows_after_migration_carry_actual_usage(self, tmp_path):
+        db_path = str(tmp_path / "usage.db")
+        self._make_old_schema_db(db_path)
+
+        store = SqliteUsageStore(db_path)
+        store.record(
+            UsageRecord(
+                "new-tenant", "new-run", "code_generation", "plan", "gpt-4o", 0.02, 2000.0,
+                usage_source="provider", input_tokens=100, output_tokens=50,
+            )
+        )
+        records = store.query(tenant_id="new-tenant")
+        assert len(records) == 1
+        assert records[0].usage_source == "provider"
+        assert records[0].input_tokens == 100
+        assert records[0].output_tokens == 50
+
+    def test_migration_is_idempotent_across_reopen(self, tmp_path):
+        db_path = str(tmp_path / "usage.db")
+        self._make_old_schema_db(db_path)
+
+        SqliteUsageStore(db_path)  # first open: migrates
+        store2 = SqliteUsageStore(db_path)  # second open: must not raise (columns already exist)
+        assert len(store2.query()) == 1
 
 
 class TestCostAttribution:
@@ -227,7 +309,7 @@ class TestCostAttribution:
 class TestAttributionWiredIntoFluxComplete:
     def test_complete_records_usage(self):
         flux = _flux()
-        flux._call_model = AsyncMock(return_value="ok")  # type: ignore[method-assign]
+        flux._call_model = AsyncMock(return_value=_pr("ok"))  # type: ignore[method-assign]
         rr(flux.complete("hi", user_id="u1", tenant_id="acme", exploration_rate=0.0))
 
         records, total = flux._engine._attribution.usage(tenant_id="acme")
@@ -236,7 +318,7 @@ class TestAttributionWiredIntoFluxComplete:
 
     def test_no_tenant_id_still_records_under_unknown(self):
         flux = _flux()
-        flux._call_model = AsyncMock(return_value="ok")  # type: ignore[method-assign]
+        flux._call_model = AsyncMock(return_value=_pr("ok"))  # type: ignore[method-assign]
         rr(flux.complete("hi", user_id="u1", exploration_rate=0.0))
         body = flux._engine._attribution.render_prometheus()
         assert 'tenant_id="unknown"' in body

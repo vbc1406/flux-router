@@ -48,10 +48,17 @@ from router.context_compressor import ContextCompressor
 from router.errors import ProviderDownError
 from router.flux import Flux
 from router.model_registry import ModelRegistry
+from router.provider_caller import ProviderResult
 from router.routing_engine import RoutingEngine
 from router.schemas import RoutingRequest
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _pr(text: str) -> ProviderResult:
+    return ProviderResult(
+        text=text, input_tokens=None, output_tokens=None, usage_source="estimated"
+    )
 
 
 def _engine() -> RoutingEngine:
@@ -313,7 +320,7 @@ class TestCircuitBreakerWiredIntoFluxDispatch:
         async def mock_call(model, request):
             if model.provider == self.target_provider:
                 raise ProviderDownError("503 from provider")
-            return "ok"
+            return _pr("ok")
 
         self.flux._call_model = mock_call  # type: ignore[method-assign]
 
@@ -334,7 +341,7 @@ class TestCircuitBreakerWiredIntoFluxDispatch:
         async def mock_call(model, request):
             if model.provider == self.target_provider:
                 raise ProviderDownError("503 from provider")
-            return "ok"
+            return _pr("ok")
 
         self.flux._call_model = mock_call  # type: ignore[method-assign]
         for _ in range(5):
@@ -355,7 +362,7 @@ class TestCircuitBreakerWiredIntoFluxDispatch:
 
     def test_success_records_on_the_real_circuit_breaker(self):
         async def mock_call(model, request):
-            return "ok"
+            return _pr("ok")
 
         self.flux._call_model = mock_call  # type: ignore[method-assign]
         self.engine._circuit_breaker.record_failure(self.target_provider)

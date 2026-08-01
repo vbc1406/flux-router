@@ -1166,6 +1166,37 @@ class TestProxyMode:
         assert hasattr(d, "proxy_response")
         assert hasattr(d, "proxy_model_used")
 
+    def test_proxy_mode_successful_call_records_provider_usage(self, monkeypatch):
+        """Regression: RoutingEngine._proxy_execute_inner treated
+        call_provider()'s return value as a bare string (len(response),
+        decision.proxy_response = response) — call_provider now returns a
+        ProviderResult, so a successful proxy-mode dispatch must extract
+        .text for the response and bill from .input_tokens/.output_tokens
+        when the (fake, here) provider reports them."""
+        import router.provider_caller as provider_caller_module
+        from router.provider_caller import ProviderResult
+
+        async def fake_call_provider(model, request, api_key):
+            return ProviderResult(
+                text="4", input_tokens=20, output_tokens=1, usage_source="provider"
+            )
+
+        # _proxy_execute_inner does a LOCAL `from .provider_caller import
+        # call_provider` at call time, so patching the source module's
+        # attribute (not routing_engine's namespace, which never imports it
+        # at module level) is what actually takes effect.
+        monkeypatch.setattr(provider_caller_module, "call_provider", fake_call_provider)
+        engine = _engine()
+        d = rr(engine.route(_req("What is 2+2?", mode="proxy", provider_api_key="sk-test")))
+        assert d.proxy_response == "4"
+        assert d.proxy_model_used is not None
+
+        records, _ = engine._attribution.usage(limit=5)
+        assert len(records) == 1
+        assert records[0].usage_source == "provider"
+        assert records[0].input_tokens == 20
+        assert records[0].output_tokens == 1
+
     def test_invalid_mode_raises(self):
         with pytest.raises(ValueError):
             rr(_engine().route(_req("test", mode="turbo")))

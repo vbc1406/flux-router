@@ -155,6 +155,46 @@ same enforcement without any Python. See `examples/agent_loop.py`.
 
 ---
 
+## Cost attribution: actual vs. estimated
+
+Every routing decision carries a pre-dispatch cost **estimate**
+(`RoutingDecision.estimated_cost`) — Flux has to know a request's likely
+cost before it picks a model and before it's dispatched, so budget checks
+and run-budget reservations are estimates by definition and always will be.
+
+What gets **recorded** as spend after dispatch is a different matter. Flux
+uses the provider's own reported token usage whenever the provider returns
+it (OpenAI/Groq/Mistral's `usage` object on non-streaming responses and the
+`stream_options.include_usage` chunk on streaming ones; Anthropic's
+`usage`; Google's `usageMetadata`) — the cost recorded to `BudgetTracker`,
+`DailyBudgetTracker`, run-budget steps, and `/v1/usage`/`/metrics` is
+computed from those actual tokens at the dispatched model's rates
+(`provider_caller.compute_actual_cost`), not the pre-dispatch guess. Only
+when a provider genuinely doesn't report usage (or reports something
+untrustworthy — zero, negative, or the wrong type) does recording fall back
+to the pre-dispatch estimate.
+
+Every recorded row — `GET /v1/usage`, the `flux_cost_usd_total` /
+`flux_actual_cost_usd_total` Prometheus counters, and the non-streaming
+response's `usage` block / `x-flux-usage-source` header — is labeled
+`usage_source: "provider"` or `"estimated"` so you always know which one
+you're looking at. `flux_cost_usd_total` is every recorded dollar, actual or
+estimated; `flux_actual_cost_usd_total` is the subset backed by real
+provider usage — the gap between the two is your exposure to estimate drift.
+
+```python
+resp = await flux.complete("Explain backpropagation")
+print(resp.usage.usage_source)   # "provider" or "estimated"
+print(resp.usage.cost_usd)       # what was actually billed
+print(resp.usage.input_tokens, resp.usage.output_tokens)  # None if estimated
+```
+
+See [MIGRATIONS.md](./MIGRATIONS.md) for the `usage` table's `usage_source`/
+`input_tokens`/`output_tokens` columns and how an existing on-disk
+`usage.db` migrates automatically.
+
+---
+
 ## How Flux compares
 
 Flux overlaps with LiteLLM, OpenRouter, and similar tools. The differences that matter:

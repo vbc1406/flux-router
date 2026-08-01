@@ -56,7 +56,14 @@ def _escape_label(value: str) -> str:
 
 @dataclass
 class UsageRecord:
-    """One recorded spend event. Costs and metadata only — never prompt/response text."""
+    """One recorded spend event. Costs and metadata only — never prompt/response text.
+
+    usage_source: "provider" when cost_usd/input_tokens/output_tokens were
+    computed from the provider's own reported usage; "estimated" when the
+    provider didn't report usage (or the call failed) and cost_usd falls
+    back to the pre-dispatch estimate. input_tokens/output_tokens are only
+    ever populated ("provider") or None ("estimated") — never a guess.
+    """
 
     tenant_id: str | None
     run_id: str | None
@@ -65,6 +72,9 @@ class UsageRecord:
     model_id: str
     cost_usd: float
     timestamp: float  # unix epoch seconds
+    usage_source: str = "estimated"
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 class UsageStore(Protocol):
@@ -102,6 +112,15 @@ class SqliteUsageStore:
     the same.
     """
 
+    # Columns added after the original schema — see _migrate_schema(). Kept
+    # as a single source of truth for both the migration check and the
+    # INSERT statement below.
+    _MIGRATED_COLUMNS: tuple[tuple[str, str], ...] = (
+        ("usage_source", "TEXT NOT NULL DEFAULT 'estimated'"),
+        ("input_tokens", "INTEGER"),
+        ("output_tokens", "INTEGER"),
+    )
+
     def __init__(self, db_path: str = ATTRIBUTION_DB_PATH) -> None:
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
@@ -120,10 +139,14 @@ class SqliteUsageStore:
                     step_type TEXT,
                     model_id TEXT NOT NULL,
                     cost_usd REAL NOT NULL,
-                    timestamp REAL NOT NULL
+                    timestamp REAL NOT NULL,
+                    usage_source TEXT NOT NULL DEFAULT 'estimated',
+                    input_tokens INTEGER,
+                    output_tokens INTEGER
                 )
                 """
             )
+            self._migrate_schema()
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_tenant ON usage(tenant_id)")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_run ON usage(run_id)")
             self._conn.commit()
@@ -136,6 +159,20 @@ class SqliteUsageStore:
         )
         self._writer_thread.start()
 
+    def _migrate_schema(self) -> None:
+        """Add usage_source/input_tokens/output_tokens to a pre-existing
+        on-disk usage table that predates them. Idempotent and safe to run
+        on every startup: CREATE TABLE IF NOT EXISTS above already gives a
+        brand-new database these columns directly, so PRAGMA table_info()
+        here only ever finds work to do against an OLDER file. Must be
+        called with self._lock held. Old rows read back with
+        usage_source="estimated" and NULL token counts — see MIGRATIONS.md.
+        """
+        existing = {row[1] for row in self._conn.execute("PRAGMA table_info(usage)").fetchall()}
+        for column, ddl_type in self._MIGRATED_COLUMNS:
+            if column not in existing:
+                self._conn.execute(f"ALTER TABLE usage ADD COLUMN {column} {ddl_type}")
+
     def _writer_loop(self) -> None:
         while True:
             rec = self._queue.get()
@@ -143,8 +180,9 @@ class SqliteUsageStore:
                 with self._lock:
                     self._conn.execute(
                         "INSERT INTO usage "
-                        "(tenant_id, run_id, task_type, step_type, model_id, cost_usd, timestamp) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        "(tenant_id, run_id, task_type, step_type, model_id, cost_usd, "
+                        "timestamp, usage_source, input_tokens, output_tokens) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             rec.tenant_id,
                             rec.run_id,
@@ -153,6 +191,9 @@ class SqliteUsageStore:
                             rec.model_id,
                             rec.cost_usd,
                             rec.timestamp,
+                            rec.usage_source,
+                            rec.input_tokens,
+                            rec.output_tokens,
                         ),
                     )
                     self._conn.commit()
@@ -196,7 +237,8 @@ class SqliteUsageStore:
         where, params = self._where(tenant_id, run_id)
         with self._lock:
             cur = self._conn.execute(
-                f"SELECT tenant_id, run_id, task_type, step_type, model_id, cost_usd, timestamp "  # noqa: S608
+                f"SELECT tenant_id, run_id, task_type, step_type, model_id, cost_usd, timestamp, "  # noqa: S608
+                f"usage_source, input_tokens, output_tokens "
                 f"FROM usage {where} ORDER BY id DESC LIMIT ? OFFSET ?",
                 (*params, limit, offset),
             )
@@ -228,12 +270,18 @@ class CostAttribution:
         self._store: UsageStore = store or SqliteUsageStore()
         self._lock = threading.Lock()
         self._cost_by_label: dict[tuple[str, str], float] = defaultdict(float)
+        # Subset of _cost_by_label's totals where usage_source=="provider" —
+        # a separate counter (flux_actual_cost_usd_total) so operators can
+        # see actual-vs-estimated drift instead of just a blended total. The
+        # existing flux_cost_usd_total counter's name and semantics (every
+        # recorded dollar, actual or estimated) are unchanged.
+        self._actual_cost_by_label: dict[tuple[str, str], float] = defaultdict(float)
         self._run_steps_by_tenant: dict[str, int] = defaultdict(int)
         self._budget_exceeded_by_tenant: dict[str, int] = defaultdict(int)
-        # Cardinality cap is shared across ALL three counters (cost, run
-        # steps, budget-exceeded) — capping only flux_cost_usd_total would
-        # still let a hostile/buggy caller blow up flux_run_steps by minting
-        # a fresh tenant_id per request.
+        # Cardinality cap is shared across ALL counters (cost, actual cost,
+        # run steps, budget-exceeded) — capping only flux_cost_usd_total
+        # would still let a hostile/buggy caller blow up flux_run_steps by
+        # minting a fresh tenant_id per request.
         self._known_tenants: set[str] = set()
 
     def _tenant_for(self, tenant_id: str | None) -> str:
@@ -258,10 +306,29 @@ class CostAttribution:
         step_type: str,
         model_id: str,
         cost_usd: float,
+        usage_source: str = "estimated",
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
     ) -> None:
-        """Record one completed dispatch. Never call with prompt/response text."""
+        """Record one completed dispatch. Never call with prompt/response text.
+
+        usage_source/input_tokens/output_tokens: pass through from
+        ProviderResult when the provider reported actual usage; leave at the
+        defaults ("estimated", None, None) when it didn't. See UsageRecord.
+        """
         self._store.record(
-            UsageRecord(tenant_id, run_id, task_type, step_type, model_id, cost_usd, time.time())
+            UsageRecord(
+                tenant_id,
+                run_id,
+                task_type,
+                step_type,
+                model_id,
+                cost_usd,
+                time.time(),
+                usage_source,
+                input_tokens,
+                output_tokens,
+            )
         )
         with self._lock:
             tenant = self._tenant_for(tenant_id)
@@ -271,6 +338,8 @@ class CostAttribution:
                 else (tenant, model_id)
             )
             self._cost_by_label[label] += cost_usd
+            if usage_source == "provider":
+                self._actual_cost_by_label[label] += cost_usd
             self._run_steps_by_tenant[tenant] += 1
 
     def record_budget_exceeded(self, tenant_id: str | None) -> None:
@@ -300,7 +369,8 @@ class CostAttribution:
         tenant's — see server.py::metrics().
         """
         lines = [
-            "# HELP flux_cost_usd_total Total estimated cost in USD, labelled by tenant and model.",
+            "# HELP flux_cost_usd_total Total recorded cost in USD (actual or "
+            "estimated), labelled by tenant and model.",
             "# TYPE flux_cost_usd_total counter",
         ]
         with self._lock:
@@ -309,6 +379,19 @@ class CostAttribution:
                     continue
                 lines.append(
                     f'flux_cost_usd_total{{tenant_id="{_escape_label(tenant)}",'
+                    f'model_id="{_escape_label(model)}"}} {cost:.6f}'
+                )
+            lines += [
+                "# HELP flux_actual_cost_usd_total Total cost in USD computed from "
+                "provider-reported usage only (excludes estimated-fallback spend), "
+                "labelled by tenant and model.",
+                "# TYPE flux_actual_cost_usd_total counter",
+            ]
+            for (tenant, model), cost in sorted(self._actual_cost_by_label.items()):
+                if tenant_filter is not None and tenant != tenant_filter:
+                    continue
+                lines.append(
+                    f'flux_actual_cost_usd_total{{tenant_id="{_escape_label(tenant)}",'
                     f'model_id="{_escape_label(model)}"}} {cost:.6f}'
                 )
             lines += [

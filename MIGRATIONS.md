@@ -125,6 +125,57 @@ When a provider changes its API format (new required field, renamed parameter):
 
 ---
 
+## Attribution Usage Database (`router/attribution.py::SqliteUsageStore`)
+
+The `usage` table (SQLite file at `config.ATTRIBUTION_DB_PATH`, or `:memory:`
+by default) records cost/metadata only — never prompt or completion text
+(see SECURITY_ARCHITECTURE.md). It gained three columns when actual
+provider-reported usage recording was added:
+
+| Column | Type | Added | Meaning |
+|---|---|---|---|
+| `usage_source` | `TEXT NOT NULL DEFAULT 'estimated'` | actual-usage recording | `"provider"` when `cost_usd`/tokens came from the provider's own reported usage; `"estimated"` when it fell back to the pre-dispatch estimate |
+| `input_tokens` | `INTEGER` (nullable) | actual-usage recording | Provider-reported input tokens, or `NULL` when `usage_source="estimated"` |
+| `output_tokens` | `INTEGER` (nullable) | actual-usage recording | Provider-reported output tokens, or `NULL` when `usage_source="estimated"` |
+
+### How Auto-Migration Works
+
+`SqliteUsageStore.__init__()` always runs `CREATE TABLE IF NOT EXISTS usage`
+with the full current schema (so a brand-new database gets these columns
+directly), then calls `_migrate_schema()`, which runs `PRAGMA table_info(usage)`
+and issues `ALTER TABLE usage ADD COLUMN ...` for any of the three columns
+missing from an existing on-disk file predating them. This runs on every
+startup and is a no-op once the file is current — safe to leave in place
+indefinitely rather than gating it behind a version check.
+
+Because `usage_source` has a `NOT NULL DEFAULT 'estimated'`, SQLite backfills
+every pre-existing row with that value automatically as part of the
+`ALTER TABLE`. `input_tokens`/`output_tokens` have no default, so old rows
+read back as `NULL` (surfaced as `None` in `UsageRecord`, `null` in
+`GET /v1/usage` JSON) — this is expected and requires no cleanup: a row from
+before this migration genuinely never had actual usage recorded.
+
+No manual migration script or downtime is required. `GET /v1/usage` and
+`GET /metrics` (`flux_actual_cost_usd_total`, additive alongside the
+unchanged `flux_cost_usd_total`) both handle a mix of pre- and
+post-migration rows transparently.
+
+### How to Add Another Column to This Table
+
+1. Add the column to the `CREATE TABLE IF NOT EXISTS usage (...)` DDL in
+   `SqliteUsageStore.__init__` (so new databases get it directly).
+2. Add `(column_name, "SQL_TYPE ...")` to `SqliteUsageStore._MIGRATED_COLUMNS`
+   (so existing on-disk databases get it via `ALTER TABLE`).
+3. Add the field to `UsageRecord`, with a default so old callers that
+   construct it positionally/with fewer fields keep working.
+4. Update the `INSERT INTO usage (...)` column list and `SELECT` in `query()`.
+5. Add a test mirroring `TestSqliteUsageStoreMigration` in
+   `test_attribution.py` — write a row with the OLD schema to a temp on-disk
+   file, reopen it with `SqliteUsageStore`, and assert the new column reads
+   back with its default.
+
+---
+
 ## Testing Migrations Safely
 
 Before deploying a migration in production:

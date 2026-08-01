@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Record actual provider-reported token usage/cost (`usage_source`, `input_tokens`, `output_tokens`) instead of always billing the pre-dispatch estimate — OpenAI/Groq/Mistral `usage`, Anthropic `usage`, Google `usageMetadata`, plus the OpenAI streaming `stream_options.include_usage` chunk. Falls back to the estimate only when a provider genuinely doesn't report usage. Threaded through `BudgetTracker`, `DailyBudgetTracker`, run-budget steps, `GET /v1/usage`, and a new `flux_actual_cost_usd_total` Prometheus counter (`flux_cost_usd_total` unchanged). `FluxResponse.usage` (`DispatchUsage`) exposes it on the SDK path; `x-flux-usage-source` / `x-flux-actual-cost-usd` response headers on the HTTP proxy. See the README "Cost attribution" section and MIGRATIONS.md.
 - Cost-vs-quality eval harness (`python -m router.evals`, `make evals`): runs GSM8K / MMLU / HumanEval / MT-Bench through the flux/premium/cheapest/mid strategies and reports cost-savings % and quality-retention % vs an always-premium baseline. Hybrid grading (objective + LLM-as-judge), offline simulated mode by default with a `--live` path; see [EVALS.md](./EVALS.md). Optional `flux-router[evals]` extra pulls the real datasets.
 - Interactive terminal chat example (`examples/chat.py`)
 - Per-provider API key loading via env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`)

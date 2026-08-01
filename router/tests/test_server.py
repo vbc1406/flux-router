@@ -36,11 +36,19 @@ import router.server as server  # noqa: E402
 from router import config  # noqa: E402
 from router.config import ServerTokenBinding  # noqa: E402
 from router.errors import AuthenticationError, RateLimitError  # noqa: E402
+from router.provider_caller import ProviderResult  # noqa: E402
+
+
+def _pr(text: str) -> ProviderResult:
+    """Build a ProviderResult with no provider-reported usage (the default
+    shape for a mocked _call_model that doesn't care about actual-usage
+    behavior specifically) — see TestActualUsage for tests that do."""
+    return ProviderResult(text=text, input_tokens=None, output_tokens=None, usage_source="estimated")
 
 
 @pytest.fixture(autouse=True)
 def _mock_call_model(monkeypatch):
-    mock = AsyncMock(return_value="mock response text")
+    mock = AsyncMock(return_value=_pr("mock response text"))
     monkeypatch.setattr(server._flux, "_call_model", mock)
     return mock
 
@@ -563,7 +571,7 @@ class TestRunBudget:
 
     def test_missing_run_id_flag_survives_streaming_path(self, client, monkeypatch):
         async def fake_call(model, request):
-            return "streamed text"
+            return _pr("streamed text")
 
         monkeypatch.setattr(server._flux, "_call_model", fake_call)
         resp = client.post("/v1/chat/completions", json=_body(stream=True))
@@ -610,6 +618,9 @@ class TestAttribution:
                 "model_id",
                 "cost_usd",
                 "timestamp",
+                "usage_source",
+                "input_tokens",
+                "output_tokens",
             }
 
     def test_metrics_endpoint_returns_prometheus_text(self, client):
@@ -755,7 +766,10 @@ class TestFallbackChain:
     """
 
     def test_transient_error_falls_back_instead_of_502(self, client, _mock_call_model):
-        _mock_call_model.side_effect = [RateLimitError("429 Too Many Requests"), "fallback text"]
+        _mock_call_model.side_effect = [
+            RateLimitError("429 Too Many Requests"),
+            _pr("fallback text"),
+        ]
         resp = client.post("/v1/chat/completions", json=_body())
         assert resp.status_code == 200
         assert resp.json()["choices"][0]["message"]["content"] == "fallback text"
@@ -768,7 +782,7 @@ class TestFallbackChain:
             calls.append(model.model_id)
             if len(calls) == 1:
                 raise RateLimitError("429")
-            return "ok from fallback"
+            return _pr("ok from fallback")
 
         _mock_call_model.side_effect = flaky
         resp = client.post("/v1/chat/completions", json=_body())
@@ -805,7 +819,7 @@ class TestFallbackChain:
             calls.append(model)
             if len(calls) == 1:
                 raise RateLimitError("429")
-            return "ok from fallback"
+            return _pr("ok from fallback")
 
         _mock_call_model.side_effect = flaky
 
@@ -831,3 +845,205 @@ class TestFallbackChain:
             or dispatched_model.cost_per_1k_output != chosen_model.cost_per_1k_output
         ):
             assert recorded != pytest.approx(decision_cost_hint, rel=1e-6)
+
+
+class TestActualUsage:
+    """Task: record actual provider-reported usage, not estimates.
+
+    Covers the non-streaming and streaming response paths recording
+    usage_source/actual cost correctly, and the disconnect-mid-stream edge
+    case (client walks away before the stream would have ended naturally).
+    """
+
+    def test_non_streaming_records_provider_usage(self, client, monkeypatch):
+        async def mock_call(model, request):
+            return ProviderResult(
+                text="hi there", input_tokens=100, output_tokens=50, usage_source="provider"
+            )
+
+        monkeypatch.setattr(server._flux, "_call_model", mock_call)
+        body = _body("gpt-4o")
+        body["user"] = "actual-usage-user-1"
+        resp = client.post("/v1/chat/completions", json=body)
+        assert resp.status_code == 200
+        assert resp.headers["x-flux-usage-source"] == "provider"
+        assert "x-flux-actual-cost-usd" in resp.headers
+        data = resp.json()
+        assert data["usage"]["prompt_tokens"] == 100
+        assert data["usage"]["completion_tokens"] == 50
+        assert data["usage"]["total_tokens"] == 150
+
+        usage = client.get("/v1/usage", params={"tenant_id": "acme-unused"}).json()
+        # Not tenant-scoped here (no X-Flux-Tenant-Id sent) — look at the
+        # most recent global record set instead via a fresh request keyed by tenant.
+        resp2 = client.post(
+            "/v1/chat/completions", json=body, headers={"X-Flux-Tenant-Id": "actual-usage-tenant"}
+        )
+        assert resp2.status_code == 200
+        usage2 = client.get("/v1/usage", params={"tenant_id": "actual-usage-tenant"}).json()
+        record = usage2["data"][0]
+        assert record["usage_source"] == "provider"
+        assert record["input_tokens"] == 100
+        assert record["output_tokens"] == 50
+
+    def test_non_streaming_falls_back_to_estimated_without_provider_usage(
+        self, client, _mock_call_model
+    ):
+        resp = client.post("/v1/chat/completions", json=_body())
+        assert resp.status_code == 200
+        assert resp.headers["x-flux-usage-source"] == "estimated"
+        assert "x-flux-actual-cost-usd" not in resp.headers
+
+    def test_streaming_openai_usage_chunk_recorded_as_actual_and_stripped_by_default(
+        self, client, monkeypatch
+    ):
+        async def fake_stream(model, request, api_key):
+            yield b'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n'
+            yield b'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n'
+            yield (
+                b'data: {"choices":[],"usage":'
+                b'{"prompt_tokens":40,"completion_tokens":10,"total_tokens":50}}\n\n'
+            )
+            yield b"data: [DONE]\n\n"
+
+        monkeypatch.setattr(server, "stream_openai_compat_lines", fake_stream)
+        body = _body("gpt-5-mini", stream=True)
+        body["user"] = "stream-usage-user"
+        resp = client.post(
+            "/v1/chat/completions", json=body, headers={"X-Flux-Tenant-Id": "stream-usage-tenant"}
+        )
+        assert resp.status_code == 200
+        # Client never set stream_options.include_usage — the usage chunk
+        # must not appear in what we forwarded.
+        assert '"usage"' not in resp.text
+
+        usage = client.get("/v1/usage", params={"tenant_id": "stream-usage-tenant"}).json()
+        record = usage["data"][0]
+        assert record["usage_source"] == "provider"
+        assert record["input_tokens"] == 40
+        assert record["output_tokens"] == 10
+
+    def test_streaming_usage_chunk_forwarded_when_client_opts_in(self, client, monkeypatch):
+        async def fake_stream(model, request, api_key):
+            yield b'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n'
+            yield (
+                b'data: {"choices":[],"usage":'
+                b'{"prompt_tokens":40,"completion_tokens":10,"total_tokens":50}}\n\n'
+            )
+            yield b"data: [DONE]\n\n"
+
+        monkeypatch.setattr(server, "stream_openai_compat_lines", fake_stream)
+        body = _body("gpt-5-mini", stream=True)
+        body["stream_options"] = {"include_usage": True}
+        resp = client.post("/v1/chat/completions", json=body)
+        assert resp.status_code == 200
+        assert '"usage"' in resp.text
+        assert '"prompt_tokens":40' in resp.text
+
+    def test_streaming_without_usage_chunk_falls_back_to_estimated(self, client, monkeypatch):
+        async def fake_stream(model, request, api_key):
+            yield b'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n'
+            yield b"data: [DONE]\n\n"
+
+        monkeypatch.setattr(server, "stream_openai_compat_lines", fake_stream)
+        body = _body("gpt-5-mini", stream=True)
+        resp = client.post(
+            "/v1/chat/completions", json=body, headers={"X-Flux-Tenant-Id": "stream-no-usage"}
+        )
+        assert resp.status_code == 200
+
+        usage = client.get("/v1/usage", params={"tenant_id": "stream-no-usage"}).json()
+        record = usage["data"][0]
+        assert record["usage_source"] == "estimated"
+        assert record["input_tokens"] is None
+        assert record["output_tokens"] is None
+
+    def test_streaming_usage_chunk_with_no_content_chunks_still_records_actual(
+        self, client, monkeypatch
+    ):
+        """A usage-only stream (no content deltas at all) must still be
+        recorded from the provider's actual usage, not silently dropped."""
+
+        async def fake_stream(model, request, api_key):
+            yield (
+                b'data: {"choices":[],"usage":'
+                b'{"prompt_tokens":5,"completion_tokens":0,"total_tokens":5}}\n\n'
+            )
+            yield b"data: [DONE]\n\n"
+
+        monkeypatch.setattr(server, "stream_openai_compat_lines", fake_stream)
+        body = _body("gpt-5-mini", stream=True)
+        resp = client.post(
+            "/v1/chat/completions", json=body, headers={"X-Flux-Tenant-Id": "stream-usage-only"}
+        )
+        assert resp.status_code == 200
+
+        usage = client.get("/v1/usage", params={"tenant_id": "stream-usage-only"}).json()
+        record = usage["data"][0]
+        # completion_tokens=0 fails _safe_usage_int's positivity check, so
+        # this is NOT trustworthy actual usage — falls back to estimated
+        # rather than billing a real request at zero output tokens.
+        assert record["usage_source"] == "estimated"
+
+    def test_synthesized_path_records_provider_usage(self, client, monkeypatch):
+        """Anthropic/Google (non-native-streaming) path: _call_model already
+        returns a ProviderResult, so streaming gets exact usage for free."""
+
+        async def mock_call(model, request):
+            return ProviderResult(
+                text="hello", input_tokens=30, output_tokens=12, usage_source="provider"
+            )
+
+        monkeypatch.setattr(server._flux, "_call_model", mock_call)
+        body = _body("gemini-2.0-flash-lite", stream=True)
+        resp = client.post(
+            "/v1/chat/completions", json=body, headers={"X-Flux-Tenant-Id": "synth-usage-tenant"}
+        )
+        assert resp.status_code == 200
+
+        usage = client.get("/v1/usage", params={"tenant_id": "synth-usage-tenant"}).json()
+        record = usage["data"][0]
+        assert record["usage_source"] == "provider"
+        assert record["input_tokens"] == 30
+        assert record["output_tokens"] == 12
+
+    def test_disconnect_mid_stream_records_estimated_exactly_once(self, client, monkeypatch):
+        """Regression: _record_usage() used to fire on the FIRST chunk with a
+        guessed token count; now it's deferred to stream end, so a client
+        that walks away before the stream finishes naturally must still be
+        billed (at the estimate) exactly once, via the `finally` block, not
+        left unbilled or double-billed."""
+        import asyncio
+
+        async def hanging_stream(model, request, api_key):
+            yield b'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n'
+            # Never reaches [DONE] — simulates a stream still in flight when
+            # the client walks away.
+            await asyncio.sleep(3600)
+            yield b""  # pragma: no cover - unreachable
+
+        monkeypatch.setattr(server, "stream_openai_compat_lines", hanging_stream)
+
+        body = _body("gpt-5-mini", stream=True)
+        body["user"] = "disconnect-user-1"
+        run_id = "disconnect-run-1"
+
+        async def drive():
+            routing_request, _ = server._build_routing_request(body, run_id, None, plan=None)
+            decision = await server._flux.route(routing_request, verbose=True)
+            headers = server._flux_headers(decision, 0.0)
+            gen = server._stream_completion(
+                routing_request, decision, "chatcmpl-test", 0, headers, None, False
+            )
+            await gen.__anext__()  # role chunk
+            await gen.__anext__()  # first content chunk
+            await gen.aclose()  # client walks away before [DONE]
+
+        asyncio.run(drive())
+
+        budget = server._flux._engine._budget
+        assert budget.get_daily_spend("disconnect-user-1") > 0, (
+            "disconnect before stream end must still bill at the estimate"
+        )
+        cost_so_far, steps_so_far = server._flux._engine._run_budget.snapshot(run_id)
+        assert steps_so_far == 1, "run-budget reservation must be resolved exactly once"

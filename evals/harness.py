@@ -111,10 +111,11 @@ async def _live_answer(model: ModelOption, task: GoldenTask, api_key: str) -> st
         temperature=0.0,
     )
     try:
-        return await call_provider(model, request, api_key)
+        result = await call_provider(model, request, api_key)
     except ProviderCallError as exc:
         log.warning("live_answer_failed", model=model.model_id, task=task.id, error=str(exc))
         return ""
+    return result.text
 
 
 def _provider_keys(flux) -> dict[str, str]:

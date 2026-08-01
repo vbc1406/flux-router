@@ -49,8 +49,10 @@ from .flux import Flux, make_flux
 from .provider_caller import (
     STREAMING_NATIVE_PROVIDERS,
     ProviderCallError,
+    compute_actual_cost,
     stream_openai_compat_lines,
 )
+from .provider_caller import _safe_usage_int as _safe_stream_usage_int
 from .run_budget import RunBudgetExceeded
 from .schemas import RoutingRequest
 
@@ -354,6 +356,9 @@ async def get_usage(
                 "model_id": r.model_id,
                 "cost_usd": r.cost_usd,
                 "timestamp": r.timestamp,
+                "usage_source": r.usage_source,
+                "input_tokens": r.input_tokens,
+                "output_tokens": r.output_tokens,
             }
             for r in records
         ],
@@ -443,6 +448,15 @@ async def chat_completions(
         )
     routing_request, _ = _build_routing_request(body, run_id, tenant_id, plan=bound_plan)
     stream = bool(body.get("stream", False))
+    # Whether the CLIENT'S OWN request asked for the OpenAI stream_options
+    # usage chunk — independent of whether WE ask the upstream provider for
+    # it (provider_caller.py always does, for OpenAI, so billing can use
+    # actual usage). If the client didn't ask, that extra chunk is stripped
+    # before forwarding rather than surprising a client that never opted in.
+    stream_options = body.get("stream_options")
+    client_wants_usage = (
+        isinstance(stream_options, dict) and stream_options.get("include_usage") is True
+    )
 
     start = time.monotonic()
     try:
@@ -475,7 +489,13 @@ async def chat_completions(
         # output — see its docstring for why that beats recording up front.
         return StreamingResponse(
             _stream_completion(
-                routing_request, decision, completion_id, created, headers, bound_tenant
+                routing_request,
+                decision,
+                completion_id,
+                created,
+                headers,
+                bound_tenant,
+                client_wants_usage,
             ),
             media_type="text/event-stream",
             headers=headers,
@@ -485,9 +505,11 @@ async def chat_completions(
         # Shared with Flux.complete(): retries the typed fallback chain on
         # transient errors, and records plan/daily-cap spend, run-budget steps,
         # and attribution — all of which this path used to skip by calling
-        # _call_model() directly.
-        text, used_model, _fallback_used, _fallback_reason = await _flux._dispatch_with_fallback(
-            decision, routing_request, max_retries=2
+        # _call_model() directly. `usage` carries what was ACTUALLY billed —
+        # provider-reported tokens/cost when the provider returned them,
+        # the pre-dispatch estimate otherwise. See flux.DispatchUsage.
+        text, used_model, _fallback_used, _fallback_reason, usage = (
+            await _flux._dispatch_with_fallback(decision, routing_request, max_retries=2)
         )
     except AuthenticationError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
@@ -498,7 +520,29 @@ async def chat_completions(
     # fired — reflect the model that actually served the request.
     model_id = used_model.model_id
     headers["x-flux-model"] = model_id
-    _record_tenant_daily_spend(bound_tenant, decision.estimated_cost, model_id)
+    headers["x-flux-usage-source"] = usage.usage_source
+    if usage.usage_source == "provider":
+        headers["x-flux-actual-cost-usd"] = f"{usage.cost_usd:.6f}"
+    # Bugfix: this used to record decision.estimated_cost (the pre-dispatch
+    # estimate) against the tenant daily cap regardless of what was actually
+    # billed — now uses the same actual-when-available cost as every other
+    # tracker (BudgetTracker, DailyBudgetTracker, attribution) above.
+    _record_tenant_daily_spend(bound_tenant, usage.cost_usd, model_id)
+
+    if usage.input_tokens is not None and usage.output_tokens is not None:
+        usage_block = {
+            "prompt_tokens": usage.input_tokens,
+            "completion_tokens": usage.output_tokens,
+            "total_tokens": usage.input_tokens + usage.output_tokens,
+        }
+    else:
+        # Fallback: provider didn't report usage — same char-math estimate
+        # as before.
+        usage_block = {
+            "prompt_tokens": max(len(routing_request.raw_prompt) // 4, 1),
+            "completion_tokens": max(len(text) // 4, 1),
+            "total_tokens": max((len(routing_request.raw_prompt) + len(text)) // 4, 1),
+        }
 
     response_body = {
         "id": completion_id,
@@ -512,35 +556,50 @@ async def chat_completions(
                 "finish_reason": "stop",
             }
         ],
-        # Estimated: provider_caller returns text only, not provider-reported usage.
-        "usage": {
-            "prompt_tokens": max(len(routing_request.raw_prompt) // 4, 1),
-            "completion_tokens": max(len(text) // 4, 1),
-            "total_tokens": max((len(routing_request.raw_prompt) + len(text)) // 4, 1),
-        },
+        "usage": usage_block,
     }
     return JSONResponse(content=response_body, headers=headers)
 
 
 async def _stream_completion(
-    routing_request, decision, completion_id, created, headers, bound_tenant=None
+    routing_request,
+    decision,
+    completion_id,
+    created,
+    headers,
+    bound_tenant=None,
+    client_wants_usage=False,
 ):
     """Yield SSE chunks for a chat completion.
 
     For providers that speak OpenAI-native SSE (openai/groq/mistral), each
-    chunk is reshaped in place and forwarded as it arrives — genuinely
-    incremental, not buffered. For providers without a native OpenAI SSE
-    format (anthropic/google), we fall back to a single synthesized chunk
-    carrying the full response, since translating each provider's own event
-    schema chunk-by-chunk is out of scope here.
+    chunk is forwarded as it arrives — genuinely incremental, not buffered.
+    For providers without a native OpenAI SSE format (anthropic/google), we
+    fall back to a single synthesized chunk carrying the full response,
+    since translating each provider's own event schema chunk-by-chunk is
+    out of scope here. That synthesized path gets exact usage for free,
+    since _flux._call_model() already returns a ProviderResult.
 
-    Budget/attribution is recorded as soon as the provider call is confirmed
-    to have produced output (first chunk for native streaming, full text for
-    the synthesized-chunk path) rather than before the call starts — a call
-    that fails outright (ProviderCallError/FluxAPIError, e.g. a 429 from the
-    provider) never gets this far, so it isn't charged. Once recorded, it
-    stays recorded even if the client disconnects mid-stream afterward: the
-    provider was already paid for those tokens.
+    For OpenAI specifically, provider_caller.py always requests
+    stream_options.include_usage on the upstream call (regardless of
+    whether the CLIENT asked us for it) so billing can use actual usage;
+    the resulting usage chunk is only forwarded to the client if THEIR
+    request also set stream_options.include_usage (client_wants_usage) —
+    otherwise it's captured for billing and stripped before forwarding, so
+    a client that never opted in doesn't see a surprise empty-choices chunk.
+
+    Budget/attribution recording is deferred to stream end rather than fired
+    on the first chunk with a guessed token count: a usage chunk seen along
+    the way means the recorded amount is actual; none seen (Groq/Mistral,
+    or an OpenAI stream that for some reason didn't include one) falls back
+    to the pre-dispatch estimate, as before. A call that fails outright
+    (ProviderCallError/FluxAPIError, e.g. a 429 from the provider) never
+    produces any content, so it isn't charged either way. A client that
+    disconnects mid-stream (after some content but before the stream would
+    have ended naturally) still gets billed at the estimate in the `finally`
+    below — the provider was already asked to generate those tokens — and
+    the run-budget reservation is resolved by that recording rather than
+    left dangling.
     """
     model = decision.chosen_model
     model_id = model.model_id
@@ -555,8 +614,13 @@ async def _stream_completion(
         }
         return f"data: {json.dumps(payload)}\n\n".encode()
 
-    def _record_usage(tokens: int) -> None:
-        cost_usd = decision.estimated_cost
+    def _record_usage(
+        cost_usd: float,
+        tokens: int,
+        usage_source: str,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+    ) -> None:
         engine = _flux._engine
         engine._budget.record_spend(
             user_id=routing_request.user_id,
@@ -589,31 +653,82 @@ async def _stream_completion(
             step_type=decision.step_type,
             model_id=model_id,
             cost_usd=cost_usd,
+            usage_source=usage_source,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
         )
         _record_tenant_daily_spend(bound_tenant, cost_usd, model_id)
 
+    def _record_estimated() -> None:
+        _record_usage(
+            decision.estimated_cost,
+            routing_request.max_tokens_requested or 1024,
+            "estimated",
+        )
+
     # check_before_dispatch() (Step 0 of route(), already run before this
     # generator starts) reserved one run-budget step slot for this request.
-    # `recorded` tracks whether _record_usage() (which calls record_step())
-    # ran — if the stream fails before that, the except block below must
-    # release the reservation explicitly instead of leaking it.
+    # `recorded` tracks whether the reservation has been resolved — either
+    # by _record_usage() (a bill was recorded) or by release_reservation()
+    # in the except block below (the call failed outright, nothing to bill).
+    # Exactly one of those two must happen; the `finally` below exists for
+    # the third case neither of them covers: the client disconnecting mid-
+    # stream before either one ran.
     recorded = False
     try:
         if model.provider.lower() in STREAMING_NATIVE_PROVIDERS:
             api_key = _flux._resolve_api_key(model, routing_request)
             yield _chunk({"role": "assistant"}, None)
+            captured_usage: dict | None = None
             async for line in stream_openai_compat_lines(model, routing_request, api_key):
-                if not recorded:
-                    _record_usage(routing_request.max_tokens_requested or 1024)
-                    recorded = True
                 text = line.decode("utf-8", errors="replace").strip()
                 if not text or text == "data: [DONE]":
                     continue
-                if text.startswith("data: "):
-                    yield f"{text}\n\n".encode()
+                if not text.startswith("data: "):
+                    continue
+                try:
+                    payload = json.loads(text[len("data: ") :])
+                except json.JSONDecodeError:
+                    payload = None
+                usage_obj = payload.get("usage") if isinstance(payload, dict) else None
+                if usage_obj:
+                    captured_usage = usage_obj
+                    if not client_wants_usage:
+                        # Our own request to the provider asked for this
+                        # (see provider_caller._open_openai_compat_stream),
+                        # the client's didn't — capture it for billing below
+                        # but don't forward the extra chunk.
+                        continue
+                yield f"{text}\n\n".encode()
+            # Stream ended naturally (not a disconnect) — record now.
+            input_tokens = output_tokens = None
+            if captured_usage:
+                input_tokens = _safe_stream_usage_int(captured_usage.get("prompt_tokens"))
+                output_tokens = _safe_stream_usage_int(captured_usage.get("completion_tokens"))
+            if input_tokens is not None and output_tokens is not None:
+                _record_usage(
+                    compute_actual_cost(model, input_tokens, output_tokens),
+                    input_tokens + output_tokens,
+                    "provider",
+                    input_tokens,
+                    output_tokens,
+                )
+            else:
+                _record_estimated()
+            recorded = True
         else:
-            text = await _flux._call_model(model, routing_request)
-            _record_usage(max(len(text) // 4, 1))
+            result = await _flux._call_model(model, routing_request)
+            text = result.text
+            if result.input_tokens is not None and result.output_tokens is not None:
+                _record_usage(
+                    compute_actual_cost(model, result.input_tokens, result.output_tokens),
+                    result.input_tokens + result.output_tokens,
+                    "provider",
+                    result.input_tokens,
+                    result.output_tokens,
+                )
+            else:
+                _record_usage(decision.estimated_cost, max(len(text) // 4, 1), "estimated")
             recorded = True
             yield _chunk({"role": "assistant", "content": text}, None)
             yield _chunk({}, "stop")
@@ -622,5 +737,9 @@ async def _stream_completion(
             _flux._engine._run_budget.release_reservation(
                 routing_request.run_id, tenant_id=routing_request.tenant_id
             )
+        recorded = True  # resolved via release, not a bill — see comment above
         yield f"data: {json.dumps({'error': str(exc)})}\n\n".encode()
+    finally:
+        if not recorded:
+            _record_estimated()
     yield b"data: [DONE]\n\n"

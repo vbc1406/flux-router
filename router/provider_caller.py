@@ -24,6 +24,7 @@ import contextlib
 import json
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from typing import Any
 
 import structlog
@@ -36,6 +37,90 @@ from .config import (
 from .schemas import ModelOption, RoutingRequest
 
 log = structlog.get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class ProviderResult:
+    """Result of a single (non-streaming) provider call.
+
+    input_tokens/output_tokens are the provider's OWN reported usage figures
+    (not our pre-dispatch estimate) — None when the provider didn't report
+    usage, or reported something we don't trust (see _safe_usage_int).
+    usage_source is "provider" when both are present, "estimated" otherwise,
+    so callers never have to re-derive which case they're in.
+    """
+
+    text: str
+    input_tokens: int | None
+    output_tokens: int | None
+    usage_source: str  # "provider" | "estimated"
+
+
+def _safe_usage_int(value: object) -> int | None:
+    """Coerce a raw provider usage field to a positive int, or None if it's
+    missing, the wrong type, or non-positive. A real completion always
+    consumes at least one token in each direction it's non-empty on, so a
+    zero/negative/non-numeric count is not a trustworthy usage figure —
+    treated the same as "provider didn't report this" rather than billed
+    as $0."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    ivalue = int(value)
+    return ivalue if ivalue > 0 else None
+
+
+def _extract_usage(
+    data: object,
+    provider: str,
+    input_key: str,
+    output_key: str,
+    container_key: str,
+) -> tuple[int | None, int | None]:
+    """Best-effort extraction of (input_tokens, output_tokens) from a parsed
+    provider response. Never raises — a missing/malformed usage shape must
+    not turn a successful completion into an error; it just falls back to
+    "estimated" for billing purposes. Logs a debug event with the provider
+    name and top-level response shape (never response content) so a
+    persistently-missing usage shape is diagnosable without leaking data.
+    """
+    try:
+        if not isinstance(data, dict):
+            raise TypeError("response is not an object")
+        usage = data.get(container_key)
+        if not isinstance(usage, dict):
+            raise TypeError(f"'{container_key}' missing or not an object")
+        input_tokens = _safe_usage_int(usage.get(input_key))
+        output_tokens = _safe_usage_int(usage.get(output_key))
+        if input_tokens is None or output_tokens is None:
+            raise ValueError(f"'{input_key}'/'{output_key}' missing or invalid")
+        return input_tokens, output_tokens
+    except (KeyError, TypeError, ValueError) as exc:
+        log.debug(
+            "provider_usage_missing",
+            provider=provider,
+            shape=_response_shape_keys(data),
+            reason=str(exc),
+        )
+        return None, None
+
+
+def compute_actual_cost(model: ModelOption, input_tokens: int, output_tokens: int) -> float:
+    """Cost computed from ACTUAL (provider-reported) token counts, as opposed
+    to routing_engine._estimate_cost()'s pre-dispatch estimate. Used only for
+    post-dispatch spend recording — pre-dispatch budget checks keep using the
+    estimate, by definition (actual usage isn't known until after the call).
+
+    # TODO(prompt-cache pricing): this ignores cache-read/cache-write pricing
+    # (model.cache_read_cost_per_1m / cache_write_cost_per_1m) since Flux
+    # doesn't send cache-control blocks to providers yet. Once it does, a
+    # cache-hit response's actual cost must be split accordingly instead of
+    # priced entirely at the base input rate.
+    """
+    return round(
+        (input_tokens / 1000.0) * model.cost_per_1k_input
+        + (output_tokens / 1000.0) * model.cost_per_1k_output,
+        6,
+    )
 
 
 def _bounded_read(stream, limit: int = MAX_PROVIDER_RESPONSE_BYTES) -> bytes:
@@ -143,7 +228,7 @@ def _call_anthropic_sync(
     model: ModelOption,
     request: RoutingRequest,
     api_key: str,
-) -> str:
+) -> ProviderResult:
     messages = _build_messages(request)
     body: dict[str, Any] = {
         "model": model.model_id,
@@ -164,11 +249,20 @@ def _call_anthropic_sync(
         "https://api.anthropic.com/v1/messages", headers, body, provider_name="anthropic"
     )
     try:
-        return data["content"][0]["text"]
+        text = data["content"][0]["text"]
     except (KeyError, IndexError) as exc:
         raise ProviderCallError(
             f"Unexpected Anthropic response shape (keys={_response_shape_keys(data)})"
         ) from exc
+    input_tokens, output_tokens = _extract_usage(
+        data, "anthropic", "input_tokens", "output_tokens", container_key="usage"
+    )
+    return ProviderResult(
+        text=text,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        usage_source="provider" if input_tokens is not None else "estimated",
+    )
 
 
 def _uses_max_completion_tokens(provider_name: str, model_id: str) -> bool:
@@ -190,7 +284,7 @@ def _call_openai_compat_sync(
     api_key: str,
     base_url: str,
     provider_name: str,
-) -> str:
+) -> ProviderResult:
     """Shared caller for OpenAI, Groq, and Mistral (all use the same message format)."""
     messages = _build_messages(request)
     if request.system_prompt:
@@ -214,18 +308,29 @@ def _call_openai_compat_sync(
     }
     data = _post_json(f"{base_url}/chat/completions", headers, body, provider_name=provider_name)
     try:
-        return data["choices"][0]["message"]["content"]
+        text = data["choices"][0]["message"]["content"]
     except (KeyError, IndexError) as exc:
         raise ProviderCallError(
             f"Unexpected OpenAI-compat response shape (keys={_response_shape_keys(data)})"
         ) from exc
+    # OpenAI, Groq, and Mistral all report usage as {"usage": {"prompt_tokens":
+    # ..., "completion_tokens": ...}} on non-streaming responses.
+    input_tokens, output_tokens = _extract_usage(
+        data, provider_name, "prompt_tokens", "completion_tokens", container_key="usage"
+    )
+    return ProviderResult(
+        text=text,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        usage_source="provider" if input_tokens is not None else "estimated",
+    )
 
 
 def _call_google_sync(
     model: ModelOption,
     request: RoutingRequest,
     api_key: str,
-) -> str:
+) -> ProviderResult:
     contents: list[dict[str, Any]] = []
     for turn in request.message_history:
         contents.append(
@@ -252,11 +357,20 @@ def _call_google_sync(
     headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
     data = _post_json(url, headers, body, provider_name="google")
     try:
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError) as exc:
         raise ProviderCallError(
             f"Unexpected Google response shape (keys={_response_shape_keys(data)})"
         ) from exc
+    input_tokens, output_tokens = _extract_usage(
+        data, "google", "promptTokenCount", "candidatesTokenCount", container_key="usageMetadata"
+    )
+    return ProviderResult(
+        text=text,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        usage_source="provider" if input_tokens is not None else "estimated",
+    )
 
 
 # ── Base URL map ─────────────────────────────────────────────────────────────
@@ -299,6 +413,14 @@ def _open_openai_compat_stream(
         body["max_tokens"] = token_limit
     if request.temperature is not None:
         body["temperature"] = request.temperature
+    # OpenAI-only: asks the stream to emit one extra chunk right before
+    # [DONE] carrying a `usage` object (see OpenAI's stream_options docs).
+    # Not enabled for Groq/Mistral — their OpenAI-compat surface hasn't been
+    # verified to tolerate this field, so they keep estimating usage for
+    # streaming responses until that's confirmed.
+    # TODO(groq/mistral stream usage): verify and enable per-provider.
+    if provider_name == "openai":
+        body["stream_options"] = {"include_usage": True}
 
     url = f"{base_url}/chat/completions"
     if not url.startswith("https://"):
@@ -370,11 +492,13 @@ async def call_provider(
     model: ModelOption,
     request: RoutingRequest,
     api_key: str,
-) -> str:
+) -> ProviderResult:
     """
     Async wrapper: dispatches to the correct provider caller in a thread-pool
     executor so the routing event loop is not blocked.
 
+    Returns a ProviderResult carrying the response text plus, when the
+    provider reported it, actual token usage (usage_source="provider").
     Raises ProviderCallError (with .status_code) on failure.
     """
     provider = model.provider.lower()
@@ -387,16 +511,16 @@ async def call_provider(
     #        (4) add models for that provider to router/models.json.
     if provider == "anthropic":
 
-        def fn() -> str:
+        def fn() -> ProviderResult:
             return _call_anthropic_sync(model, request, api_key)
     elif provider in _OPENAI_COMPAT_BASES:
         base = _OPENAI_COMPAT_BASES[provider]
 
-        def fn() -> str:
+        def fn() -> ProviderResult:
             return _call_openai_compat_sync(model, request, api_key, base, provider)
     elif provider == "google":
 
-        def fn() -> str:
+        def fn() -> ProviderResult:
             return _call_google_sync(model, request, api_key)
     else:
         raise ProviderCallError(

@@ -52,9 +52,16 @@ from router.errors import (
 )
 from router.flux import Flux, FluxResponse
 from router.model_registry import ModelRegistry
+from router.provider_caller import ProviderResult
 from router.routing_engine import RoutingEngine
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _pr(text: str) -> ProviderResult:
+    return ProviderResult(
+        text=text, input_tokens=None, output_tokens=None, usage_source="estimated"
+    )
 
 
 def _engine() -> RoutingEngine:
@@ -88,7 +95,7 @@ class TestSuccessPath:
         flux = _flux()
 
         async def mock_call(model, request):
-            return "response text"
+            return _pr("response text")
 
         flux._call_model = mock_call  # type: ignore[method-assign]
         resp = rr(flux.complete(_PROMPT, **_KWARGS))
@@ -101,7 +108,7 @@ class TestSuccessPath:
         flux = _flux()
 
         async def mock_call(model, request):
-            return "hello"
+            return _pr("hello")
 
         flux._call_model = mock_call  # type: ignore[method-assign]
         resp = rr(flux.complete(_PROMPT, **_KWARGS))
@@ -121,7 +128,7 @@ class TestRetryOnRateLimit:
             calls.append(model.model_id)
             if len(calls) == 1:
                 raise RateLimitError("429 Too Many Requests")
-            return "fallback response"
+            return _pr("fallback response")
 
         flux._call_model = mock_call  # type: ignore[method-assign]
         resp = rr(flux.complete(_PROMPT, **_KWARGS))
@@ -138,7 +145,7 @@ class TestRetryOnRateLimit:
             calls.append(model.model_id)
             if len(calls) == 1:
                 raise RateLimitError("429")
-            return "ok"
+            return _pr("ok")
 
         flux._call_model = mock_call  # type: ignore[method-assign]
         rr(flux.complete(_PROMPT, **_KWARGS))
@@ -159,7 +166,7 @@ class TestRetryOnTimeout:
             calls.append(model.model_id)
             if len(calls) == 1:
                 raise TimeoutError("Request timed out")
-            return "timeout fallback"
+            return _pr("timeout fallback")
 
         flux._call_model = mock_call  # type: ignore[method-assign]
         resp = rr(flux.complete(_PROMPT, **_KWARGS))
@@ -190,7 +197,7 @@ class TestRetryOnContentFilter:
             calls.append(model.model_id)
             if len(calls) == 1:
                 raise ContentFilterError("Content policy violation")
-            return "safe response"
+            return _pr("safe response")
 
         flux._call_model = mock_call  # type: ignore[method-assign]
         resp = rr(flux.complete(_PROMPT, **_KWARGS))
@@ -209,7 +216,7 @@ class TestRetryOnContentFilter:
             count[0] += 1
             if count[0] == 1:
                 raise ContentFilterError("refused")
-            return "higher-tier response"
+            return _pr("higher-tier response")
 
         flux._call_model = mock_call  # type: ignore[method-assign]
         resp = rr(flux.complete(_PROMPT, **_KWARGS))
@@ -228,7 +235,7 @@ class TestRetryOnProviderDown:
             calls.append(model.model_id)
             if len(calls) == 1:
                 raise ProviderDownError("502 Bad Gateway")
-            return "backup response"
+            return _pr("backup response")
 
         flux._call_model = mock_call  # type: ignore[method-assign]
         resp = rr(flux.complete(_PROMPT, **_KWARGS))
@@ -290,7 +297,7 @@ class TestMaxRetriesRespected:
             calls[0] += 1
             if calls[0] <= 3:
                 raise RateLimitError("429")
-            return "success"
+            return _pr("success")
 
         flux._call_model = mock_call  # type: ignore[method-assign]
         with pytest.raises(FluxAPIError):
@@ -352,7 +359,7 @@ class TestFallbackMarkedOnResponse:
             if first[0]:
                 first[0] = False
                 raise RateLimitError("429")
-            return "fallback ok"
+            return _pr("fallback ok")
 
         flux._call_model = mock_call  # type: ignore[method-assign]
         resp = rr(flux.complete(_PROMPT, **_KWARGS))
@@ -366,7 +373,7 @@ class TestFallbackMarkedOnResponse:
             if first[0]:
                 first[0] = False
                 raise TimeoutError("timed out")
-            return "ok"
+            return _pr("ok")
 
         flux._call_model = mock_call  # type: ignore[method-assign]
         resp = rr(flux.complete(_PROMPT, **_KWARGS))
@@ -376,7 +383,7 @@ class TestFallbackMarkedOnResponse:
         flux = _flux()
 
         async def mock_call(model, request):
-            return "direct success"
+            return _pr("direct success")
 
         flux._call_model = mock_call  # type: ignore[method-assign]
         resp = rr(flux.complete(_PROMPT, **_KWARGS))
@@ -402,3 +409,64 @@ class TestModelDeduplication:
             rr(flux.complete(_PROMPT, max_retries=5, **_KWARGS))
 
         assert len(seen) == len(set(seen)), f"Duplicate model attempts: {seen}"
+
+
+# ── Actual usage: billed against the model that actually served the call ──────
+
+
+class TestActualUsageOnFallback:
+    """Regression: cost must be computed against the model that actually
+    served the request (the fallback), not decision.chosen_model — this
+    applies to actual provider-reported usage exactly as it already did to
+    the estimated-cost rescaling."""
+
+    def test_fallback_bills_actual_usage_at_fallback_models_rates(self):
+        from router.provider_caller import compute_actual_cost
+
+        flux = _flux()
+        calls: list = []
+
+        async def mock_call(model, request):
+            calls.append(model)
+            if len(calls) == 1:
+                raise RateLimitError("429")
+            return ProviderResult(
+                text="fallback answer", input_tokens=200, output_tokens=100, usage_source="provider"
+            )
+
+        flux._call_model = mock_call  # type: ignore[method-assign]
+        resp = rr(flux.complete(_PROMPT, **_KWARGS))
+        assert len(calls) == 2
+        fallback_model = calls[1]
+
+        assert resp.usage is not None
+        assert resp.usage.usage_source == "provider"
+        assert resp.usage.input_tokens == 200
+        assert resp.usage.output_tokens == 100
+        assert resp.usage.cost_usd == pytest.approx(
+            compute_actual_cost(fallback_model, 200, 100), rel=1e-9
+        )
+        # Not priced against the ORIGINAL (failed) model's rates.
+        original_model = calls[0]
+        if (
+            original_model.cost_per_1k_input != fallback_model.cost_per_1k_input
+            or original_model.cost_per_1k_output != fallback_model.cost_per_1k_output
+        ):
+            assert resp.usage.cost_usd != pytest.approx(
+                compute_actual_cost(original_model, 200, 100), rel=1e-9
+            ) or original_model.model_id == fallback_model.model_id
+
+    def test_response_usage_none_when_provider_reports_nothing(self):
+        flux = _flux()
+
+        async def mock_call(model, request):
+            return ProviderResult(
+                text="ok", input_tokens=None, output_tokens=None, usage_source="estimated"
+            )
+
+        flux._call_model = mock_call  # type: ignore[method-assign]
+        resp = rr(flux.complete(_PROMPT, **_KWARGS))
+        assert resp.usage is not None
+        assert resp.usage.usage_source == "estimated"
+        assert resp.usage.input_tokens is None
+        assert resp.usage.output_tokens is None
