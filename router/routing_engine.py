@@ -1363,10 +1363,16 @@ def _budget_tier_walkdown(
 
 def _estimate_cost(analysis: TaskAnalysis, model: ModelOption) -> float:
     """
-    Estimate the dollar cost for this request.
-    Output tokens are capped at the model's max to avoid inflated estimates.
+    Estimate the dollar cost for this request, for routing/budget/attribution
+    purposes.
+
+    Uses billing_output_tokens (the larger of the task-type heuristic and the
+    caller's requested max_tokens), not the plain heuristic, so a caller can't
+    get routed/budgeted as a cheap short answer while asking the provider for
+    a much larger completion. Still capped at the model's own max_output_tokens
+    to avoid inflated estimates beyond what the model could ever produce.
     """
-    output_tokens = min(analysis.estimated_output_tokens, model.max_output_tokens)
+    output_tokens = min(analysis.billing_output_tokens, model.max_output_tokens)
     cost = (analysis.estimated_input_tokens / 1000.0) * model.cost_per_1k_input + (
         output_tokens / 1000.0
     ) * model.cost_per_1k_output
@@ -1393,7 +1399,7 @@ def _cache_aware_cost(
         return _estimate_cost(analysis, model)
 
     remaining_input = max(analysis.estimated_input_tokens - prefix_tokens, 0)
-    output_tokens = min(analysis.estimated_output_tokens, model.max_output_tokens)
+    output_tokens = min(analysis.billing_output_tokens, model.max_output_tokens)
     cost = (
         (prefix_tokens / 1_000_000.0) * model.cache_read_cost_per_1m
         + (remaining_input / 1000.0) * model.cost_per_1k_input

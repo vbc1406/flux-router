@@ -42,6 +42,7 @@ from .config import (
     MAX_METADATA_DEPTH,
     MAX_METADATA_LIST_LEN,
     MAX_REQUEST_BYTES,
+    MAX_TOKENS_REQUESTED_CEILING,
 )
 
 _SAFE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_\-:.]+$")
@@ -236,6 +237,15 @@ class RoutingRequest(BaseModel):
     # Presence signals a structured-output step for step_type inference.
     response_format: dict | None = None
 
+    @field_validator("max_tokens_requested")
+    @classmethod
+    def _max_tokens_requested_bounds(cls, v: int | None) -> int | None:
+        if v is not None and not (0 < v <= MAX_TOKENS_REQUESTED_CEILING):
+            raise ValueError(
+                f"max_tokens_requested must be between 1 and {MAX_TOKENS_REQUESTED_CEILING}"
+            )
+        return v
+
     @field_validator("user_id", "team_id", "customer_id", "conversation_id", "run_id", "tenant_id")
     @classmethod
     def _safe_id(cls, v: str | None) -> str | None:
@@ -299,6 +309,14 @@ class TaskAnalysis(BaseModel):
     complexity_score: float
     estimated_input_tokens: int
     estimated_output_tokens: int
+    # Output-token figure used for COST/BUDGET estimation specifically — the
+    # larger of the task-type heuristic (estimated_output_tokens) and the
+    # caller's request.max_tokens_requested (when set). A client can request
+    # a huge completion while the heuristic alone would still look like a
+    # cheap short answer; routing_engine._estimate_cost() uses this field
+    # (not estimated_output_tokens) so caps/budgets/attribution reflect what
+    # the provider could actually be asked to generate and bill for.
+    billing_output_tokens: int = 0
     total_context_needed: int
     task_type: str
     requires_reasoning: bool = False
@@ -318,6 +336,15 @@ class TaskAnalysis(BaseModel):
     # otherwise inferred by RequestClassifier._infer_step_type(). Always set —
     # "unknown" when no signal is present, never None.
     step_type: str = "unknown"
+
+    @model_validator(mode="after")
+    def _default_billing_output_tokens(self) -> "TaskAnalysis":
+        # Callers that construct TaskAnalysis directly (tests, older code)
+        # without billing_output_tokens fall back to estimated_output_tokens
+        # rather than silently under-billing at 0.
+        if self.billing_output_tokens <= 0:
+            self.billing_output_tokens = self.estimated_output_tokens
+        return self
 
 
 class ModelOption(BaseModel):

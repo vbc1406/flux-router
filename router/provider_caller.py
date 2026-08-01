@@ -147,7 +147,7 @@ def _call_anthropic_sync(
     messages = _build_messages(request)
     body: dict[str, Any] = {
         "model": model.model_id,
-        "max_tokens": request.max_tokens_requested or 1024,
+        "max_tokens": min(request.max_tokens_requested or 1024, model.max_output_tokens),
         "messages": messages,
     }
     if request.system_prompt:
@@ -200,7 +200,7 @@ def _call_openai_compat_sync(
         "model": model.model_id,
         "messages": messages,
     }
-    token_limit = request.max_tokens_requested or 1024
+    token_limit = min(request.max_tokens_requested or 1024, model.max_output_tokens)
     if _uses_max_completion_tokens(provider_name, model.model_id):
         body["max_completion_tokens"] = token_limit
     else:
@@ -239,6 +239,12 @@ def _call_google_sync(
     body: dict[str, Any] = {"contents": contents}
     if request.system_prompt:
         body["system_instruction"] = {"parts": [{"text": request.system_prompt}]}
+    # Without an explicit cap, Google generates up to the model's own default
+    # (which can far exceed what routing/budget estimated this request would
+    # cost) — every other provider caller sets an equivalent limit.
+    body["generationConfig"] = {
+        "maxOutputTokens": min(request.max_tokens_requested or 1024, model.max_output_tokens)
+    }
 
     model_id = model.model_id.replace("-thinking", "")  # strip suffix for API
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent"
@@ -286,7 +292,7 @@ def _open_openai_compat_stream(
         messages.insert(0, {"role": "system", "content": request.system_prompt})
 
     body: dict[str, Any] = {"model": model.model_id, "messages": messages, "stream": True}
-    token_limit = request.max_tokens_requested or 1024
+    token_limit = min(request.max_tokens_requested or 1024, model.max_output_tokens)
     if _uses_max_completion_tokens(provider_name, model.model_id):
         body["max_completion_tokens"] = token_limit
     else:

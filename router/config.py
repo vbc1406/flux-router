@@ -265,6 +265,13 @@ MAX_METADATA_LIST_LEN: int = 100
 # Fallback retries handle transient slowness — the per-call timeout should be tight.
 PROVIDER_CALL_TIMEOUT_SECONDS: int = 30
 
+# Hard ceiling on RoutingRequest.max_tokens_requested. Matches the largest
+# max_output_tokens across router/models.json. A caller cannot make routing,
+# budget, and cost-attribution treat a request as cheap while asking the
+# provider itself for far more output than that — every model-specific cap
+# is applied on top of this (see routing_engine._estimate_cost).
+MAX_TOKENS_REQUESTED_CEILING: int = 128_000
+
 # ══════════════════════════════════════════════════════════════════════════════
 # LOGGING KILL SWITCH
 # ══════════════════════════════════════════════════════════════════════════════

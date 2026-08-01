@@ -312,6 +312,10 @@ class RequestClassifier:
         )
         task_type, _ = self._detect_task_type(request)
         output_tokens = self._estimate_output_tokens(task_type, input_tokens)
+        # Billing-relevant figure: never let the task-type heuristic UNDER-
+        # estimate what the caller could actually be billed for. Per-model
+        # capping still happens downstream in routing_engine._estimate_cost.
+        billing_output_tokens = max(output_tokens, request.max_tokens_requested or 0)
         history_tokens = self._count_tokens(self._history_text(history))
         sys_tokens = self._count_tokens(sys_prompt)
         total_context = input_tokens + output_tokens + sys_tokens  # history already in input_tokens
@@ -349,6 +353,7 @@ class RequestClassifier:
             complexity_score=complexity,
             estimated_input_tokens=input_tokens,
             estimated_output_tokens=output_tokens,
+            billing_output_tokens=billing_output_tokens,
             total_context_needed=total_context,
             task_type=task_type,
             requires_reasoning=requires_reasoning,
