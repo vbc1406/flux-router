@@ -1026,6 +1026,23 @@ class RoutingEngine:
         the response to the RoutingDecision.  Walks the appropriate fallback chain
         on failure (rate-limit → rate_limit chain, timeout → timeout chain, etc.).
         """
+        result = await self._proxy_execute_inner(decision, request)
+        # Every non-exceeded check_before_dispatch() call (Step 0, in route())
+        # reserves one run-budget step slot. The success branch inside
+        # _proxy_execute_inner() always pairs it with record_step(); every
+        # other exit (no API key, no chosen model, all attempts failed) does
+        # not, and must release it explicitly instead — record_step() only
+        # runs on success, so this is the ONE place all those non-success
+        # exits converge in the proxy-mode path.
+        if request.run_id and result.proxy_model_used is None:
+            self._run_budget.release_reservation(request.run_id, tenant_id=request.tenant_id)
+        return result
+
+    async def _proxy_execute_inner(
+        self,
+        decision: RoutingDecision,
+        request: RoutingRequest,
+    ) -> RoutingDecision:
         from .provider_caller import ProviderCallError, call_provider
 
         if not request.provider_api_key:

@@ -91,6 +91,12 @@ class _RunState:
     steps: list[StepRecord] = field(default_factory=list)
     cost_so_far: float = 0.0
     tokens_so_far: int = 0
+    # Steps that passed check_before_dispatch but haven't been recorded (or
+    # released) yet — see RunBudget._key's sibling concern in
+    # check_before_dispatch()/record_step()/release_reservation() below.
+    # Counted toward max_steps so N concurrent requests against the same run
+    # can't all pass the check before any of them records a step.
+    pending_steps: int = 0
 
 
 class RunBudgetExceeded(Exception):  # noqa: N818 — name matches the Task 3 public API exactly
@@ -263,6 +269,7 @@ class RedisRunStore:
             steps=[StepRecord(**s) for s in d["steps"]],
             cost_so_far=d["cost_so_far"],
             tokens_so_far=d["tokens_so_far"],
+            pending_steps=d.get("pending_steps", 0),
         )
 
     # ── RunStore Protocol ────────────────────────────────────────────────────
@@ -352,29 +359,48 @@ class RunBudget:
 
     def check_before_dispatch(self, run_id: str, tenant_id: str | None = None) -> str:
         """
-        Evaluate this run's state from steps recorded so far and return the
-        budget_state for the step about to be dispatched: "ok", "degraded",
-        or "warning". Raises RunBudgetExceeded if any limit is already
-        met/exceeded — the caller must not dispatch in that case.
+        Evaluate this run's state from steps recorded (and reserved — see
+        below) so far, and return the budget_state for the step about to be
+        dispatched: "ok", "degraded", or "warning". Raises RunBudgetExceeded
+        if any limit is already met/exceeded — the caller must not dispatch
+        in that case.
+
+        Concurrency: cost_so_far/tokens_so_far are only known once a step's
+        actual provider call finishes (record_step), which can be seconds
+        after this check — the same "pre-bill" limitation documented in
+        budget_tracker.py applies to those two dimensions here. The steps
+        dimension does NOT have this gap: every non-exceeded outcome of this
+        call reserves one step slot (state.pending_steps) under self._lock
+        BEFORE returning, so N concurrent callers against the same run can't
+        all observe "ok" before any of them records a step — the Nth caller
+        past max_steps sees the reservations made by the first N-1 and is
+        correctly blocked. The caller MUST eventually pair this with exactly
+        one of record_step() (dispatch succeeded) or release_reservation()
+        (dispatch was never attempted or failed) to release the slot.
         """
         self._maybe_housekeep()
         key = self._key(run_id, tenant_id)
-        state = self._store.get(key)
-        if state is None:
-            state = _RunState(limits=RunLimits())
-        state.last_touched = time.monotonic()
-        self._store.set(key, state)
+        with self._lock:
+            state = self._store.get(key)
+            if state is None:
+                state = _RunState(limits=RunLimits())
+            state.last_touched = time.monotonic()
 
-        frac, reason = _worst_fraction(state)
-        if frac >= 1.0:
-            # run_id here is the caller-facing (unscoped) id — never leak the
-            # tenant-scoped storage key into the exception/response.
-            raise RunBudgetExceeded(run_id, _summary(run_id, state, reason))
-        if frac >= RUN_WARN_THRESHOLD:
-            return "warning"
-        if frac >= RUN_DEGRADE_THRESHOLD:
-            return "degraded"
-        return "ok"
+            frac, reason = _worst_fraction(state)
+            if frac >= 1.0:
+                self._store.set(key, state)
+                # run_id here is the caller-facing (unscoped) id — never leak
+                # the tenant-scoped storage key into the exception/response.
+                raise RunBudgetExceeded(run_id, _summary(run_id, state, reason))
+
+            state.pending_steps += 1
+            self._store.set(key, state)
+
+            if frac >= RUN_WARN_THRESHOLD:
+                return "warning"
+            if frac >= RUN_DEGRADE_THRESHOLD:
+                return "degraded"
+            return "ok"
 
     def record_step(
         self,
@@ -384,20 +410,38 @@ class RunBudget:
         tokens: int,
         tenant_id: str | None = None,
     ) -> None:
-        """Record a completed step's actual cost/tokens. Never raises."""
+        """Record a completed step's actual cost/tokens, releasing the
+        reservation check_before_dispatch() made for it. Never raises."""
         key = self._key(run_id, tenant_id)
-        state = self._store.get(key)
-        if state is None:
-            state = _RunState(limits=RunLimits())
-        state.steps.append(
-            StepRecord(
-                model_id=model_id, cost_usd=cost_usd, tokens=tokens, timestamp=time.monotonic()
+        with self._lock:
+            state = self._store.get(key)
+            if state is None:
+                state = _RunState(limits=RunLimits())
+            state.steps.append(
+                StepRecord(
+                    model_id=model_id, cost_usd=cost_usd, tokens=tokens, timestamp=time.monotonic()
+                )
             )
-        )
-        state.cost_so_far += cost_usd
-        state.tokens_so_far += tokens
-        state.last_touched = time.monotonic()
-        self._store.set(key, state)
+            state.pending_steps = max(0, state.pending_steps - 1)
+            state.cost_so_far += cost_usd
+            state.tokens_so_far += tokens
+            state.last_touched = time.monotonic()
+            self._store.set(key, state)
+
+    def release_reservation(self, run_id: str, tenant_id: str | None = None) -> None:
+        """Release a step slot reserved by check_before_dispatch() without a
+        matching record_step() — call this whenever a step that passed the
+        gate was never actually dispatched, or its dispatch failed outright
+        (see Flux._dispatch_with_fallback / _complete_cascade,
+        router/server.py's proxy handlers). Never raises; a no-op if the run
+        is already gone (e.g. TTL-swept)."""
+        key = self._key(run_id, tenant_id)
+        with self._lock:
+            state = self._store.get(key)
+            if state is None:
+                return
+            state.pending_steps = max(0, state.pending_steps - 1)
+            self._store.set(key, state)
 
     def snapshot(self, run_id: str, tenant_id: str | None = None) -> tuple[float, int]:
         """Return (cost_so_far, steps_so_far) for a run, or (0.0, 0) if unknown."""
@@ -427,11 +471,16 @@ def _fraction(value: float, limit: float) -> float:
 
 
 def _worst_fraction(state: _RunState) -> tuple[float, str]:
-    """Return (fraction, reason) for whichever limit is closest to being hit."""
+    """Return (fraction, reason) for whichever limit is closest to being hit.
+
+    The steps dimension counts pending_steps (checked-out but not yet
+    recorded/released reservations) alongside completed steps — see
+    RunBudget.check_before_dispatch()'s docstring for why.
+    """
     elapsed = time.monotonic() - state.started_at
     candidates = [
         (_fraction(state.cost_so_far, state.limits.max_cost_usd), "cost"),
-        (_fraction(len(state.steps), state.limits.max_steps), "steps"),
+        (_fraction(len(state.steps) + state.pending_steps, state.limits.max_steps), "steps"),
         (_fraction(state.tokens_so_far, state.limits.max_tokens), "tokens"),
         (_fraction(elapsed, state.limits.max_duration_seconds), "duration"),
     ]

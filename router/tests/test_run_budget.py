@@ -177,6 +177,66 @@ class TestDegradationLadder:
         assert (cost, steps) == (0.0, 0)
 
 
+class TestConcurrentDispatchReservation:
+    """Regression: check_before_dispatch() used to only look at already-
+    RECORDED steps, so N requests dispatched concurrently against the same
+    run (record_step() only happens after each one's slow provider call
+    finishes) could all pass the max_steps gate before any of them recorded
+    anything — a caller could blow straight through the step cap by firing
+    requests in parallel instead of sequentially. check_before_dispatch()
+    now reserves a step slot atomically as part of the same check, so a
+    concurrent burst is correctly throttled at the limit."""
+
+    def test_burst_of_concurrent_checks_stops_at_max_steps(self):
+        rb = RunBudget()
+        rb.start(
+            "run-burst",
+            RunLimits(max_cost_usd=1000.0, max_steps=5, max_tokens=10**9, max_duration_seconds=10**9),
+        )
+
+        allowed = 0
+        blocked = 0
+        lock = threading.Lock()
+
+        def worker():
+            nonlocal allowed, blocked
+            try:
+                rb.check_before_dispatch("run-burst")
+            except RunBudgetExceeded:
+                with lock:
+                    blocked += 1
+                return
+            with lock:
+                allowed += 1
+            # Simulate a slow provider call finishing well after every other
+            # thread's check_before_dispatch() has already run.
+            rb.record_step("run-burst", "m", 0.0001, 1)
+
+        threads = [threading.Thread(target=worker) for _ in range(20)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert allowed == 5
+        assert blocked == 15
+
+    def test_release_reservation_frees_the_slot_for_a_failed_dispatch(self):
+        rb = RunBudget()
+        rb.start(
+            "run-release",
+            RunLimits(max_cost_usd=1000.0, max_steps=1, max_tokens=10**9, max_duration_seconds=10**9),
+        )
+        assert rb.check_before_dispatch("run-release") == "ok"
+        # Simulate the dispatch failing outright (never reaches record_step).
+        rb.release_reservation("run-release")
+        # The freed slot is available again — not permanently leaked.
+        assert rb.check_before_dispatch("run-release") == "ok"
+        rb.record_step("run-release", "m", 0.0001, 1)
+        with pytest.raises(RunBudgetExceeded):
+            rb.check_before_dispatch("run-release")
+
+
 # ── Unit tests: eviction at scale ───────────────────────────────────────────
 
 

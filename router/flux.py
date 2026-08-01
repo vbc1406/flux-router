@@ -235,6 +235,29 @@ class Flux:
             AuthenticationError — immediately, never retried.
             FluxAPIError        — after all retries are exhausted.
         """
+        try:
+            return await self._dispatch_with_fallback_inner(decision, request, max_retries)
+        except BaseException:
+            # Every non-exceeded check_before_dispatch() call (Step 0, inside
+            # self._engine.route()) reserves one run-budget step slot that
+            # must be matched by exactly one record_step() or
+            # release_reservation() — see run_budget.py. The success path
+            # below always calls record_step(); every raise out of this
+            # method (AuthenticationError immediately, or FluxAPIError once
+            # every model/fallback has failed) means that reservation would
+            # otherwise leak, permanently inflating this run's step count.
+            if request.run_id:
+                self._engine._run_budget.release_reservation(
+                    request.run_id, tenant_id=request.tenant_id
+                )
+            raise
+
+    async def _dispatch_with_fallback_inner(
+        self,
+        decision: RoutingDecision,
+        request: RoutingRequest,
+        max_retries: int = 2,
+    ) -> tuple[str, ModelOption, bool, str | None]:
         models_to_try: list[ModelOption] = []
         if decision.chosen_model:
             models_to_try.append(decision.chosen_model)
@@ -400,6 +423,26 @@ class Flux:
         the caller can see what happened and decide for itself.
         """
         request = self._build_request(prompt, **request_kwargs)
+        try:
+            return await self._complete_cascade_inner(request, cascade_verifier)
+        except BaseException:
+            # See _dispatch_with_fallback's equivalent comment: route() (just
+            # below) reserves one run-budget step slot via
+            # check_before_dispatch() that only the success path's
+            # record_step() call releases. Every raise out of this cascade
+            # (no model available, AuthenticationError, or every tier
+            # exhausted) must release it explicitly instead.
+            if request.run_id:
+                self._engine._run_budget.release_reservation(
+                    request.run_id, tenant_id=request.tenant_id
+                )
+            raise
+
+    async def _complete_cascade_inner(
+        self,
+        request: RoutingRequest,
+        cascade_verifier: Verifier | None,
+    ) -> FluxResponse:
         decision = await self._engine.route(request)
         if decision.chosen_model is None:
             raise err.FluxAPIError("No model available to route this request")

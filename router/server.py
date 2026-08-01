@@ -363,6 +363,10 @@ async def chat_completions(
     decision.run_id_missing = run_id_missing
 
     if decision.chosen_model is None:
+        if routing_request.run_id:
+            _flux._engine._run_budget.release_reservation(
+                routing_request.run_id, tenant_id=routing_request.tenant_id
+            )
         raise HTTPException(status_code=502, detail="No model available to route this request")
 
     headers = _flux_headers(decision, decision_latency_ms)
@@ -487,11 +491,16 @@ async def _stream_completion(routing_request, decision, completion_id, created, 
             cost_usd=cost_usd,
         )
 
+    # check_before_dispatch() (Step 0 of route(), already run before this
+    # generator starts) reserved one run-budget step slot for this request.
+    # `recorded` tracks whether _record_usage() (which calls record_step())
+    # ran — if the stream fails before that, the except block below must
+    # release the reservation explicitly instead of leaking it.
+    recorded = False
     try:
         if model.provider.lower() in STREAMING_NATIVE_PROVIDERS:
             api_key = _flux._resolve_api_key(model, routing_request)
             yield _chunk({"role": "assistant"}, None)
-            recorded = False
             async for line in stream_openai_compat_lines(model, routing_request, api_key):
                 if not recorded:
                     _record_usage(routing_request.max_tokens_requested or 1024)
@@ -504,8 +513,13 @@ async def _stream_completion(routing_request, decision, completion_id, created, 
         else:
             text = await _flux._call_model(model, routing_request)
             _record_usage(max(len(text) // 4, 1))
+            recorded = True
             yield _chunk({"role": "assistant", "content": text}, None)
             yield _chunk({}, "stop")
     except (ProviderCallError, FluxAPIError) as exc:
+        if not recorded and routing_request.run_id:
+            _flux._engine._run_budget.release_reservation(
+                routing_request.run_id, tenant_id=routing_request.tenant_id
+            )
         yield f"data: {json.dumps({'error': str(exc)})}\n\n".encode()
     yield b"data: [DONE]\n\n"
