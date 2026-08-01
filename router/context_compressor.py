@@ -164,12 +164,24 @@ class ContextCompressor:
             new_history = compressed_old + recent
             current_tokens = estimate_tokens(new_history)
 
-        # Pass 3: last resort — drop oldest messages one by one
-        while current_tokens > target_tokens and compressed_old:
-            dropped += 1
-            compressed_old.pop(0)
+        # Pass 3: last resort — drop oldest messages one by one. Tracks a
+        # running token total and a cursor instead of pop(0) + a full
+        # re-concat + re-scan of new_history on every iteration (which made
+        # this O(n^2) on long histories — the common case for a multi-step
+        # agent that resends its full history each step).
+        if current_tokens > target_tokens and compressed_old:
+            recent_tokens = estimate_tokens(recent)
+            old_tokens = [_message_tokens(m) for m in compressed_old]
+            running = sum(old_tokens)
+            cut = 0
+            while running + recent_tokens > target_tokens and cut < len(compressed_old):
+                running -= old_tokens[cut]
+                cut += 1
+                dropped += 1
+            if cut:
+                compressed_old = compressed_old[cut:]
             new_history = compressed_old + recent
-            current_tokens = estimate_tokens(new_history)
+            current_tokens = running + recent_tokens
 
         # Append compression note so the model knows context was trimmed
         if dropped:

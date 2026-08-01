@@ -36,7 +36,12 @@ except ImportError as exc:  # pragma: no cover - exercised only without the extr
         "router.server requires the 'server' extra. Install with: pip install flux-router[server]"
     ) from exc
 
-from .config import ATTRIBUTION_USAGE_PAGE_MAX, SERVER_MAX_BODY_BYTES, SERVER_REQUIRE_AUTH
+from .config import (
+    ATTRIBUTION_USAGE_PAGE_MAX,
+    SERVER_MAX_BODY_BYTES,
+    SERVER_REQUIRE_AUTH,
+    SERVER_TOKENS,
+)
 from .errors import AuthenticationError, FluxAPIError
 from .flux import Flux, make_flux
 from .provider_caller import (
@@ -67,6 +72,16 @@ if not SERVER_REQUIRE_AUTH:
             "allow non-loopback binding."
         ),
     )
+elif not SERVER_TOKENS:
+    log.warning(
+        "flux_server_shared_token_no_tenant_binding",
+        msg=(
+            "FLUX_SERVER_TOKEN is set but FLUX_SERVER_TOKENS is not — every caller who "
+            "holds the shared token is authenticated as every tenant (X-Flux-Tenant-Id "
+            "and the `user` field are self-declared, unverified claims). Set "
+            "FLUX_SERVER_TOKENS to bind each bearer token to one tenant_id instead."
+        ),
+    )
 
 app = FastAPI(title="Flux Router", version="1.0.0")
 
@@ -75,14 +90,25 @@ app = FastAPI(title="Flux Router", version="1.0.0")
 _flux: Flux = make_flux()
 
 
-def _check_auth(authorization: str | None) -> None:
+def _check_auth(authorization: str | None) -> str | None:
+    """Validate the bearer token and return the tenant_id it's bound to, if
+    any (FLUX_SERVER_TOKENS multi-tenant mode). None means either auth is
+    disabled or the legacy single-shared-token mode is in effect, where the
+    caller's self-declared tenant_id/user fields are trusted as-is — see
+    SECURITY_ARCHITECTURE.md."""
     if not SERVER_REQUIRE_AUTH:
-        return
+        return None
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or malformed Authorization header")
     token = authorization.removeprefix("Bearer ").strip()
+    if SERVER_TOKENS:
+        bound_tenant = SERVER_TOKENS.get(token)
+        if bound_tenant is None:
+            raise HTTPException(status_code=401, detail="Invalid bearer token")
+        return bound_tenant
     if token != _SERVER_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid bearer token")
+    return None
 
 
 async def _read_bounded_body(request: Request) -> bytes:
@@ -113,7 +139,7 @@ def _messages_to_request_fields(
     messages: list[dict[str, Any]],
 ) -> tuple[str | None, str, list[dict]]:
     """Split an OpenAI `messages` array into (system_prompt, raw_prompt, message_history)."""
-    system_parts = [m["content"] for m in messages if m.get("role") == "system"]
+    system_parts = [m.get("content", "") for m in messages if m.get("role") == "system"]
     non_system = [m for m in messages if m.get("role") != "system"]
     if not non_system:
         raise HTTPException(
@@ -229,8 +255,14 @@ async def get_usage(
     Task 7: paginated cost/metadata usage records — never prompt or
     completion content (see SECURITY_ARCHITECTURE.md). Filter with
     ?tenant_id=... and/or ?run_id=...; paginate with ?limit=&offset=.
+
+    In FLUX_SERVER_TOKENS multi-tenant mode, the bearer token's bound tenant
+    always wins over ?tenant_id= — a caller can only ever see their own
+    tenant's usage, regardless of what they pass on the query string.
     """
-    _check_auth(authorization)
+    bound_tenant = _check_auth(authorization)
+    if bound_tenant is not None:
+        tenant_id = bound_tenant
     limit = max(1, min(limit, ATTRIBUTION_USAGE_PAGE_MAX))
     offset = max(0, offset)
     records, total = _flux._engine._attribution.usage(
@@ -272,7 +304,7 @@ async def chat_completions(
     x_flux_run_id: str | None = Header(default=None, alias="X-Flux-Run-Id"),
     x_flux_tenant_id: str | None = Header(default=None, alias="X-Flux-Tenant-Id"),
 ) -> Any:
-    _check_auth(authorization)
+    bound_tenant = _check_auth(authorization)
     raw_body = await _read_bounded_body(request)
     try:
         body = json.loads(raw_body.decode("utf-8"))
@@ -281,19 +313,25 @@ async def chat_completions(
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Request body must be a JSON object")
 
+    # In FLUX_SERVER_TOKENS multi-tenant mode, the bearer token's bound
+    # tenant always wins over the client-supplied X-Flux-Tenant-Id header —
+    # otherwise any caller could attribute spend/usage to an arbitrary
+    # tenant_id regardless of which token they authenticated with.
+    tenant_id = bound_tenant if bound_tenant is not None else x_flux_tenant_id
+
     # Task 3: every request belongs to a run — X-Flux-Run-Id groups repeated
     # calls into one budgeted trajectory; a request with no header gets its
     # own single-step run (harmless: checked against the generous global
     # RUN_MAX_* defaults, evicted quickly by the RunStore's TTL/LRU).
     run_id = x_flux_run_id or str(uuid.uuid4())
-    routing_request, _ = _build_routing_request(body, run_id, x_flux_tenant_id)
+    routing_request, _ = _build_routing_request(body, run_id, tenant_id)
     stream = bool(body.get("stream", False))
 
     start = time.monotonic()
     try:
         decision = await _flux.route(routing_request, verbose=True)
     except RunBudgetExceeded as exc:
-        _flux._engine._attribution.record_budget_exceeded(x_flux_tenant_id)
+        _flux._engine._attribution.record_budget_exceeded(tenant_id)
         return JSONResponse(
             status_code=429,
             content={"error": {"message": str(exc), "type": "run_budget_exceeded", **exc.summary}},
@@ -310,21 +348,9 @@ async def chat_completions(
     model_id = decision.chosen_model.model_id
 
     if stream:
-        # Recorded up front (using the cost estimate) rather than after the
-        # stream closes — StreamingResponse's body can be abandoned by the
-        # client mid-stream, which would otherwise leave this step unrecorded
-        # and let a run dodge its own budget by disconnecting early.
-        _flux._engine._run_budget.record_step(
-            run_id, model_id, decision.estimated_cost, routing_request.max_tokens_requested or 1024
-        )
-        _flux._engine._attribution.record(
-            tenant_id=routing_request.tenant_id,
-            run_id=run_id,
-            task_type=decision.task_type,
-            step_type=decision.step_type,
-            model_id=model_id,
-            cost_usd=decision.estimated_cost,
-        )
+        # Budget/attribution recording happens inside _stream_completion,
+        # once the provider call is confirmed to have actually produced
+        # output — see its docstring for why that beats recording up front.
         return StreamingResponse(
             _stream_completion(routing_request, decision, completion_id, created, headers),
             media_type="text/event-stream",
@@ -380,6 +406,14 @@ async def _stream_completion(routing_request, decision, completion_id, created, 
     format (anthropic/google), we fall back to a single synthesized chunk
     carrying the full response, since translating each provider's own event
     schema chunk-by-chunk is out of scope here.
+
+    Budget/attribution is recorded as soon as the provider call is confirmed
+    to have produced output (first chunk for native streaming, full text for
+    the synthesized-chunk path) rather than before the call starts — a call
+    that fails outright (ProviderCallError/FluxAPIError, e.g. a 429 from the
+    provider) never gets this far, so it isn't charged. Once recorded, it
+    stays recorded even if the client disconnects mid-stream afterward: the
+    provider was already paid for those tokens.
     """
     model = decision.chosen_model
     model_id = model.model_id
@@ -394,11 +428,45 @@ async def _stream_completion(routing_request, decision, completion_id, created, 
         }
         return f"data: {json.dumps(payload)}\n\n".encode()
 
+    def _record_usage(tokens: int) -> None:
+        cost_usd = decision.estimated_cost
+        engine = _flux._engine
+        engine._budget.record_spend(
+            user_id=routing_request.user_id,
+            amount=cost_usd,
+            model_id=model_id,
+            correlation_id=routing_request.correlation_id,
+            task_type="unknown",
+            plan=routing_request.plan or "free_plan",
+        )
+        if routing_request.max_daily_cost is not None:
+            engine._daily_budget.record_spend(
+                customer_id=routing_request.customer_id or routing_request.user_id,
+                amount=cost_usd,
+                model_id=model_id,
+                correlation_id=routing_request.correlation_id,
+                task_type="unknown",
+            )
+        if routing_request.run_id:
+            engine._run_budget.record_step(routing_request.run_id, model_id, cost_usd, tokens)
+        engine._attribution.record(
+            tenant_id=routing_request.tenant_id,
+            run_id=routing_request.run_id,
+            task_type=decision.task_type,
+            step_type=decision.step_type,
+            model_id=model_id,
+            cost_usd=cost_usd,
+        )
+
     try:
         if model.provider.lower() in STREAMING_NATIVE_PROVIDERS:
             api_key = _flux._resolve_api_key(model, routing_request)
             yield _chunk({"role": "assistant"}, None)
+            recorded = False
             async for line in stream_openai_compat_lines(model, routing_request, api_key):
+                if not recorded:
+                    _record_usage(routing_request.max_tokens_requested or 1024)
+                    recorded = True
                 text = line.decode("utf-8", errors="replace").strip()
                 if not text or text == "data: [DONE]":
                     continue
@@ -406,6 +474,7 @@ async def _stream_completion(routing_request, decision, completion_id, created, 
                     yield f"{text}\n\n".encode()
         else:
             text = await _flux._call_model(model, routing_request)
+            _record_usage(max(len(text) // 4, 1))
             yield _chunk({"role": "assistant", "content": text}, None)
             yield _chunk({}, "stop")
     except (ProviderCallError, FluxAPIError) as exc:

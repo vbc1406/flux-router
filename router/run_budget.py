@@ -237,25 +237,26 @@ class RunBudget:
             self._store.sweep_expired(RUN_TTL_SECONDS)
 
 
+def _fraction(value: float, limit: float) -> float:
+    """value/limit, treating a limit of exactly 0 as "no budget at all" (blocks
+    immediately) rather than "unset" — plain falsiness would silently disable
+    the dimension instead, since 0 is falsy in Python. A negative limit is not
+    a meaningful ceiling and is treated as unset."""
+    if limit > 0:
+        return value / limit
+    if limit == 0:
+        return 1.0
+    return 0.0
+
+
 def _worst_fraction(state: _RunState) -> tuple[float, str]:
     """Return (fraction, reason) for whichever limit is closest to being hit."""
     elapsed = time.monotonic() - state.started_at
     candidates = [
-        (
-            state.cost_so_far / state.limits.max_cost_usd if state.limits.max_cost_usd else 0.0,
-            "cost",
-        ),
-        (len(state.steps) / state.limits.max_steps if state.limits.max_steps else 0.0, "steps"),
-        (
-            state.tokens_so_far / state.limits.max_tokens if state.limits.max_tokens else 0.0,
-            "tokens",
-        ),
-        (
-            elapsed / state.limits.max_duration_seconds
-            if state.limits.max_duration_seconds
-            else 0.0,
-            "duration",
-        ),
+        (_fraction(state.cost_so_far, state.limits.max_cost_usd), "cost"),
+        (_fraction(len(state.steps), state.limits.max_steps), "steps"),
+        (_fraction(state.tokens_so_far, state.limits.max_tokens), "tokens"),
+        (_fraction(elapsed, state.limits.max_duration_seconds), "duration"),
     ]
     return max(candidates, key=lambda c: c[0])
 

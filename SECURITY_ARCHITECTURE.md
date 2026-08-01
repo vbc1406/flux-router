@@ -97,6 +97,19 @@ The same applies to the fields that select or raise a request's spending limits:
 
 Flux does not authenticate. Your application layer must.
 
+**Exception — `router/server.py`'s HTTP proxy in `FLUX_SERVER_TOKENS` mode.**
+The proxy's default auth (`FLUX_SERVER_TOKEN`, a single shared bearer token)
+does not bind identity: any caller holding the token can set `X-Flux-Tenant-Id`
+and `user` to whatever they like, so the risks above still apply verbatim to
+proxy traffic. Set `FLUX_SERVER_TOKENS` (a JSON map of `token -> tenant_id`,
+e.g. `{"tok-acme": "acme", "tok-globex": "globex"}`) instead to bind each
+bearer token to exactly one tenant server-side — the proxy then ignores any
+client-supplied `X-Flux-Tenant-Id` and forces both `/v1/chat/completions`
+attribution and `/v1/usage` queries to the token's bound tenant. This closes
+the tenant-identity gap; it does **not** cover `user_id`/`customer_id`
+(per-user budget spoofing within a tenant) — those still require your own
+authenticated-session mapping, same as any other Flux deployment.
+
 ### File Writes Are Atomic
 
 State files (adaptive weights, analytics) are written via temp file + atomic rename. A process crash mid-write cannot corrupt your data.

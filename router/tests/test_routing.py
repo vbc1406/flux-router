@@ -74,11 +74,12 @@ from router.routing_engine import (
     _is_allowed_for_plan,
     _normalize_cost,
     _normalize_latency,
+    _pick_best,
     _validate_exploration_rate,
     _validate_mode,
     _validate_routing_priority,
 )
-from router.schemas import ModelOption, RoutingRequest
+from router.schemas import ModelOption, RoutingRequest, TaskAnalysis
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1109,3 +1110,44 @@ class TestProxyMode:
     def test_invalid_mode_raises(self):
         with pytest.raises(ValueError):
             rr(_engine().route(_req("test", mode="turbo")))
+
+
+class TestPickBestCostTiebreak:
+    """Regression: _pick_best chose only by quality_ratings, so a
+    quality-tied duplicate model (e.g. an old model.json entry kept for
+    compatibility) could win purely by iteration order and cost far more
+    for zero quality gain. On a tie, the cheaper model must win."""
+
+    def _analysis(self) -> TaskAnalysis:
+        return TaskAnalysis(
+            complexity_score=0.5,
+            estimated_input_tokens=100,
+            estimated_output_tokens=100,
+            total_context_needed=200,
+            task_type="reasoning",
+        )
+
+    def _model(self, model_id: str, quality: float, rate: float) -> ModelOption:
+        return ModelOption(
+            provider="test",
+            model_id=model_id,
+            display_name=model_id,
+            tier="premium",
+            cost_per_1k_input=rate,
+            cost_per_1k_output=rate,
+            max_context_window=100_000,
+            max_output_tokens=4096,
+            capabilities=[],
+            quality_ratings={"reasoning": quality},
+        )
+
+    def test_cheaper_model_wins_on_quality_tie(self):
+        cheap = self._model("cheap-tied", quality=0.9, rate=0.005)
+        pricey = self._model("pricey-tied", quality=0.9, rate=0.015)
+        assert _pick_best([pricey, cheap], self._analysis()).model_id == "cheap-tied"
+        assert _pick_best([cheap, pricey], self._analysis()).model_id == "cheap-tied"
+
+    def test_higher_quality_still_wins_over_cheaper(self):
+        better = self._model("better", quality=0.95, rate=0.02)
+        cheaper = self._model("cheaper", quality=0.8, rate=0.001)
+        assert _pick_best([better, cheaper], self._analysis()).model_id == "better"

@@ -98,6 +98,58 @@ class TestCascadeInitialTierSelection:
         assert decision.chosen_model.tier == "free"
 
 
+class TestCascadeQualityFloor:
+    """Regression: _route_cascade_initial always started at the cheapest
+    tier regardless of task complexity, bypassing the same
+    COMPLEXITY_QUALITY_FLOOR that non-cascade routing enforces. Cascade's
+    local verifiers can't detect a fluent-but-wrong reasoning answer, so a
+    hard task must not start from a tier too weak to plausibly get it right."""
+
+    def test_high_complexity_reasoning_skips_low_quality_tiers(self):
+        registry = ModelRegistry()
+        models = _models()
+        models[0].quality_ratings["reasoning"] = 0.30  # free
+        models[1].quality_ratings["reasoning"] = 0.45  # cheap
+        models[2].quality_ratings["reasoning"] = 0.80  # mid
+        models[3].quality_ratings["reasoning"] = 0.95  # premium
+        registry._models = {m.model_id: m for m in models}
+        cache = ResponseCache(enabled=False)
+        adaptive = AdaptiveWeights(state_file=None)
+        analytics = RoutingAnalytics(log_path=None)
+        budget = BudgetTracker()
+        compressor = ContextCompressor()
+        classifier = RequestClassifier(cache)
+        engine = RoutingEngine(registry, classifier, cache, budget, adaptive, compressor, analytics)
+
+        req = RoutingRequest(
+            raw_prompt=(
+                "Prove that the square root of 2 is irrational. Show all "
+                "steps rigorously using ∑ notation."
+            ),
+            user_id="u",
+            plan="business_plan",
+            routing_priority="cascade",
+        )
+        decision = rr(engine.route(req))
+        assert decision.chosen_model is not None
+        assert decision.task_type == "reasoning"
+        # Free/cheap don't clear the reasoning quality floor for this
+        # complexity — cascade must not start there even though they're the
+        # cheapest, since local verifiers can't catch a wrong-but-fluent proof.
+        assert decision.chosen_model.tier in ("mid", "premium")
+
+    def test_low_complexity_still_starts_cheapest(self):
+        """The fix must not regress the common case: an easy task with
+        uniform quality across tiers still starts at the cheapest tier."""
+        engine = _engine()
+        req = RoutingRequest(
+            raw_prompt="hi", user_id="u", plan="business_plan", routing_priority="cascade"
+        )
+        decision = rr(engine.route(req))
+        assert decision.chosen_model is not None
+        assert decision.chosen_model.tier == "free"
+
+
 class TestCascadeEscalation:
     def test_first_tier_passes_no_escalation(self):
         flux = _flux()

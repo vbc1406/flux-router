@@ -67,6 +67,7 @@ from .analytics import RoutingAnalytics
 from .attribution import CostAttribution
 from .budget_tracker import BudgetTracker, DailyBudgetTracker
 from .cache import ResponseCache
+from .cascade import estimate_step_cost
 from .circuit_breaker import CircuitBreaker
 from .classifier import RequestClassifier
 from .config import (
@@ -1030,12 +1031,19 @@ class RoutingEngine:
                 )
                 # Fix 4: Record success on the circuit breaker.
                 self._circuit_breaker.record_success(model.provider)
+                # A fallback may have dispatched a different model than
+                # decision.chosen_model, at a different rate — rescale the
+                # estimate to the model actually called rather than recording
+                # the originally-chosen model's (possibly much cheaper) cost.
+                actual_cost = estimate_step_cost(
+                    model, decision.chosen_model, decision.estimated_cost
+                )
                 # Record actual spend so budget caps hold for proxy-mode calls.
                 # Without this, proxy traffic spends untracked money and
                 # would_exceed_budget always passes. Mirrors Flux.complete().
                 self._budget.record_spend(
                     user_id=request.user_id,
-                    amount=decision.estimated_cost,
+                    amount=actual_cost,
                     model_id=model.model_id,
                     correlation_id=request.correlation_id,
                     task_type="unknown",
@@ -1044,7 +1052,7 @@ class RoutingEngine:
                 if request.max_daily_cost is not None:
                     self._daily_budget.record_spend(
                         customer_id=request.customer_id or request.user_id,
-                        amount=decision.estimated_cost,
+                        amount=actual_cost,
                         model_id=model.model_id,
                         correlation_id=request.correlation_id,
                         task_type="unknown",
@@ -1056,7 +1064,7 @@ class RoutingEngine:
                     self._run_budget.record_step(
                         request.run_id,
                         model.model_id,
-                        decision.estimated_cost,
+                        actual_cost,
                         max(len(response) // 4, 1),
                     )
                 # Task 7: cost attribution — costs/metadata only, never the
@@ -1067,7 +1075,7 @@ class RoutingEngine:
                     task_type=decision.task_type,
                     step_type=decision.step_type,
                     model_id=model.model_id,
-                    cost_usd=decision.estimated_cost,
+                    cost_usd=actual_cost,
                 )
                 decision.proxy_response = response
                 decision.proxy_model_used = model
@@ -1213,14 +1221,30 @@ def _route_cascade_initial(
     (Flux.complete()) escalates through decision.fallback_chain — built by
     build_fallback_chain() from this starting point, which walks up in
     tier/capability — on verification failure.
+
+    Candidates below the same complexity-based quality floor that non-cascade
+    routing enforces in Step 9 (COMPLEXITY_QUALITY_FLOOR) are excluded before
+    picking the cheapest tier. DEFAULT_VERIFIERS only checks for
+    empty/refusal/truncation/JSON-validity — it has no way to catch a
+    fluent-but-wrong reasoning or code answer, so for a hard task cascade
+    must not start from a tier so weak that a plausible-but-incorrect answer
+    would sail through verification and never escalate.
     """
+    min_quality = _quality_floor_for_complexity(analysis.complexity_score)
     for tier in CASCADE_ESCALATION_TIERS:  # cheapest first
-        tier_models = [m for m in candidates if m.tier == tier]
+        tier_models = [
+            m
+            for m in candidates
+            if m.tier == tier and m.quality_ratings.get(analysis.task_type, 0.5) >= min_quality
+        ]
         if tier_models:
             best = _pick_best(tier_models, analysis)
             return best, f"cascade_initial (tier={tier})"
+    # No tier clears the quality floor for this task — cascade's cheap-first
+    # savings aren't safe here; start from the best available instead of the
+    # cheapest, matching what non-cascade routing would do in this situation.
     best = _pick_best(candidates, analysis)
-    return best, "cascade_initial (fallback)"
+    return best, "cascade_initial (quality_floor_fallback)"
 
 
 def _budget_tier_walkdown(
@@ -1498,8 +1522,18 @@ def _find_model(model_id: str, candidates: list[ModelOption]) -> ModelOption | N
 
 
 def _pick_best(models: list[ModelOption], analysis: TaskAnalysis) -> ModelOption:
-    """Pick the highest-quality model for the given task type."""
-    return max(models, key=lambda m: m.quality_ratings.get(analysis.task_type, 0.5))
+    """Pick the highest-quality model for the given task type. On a quality
+    tie, prefer the cheaper model rather than letting registry iteration
+    order silently decide — otherwise a models.json edit that adds a
+    dominated (equal-quality, pricier) duplicate can triple spend for zero
+    quality gain."""
+    return max(
+        models,
+        key=lambda m: (
+            m.quality_ratings.get(analysis.task_type, 0.5),
+            -(m.cost_per_1k_input + m.cost_per_1k_output),
+        ),
+    )
 
 
 def _estimate_savings_vs_premium(

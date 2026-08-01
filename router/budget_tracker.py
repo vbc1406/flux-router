@@ -38,14 +38,16 @@ Things NOT to change without discussion:
 
 from __future__ import annotations
 
+import itertools
 import threading
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
+from collections.abc import Iterable
 from datetime import date, datetime, timezone
-from typing import NamedTuple
+from typing import Callable, NamedTuple
 
 import structlog
 
-from .config import BUDGET_LEDGER_MAX_PER_USER, BUDGET_LIMITS
+from .config import BUDGET_LEDGER_MAX_PER_USER, BUDGET_LIMITS, BUDGET_TRACKER_MAX_USERS
 
 log = structlog.get_logger(__name__)
 
@@ -71,6 +73,21 @@ class _SpendRecord(NamedTuple):
     timestamp: datetime
 
 
+def _sum_while(records: Iterable[_SpendRecord], predicate: Callable[[_SpendRecord], bool]) -> float:
+    """Sum r.amount for the most-recent records matching predicate, scanning
+    backward and stopping at the first non-match. Records are appended in
+    non-decreasing timestamp order, so once one fails a "recent enough"
+    predicate (e.g. "is today"), every earlier record fails it too — this
+    turns a full O(ledger size) scan into O(matching records), which is
+    typically far smaller than the per-user cap."""
+    total = 0.0
+    for r in reversed(records):
+        if not predicate(r):
+            break
+        total += r.amount
+    return total
+
+
 class BudgetTracker:
     """
     In-memory spend ledger with daily and monthly rollup windows.
@@ -82,12 +99,46 @@ class BudgetTracker:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        # user_id → bounded deque of spend records (auto-evicts oldest beyond cap)
-        self._ledger: dict[str, deque[_SpendRecord]] = defaultdict(
-            lambda: deque(maxlen=BUDGET_LEDGER_MAX_PER_USER)
-        )
-        # user_id → plan (cached to avoid repeated lookups)
+        # user_id → bounded deque of spend records (auto-evicts oldest beyond
+        # per-user cap). An OrderedDict, not a plain/defaultdict — the outer
+        # dict itself is also LRU-bounded (BUDGET_TRACKER_MAX_USERS), since
+        # nothing previously stopped the number of DISTINCT users tracked
+        # from growing forever.
+        self._ledger: OrderedDict[str, deque[_SpendRecord]] = OrderedDict()
+        # user_id → plan (cached to avoid repeated lookups); evicted in
+        # lockstep with _ledger so the two never disagree on which users
+        # are still tracked.
         self._plans: dict[str, str] = {}
+
+    # ── Internal: LRU-bounded ledger access ────────────────────────────────
+
+    def _ledger_for_write(self, user_id: str) -> deque[_SpendRecord]:
+        """Get-or-create user_id's ledger, evicting the least-recently-used
+        user if the cap is hit. Must be called with self._lock held."""
+        records = self._ledger.get(user_id)
+        if records is None:
+            if len(self._ledger) >= BUDGET_TRACKER_MAX_USERS:
+                evicted_id, _ = self._ledger.popitem(last=False)
+                self._plans.pop(evicted_id, None)
+                log.info(
+                    "budget_tracker_evicted_lru", limit=BUDGET_TRACKER_MAX_USERS, evicted=evicted_id
+                )
+            records = deque(maxlen=BUDGET_LEDGER_MAX_PER_USER)
+        self._ledger[user_id] = records
+        self._ledger.move_to_end(user_id)
+        return records
+
+    def _ledger_for_read(self, user_id: str) -> deque[_SpendRecord]:
+        """Look up user_id's ledger WITHOUT creating one — a budget check
+        for a user who has never spent anything must not itself grow the
+        ledger (that was the actual unbounded-growth vector: every routing
+        decision calls would_exceed_budget(), not just record_spend()).
+        Must be called with self._lock held."""
+        records = self._ledger.get(user_id)
+        if records is not None:
+            self._ledger.move_to_end(user_id)
+            return records
+        return deque()
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -104,7 +155,7 @@ class BudgetTracker:
         user_id = _validate_user_id(user_id)
         with self._lock:
             self._plans[user_id] = plan
-            self._ledger[user_id].append(
+            self._ledger_for_write(user_id).append(
                 _SpendRecord(
                     amount=amount,
                     model_id=model_id,
@@ -119,17 +170,17 @@ class BudgetTracker:
         user_id = _validate_user_id(user_id)
         today = datetime.now(timezone.utc).replace(tzinfo=None).date()
         with self._lock:
-            return sum(r.amount for r in self._ledger[user_id] if r.timestamp.date() == today)
+            records = self._ledger_for_read(user_id)
+            return _sum_while(records, lambda r: r.timestamp.date() == today)
 
     def get_monthly_spend(self, user_id: str) -> float:
         """Sum of spend for user_id within the current UTC month."""
         user_id = _validate_user_id(user_id)
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         with self._lock:
-            return sum(
-                r.amount
-                for r in self._ledger[user_id]
-                if r.timestamp.year == now.year and r.timestamp.month == now.month
+            records = self._ledger_for_read(user_id)
+            return _sum_while(
+                records, lambda r: r.timestamp.year == now.year and r.timestamp.month == now.month
             )
 
     def get_remaining_budget(self, user_id: str, plan: str) -> float:
@@ -162,13 +213,19 @@ class BudgetTracker:
             limits = BUDGET_LIMITS.get(resolved_plan, BUDGET_LIMITS["free_plan"])
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             today = now.date()
-            records = self._ledger[user_id]
-            daily_spend = sum(r.amount for r in records if r.timestamp.date() == today)
-            monthly_spend = sum(
-                r.amount
-                for r in records
-                if r.timestamp.year == now.year and r.timestamp.month == now.month
-            )
+            records = self._ledger_for_read(user_id)
+            # Single backward pass: every record in the current month is a
+            # superset of every record today, so one scan (stopping at the
+            # first record outside the current month) computes both sums
+            # instead of two independent O(ledger size) scans.
+            daily_spend = 0.0
+            monthly_spend = 0.0
+            for r in reversed(records):
+                if r.timestamp.year != now.year or r.timestamp.month != now.month:
+                    break
+                monthly_spend += r.amount
+                if r.timestamp.date() == today:
+                    daily_spend += r.amount
             remaining = min(
                 limits["daily"] - daily_spend,
                 limits["monthly"] - monthly_spend,
@@ -190,7 +247,7 @@ class BudgetTracker:
         """
         user_id = _validate_user_id(user_id)
         with self._lock:
-            records = list(self._ledger[user_id])
+            records = list(self._ledger_for_read(user_id))
 
         total_spent = sum(r.amount for r in records)
 
@@ -228,9 +285,35 @@ class DailyBudgetTracker:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._ledger: dict[str, deque[_SpendRecord]] = defaultdict(
-            lambda: deque(maxlen=BUDGET_LEDGER_MAX_PER_USER)
-        )
+        # Same LRU-bounded-outer-dict pattern as BudgetTracker: bounds both
+        # per-customer record count (BUDGET_LEDGER_MAX_PER_USER) and the
+        # number of distinct customers tracked (BUDGET_TRACKER_MAX_USERS).
+        self._ledger: OrderedDict[str, deque[_SpendRecord]] = OrderedDict()
+
+    def _ledger_for_write(self, customer_id: str) -> deque[_SpendRecord]:
+        """Must be called with self._lock held."""
+        records = self._ledger.get(customer_id)
+        if records is None:
+            if len(self._ledger) >= BUDGET_TRACKER_MAX_USERS:
+                evicted_id, _ = self._ledger.popitem(last=False)
+                log.info(
+                    "daily_budget_tracker_evicted_lru",
+                    limit=BUDGET_TRACKER_MAX_USERS,
+                    evicted=evicted_id,
+                )
+            records = deque(maxlen=BUDGET_LEDGER_MAX_PER_USER)
+        self._ledger[customer_id] = records
+        self._ledger.move_to_end(customer_id)
+        return records
+
+    def _ledger_for_read(self, customer_id: str) -> deque[_SpendRecord]:
+        """Must be called with self._lock held. Never creates an entry — a
+        cap check for a customer with no spend must not grow the ledger."""
+        records = self._ledger.get(customer_id)
+        if records is not None:
+            self._ledger.move_to_end(customer_id)
+            return records
+        return deque()
 
     def record_spend(
         self,
@@ -243,7 +326,7 @@ class DailyBudgetTracker:
         """Record a spend event for customer_id."""
         customer_id = _validate_user_id(customer_id)
         with self._lock:
-            self._ledger[customer_id].append(
+            self._ledger_for_write(customer_id).append(
                 _SpendRecord(
                     amount=amount,
                     model_id=model_id,
@@ -264,7 +347,8 @@ class DailyBudgetTracker:
         customer_id = _validate_user_id(customer_id)
         today = datetime.now(timezone.utc).replace(tzinfo=None).date()
         with self._lock:
-            return sum(r.amount for r in self._ledger[customer_id] if r.timestamp.date() == today)
+            records = self._ledger_for_read(customer_id)
+            return _sum_while(records, lambda r: r.timestamp.date() == today)
 
     def is_cap_exceeded(self, customer_id: str, daily_cap: float) -> bool:
         """
@@ -278,8 +362,14 @@ class DailyBudgetTracker:
         """Today's spend summary for a customer."""
         customer_id = _validate_user_id(customer_id)
         today = date.today()
+        def _is_today(r: _SpendRecord) -> bool:
+            return r.timestamp.date() == today
+
         with self._lock:
-            today_records = [r for r in self._ledger[customer_id] if r.timestamp.date() == today]
+            records = self._ledger_for_read(customer_id)
+            # Same backward-scan-with-early-stop as _sum_while, but keeping
+            # the matched records themselves (not just their sum).
+            today_records = list(reversed(list(itertools.takewhile(_is_today, reversed(records)))))
         return {
             "customer_id": customer_id,
             "date": today.isoformat(),

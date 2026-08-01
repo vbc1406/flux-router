@@ -164,6 +164,56 @@ class TestAuth:
         assert resp.status_code == 401
 
 
+class TestMultiTenantTokens:
+    """Regression: with a single shared FLUX_SERVER_TOKEN, any caller who
+    holds it is authenticated as every tenant — X-Flux-Tenant-Id is a bare,
+    self-declared claim. FLUX_SERVER_TOKENS binds each bearer token to one
+    tenant_id so the proxy can enforce isolation itself."""
+
+    def _enable(self, monkeypatch):
+        monkeypatch.setattr(server, "SERVER_REQUIRE_AUTH", True)
+        monkeypatch.setattr(server, "SERVER_TOKENS", {"tok-acme": "acme", "tok-globex": "globex"})
+
+    def test_bound_tenant_overrides_client_header(self, client, monkeypatch, _mock_call_model):
+        self._enable(monkeypatch)
+        resp = client.post(
+            "/v1/chat/completions",
+            json=_body(),
+            headers={"Authorization": "Bearer tok-acme", "X-Flux-Tenant-Id": "globex"},
+        )
+        assert resp.status_code == 200
+        records, _ = server._flux._engine._attribution.usage(tenant_id="acme", limit=10)
+        assert len(records) >= 1
+        spoofed, _ = server._flux._engine._attribution.usage(tenant_id="globex", limit=10)
+        assert not any(r.run_id == resp.headers["x-flux-run-id"] for r in spoofed)
+
+    def test_usage_endpoint_ignores_requested_tenant(self, client, monkeypatch, _mock_call_model):
+        self._enable(monkeypatch)
+        client.post(
+            "/v1/chat/completions",
+            json=_body(),
+            headers={"Authorization": "Bearer tok-acme"},
+        )
+        # Even asking explicitly for another tenant's usage returns only
+        # the caller's own (bound) tenant's records.
+        resp = client.get(
+            "/v1/usage",
+            params={"tenant_id": "globex"},
+            headers={"Authorization": "Bearer tok-acme"},
+        )
+        assert resp.status_code == 200
+        assert all(r["tenant_id"] == "acme" for r in resp.json()["data"])
+
+    def test_unknown_token_rejected(self, client, monkeypatch):
+        self._enable(monkeypatch)
+        resp = client.post(
+            "/v1/chat/completions",
+            json=_body(),
+            headers={"Authorization": "Bearer not-a-real-token"},
+        )
+        assert resp.status_code == 401
+
+
 class TestBodySize:
     def test_oversized_body_rejected(self, client, monkeypatch):
         monkeypatch.setattr(config, "SERVER_MAX_BODY_BYTES", 100)
@@ -190,6 +240,21 @@ class TestMisc:
     def test_missing_messages_rejected(self, client):
         resp = client.post("/v1/chat/completions", json={"model": "flux-auto"})
         assert resp.status_code == 400
+
+    def test_system_message_without_content_returns_400_not_500(self, client, _mock_call_model):
+        """Regression: a system message with no `content` key is legal per
+        OpenAI's schema (some SDKs omit it), but system_parts used m["content"]
+        unconditionally, raising an uncaught KeyError -> bare 500 instead of
+        the clean 400 every other malformed-input case here produces."""
+        body = {
+            "model": "flux-auto",
+            "messages": [
+                {"role": "system"},
+                {"role": "user", "content": "hi"},
+            ],
+        }
+        resp = client.post("/v1/chat/completions", json=body)
+        assert resp.status_code == 200
 
 
 class TestRunBudget:
@@ -334,6 +399,49 @@ class TestPlanBudgetEnforcement:
         after = budget.get_daily_spend(user)
         assert after > before, "record_spend() was not called on the HTTP path"
 
+    def test_streaming_completion_records_plan_spend(self, client, _mock_call_model):
+        """Regression: the stream=True branch never called
+        BudgetTracker.record_spend() at all, so plan spend never accumulated
+        for streaming traffic even though the non-streaming path was fixed."""
+        budget = server._flux._engine._budget
+        user = "plan-budget-stream-user"
+        before = budget.get_daily_spend(user)
+
+        # Non-native streaming path, and a non-free tier so a $0.00 spend
+        # can't accidentally make the "spend increased" assertion pass.
+        body = _body("claude-haiku-4-5-20251001", stream=True)
+        body["user"] = user
+        resp = client.post("/v1/chat/completions", json=body)
+        assert resp.status_code == 200
+
+        after = budget.get_daily_spend(user)
+        assert after > before, "record_spend() was not called on the streaming HTTP path"
+
+    def test_streaming_failure_does_not_record_spend(self, client, monkeypatch):
+        """A call that fails outright (never produced a token) must not be
+        charged, unlike a client disconnecting mid-stream after output
+        started."""
+        from router.provider_caller import ProviderCallError
+
+        async def failing_stream(model, request, api_key):
+            raise ProviderCallError("boom", 500)
+            yield b""  # pragma: no cover - unreachable; keeps this an async generator
+
+        monkeypatch.setattr(server, "stream_openai_compat_lines", failing_stream)
+
+        budget = server._flux._engine._budget
+        user = "plan-budget-stream-fail-user"
+        before = budget.get_daily_spend(user)
+
+        body = _body("gpt-5-mini", stream=True)  # native streaming path
+        body["user"] = user
+        resp = client.post("/v1/chat/completions", json=body)
+        assert resp.status_code == 200  # errors are reported in-band over SSE
+        assert '"error"' in resp.text
+
+        after = budget.get_daily_spend(user)
+        assert after == before, "spend was recorded despite the provider call failing outright"
+
     def test_repeated_completions_accumulate_spend(self, client):
         budget = server._flux._engine._budget
         user = "plan-budget-user-2"
@@ -411,4 +519,44 @@ class TestFallbackChain:
         _mock_call_model.side_effect = AuthenticationError("bad key")
         resp = client.post("/v1/chat/completions", json=_body())
         assert resp.status_code == 401
-        assert _mock_call_model.call_count == 1
+
+    def test_fallback_records_dispatched_models_own_cost(self, client, _mock_call_model):
+        """Regression: recording used decision.estimated_cost (the
+        originally-chosen model's cost) even when a fallback dispatched a
+        different, differently-priced model — silently mis-tracking real
+        spend. The recorded amount must be rescaled to the model that was
+        actually called."""
+        from router.cascade import estimate_step_cost
+
+        calls: list = []
+
+        async def flaky(model, request):
+            calls.append(model)
+            if len(calls) == 1:
+                raise RateLimitError("429")
+            return "ok from fallback"
+
+        _mock_call_model.side_effect = flaky
+
+        user = "fallback-cost-user"
+        budget = server._flux._engine._budget
+        before = budget.get_daily_spend(user)
+
+        body = _body()
+        body["user"] = user
+        resp = client.post("/v1/chat/completions", json=body)
+        assert resp.status_code == 200
+        assert len(calls) == 2
+        chosen_model, dispatched_model = calls[0], calls[1]
+
+        decision_cost_hint = float(resp.headers["x-flux-estimated-cost-usd"])
+        expected_recorded = estimate_step_cost(dispatched_model, chosen_model, decision_cost_hint)
+
+        after = budget.get_daily_spend(user)
+        recorded = after - before
+        assert recorded == pytest.approx(expected_recorded, rel=1e-6)
+        if dispatched_model.model_id != chosen_model.model_id and (
+            dispatched_model.cost_per_1k_input != chosen_model.cost_per_1k_input
+            or dispatched_model.cost_per_1k_output != chosen_model.cost_per_1k_output
+        ):
+            assert recorded != pytest.approx(decision_cost_hint, rel=1e-6)

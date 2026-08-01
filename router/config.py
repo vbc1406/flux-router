@@ -15,6 +15,7 @@ Things NOT to change without discussion:
   - TIER_ORDER (canonical ordering used by fallback chain and routing engine)
 """
 
+import json
 import os
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -552,6 +553,15 @@ ANALYTICS_MAX_STARTUP_ENTRIES: int = 50_000
 # How to tune: raise if you need a longer ledger window; lower to reduce memory.
 BUDGET_LEDGER_MAX_PER_USER: int = 10_000
 
+# Maximum distinct user_ids/customer_ids tracked in BudgetTracker /
+# DailyBudgetTracker at once. Unlike BUDGET_LEDGER_MAX_PER_USER (which bounds
+# each user's own record count), nothing previously bounded the number of
+# distinct users — a growing user/tenant base, or a caller minting fresh
+# user_ids, grew this dict forever. Same LRU-eviction pattern as
+# RUN_STORE_MAX_ENTRIES: the least-recently-touched user is evicted once the
+# cap is hit. How to tune: raise for legitimately high-cardinality user bases.
+BUDGET_TRACKER_MAX_USERS: int = 100_000
+
 # ══════════════════════════════════════════════════════════════════════════════
 # HTTP PROXY SERVER (router/server.py)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -565,7 +575,11 @@ BUDGET_LEDGER_MAX_PER_USER: int = 10_000
 # to anything that can reach the port.
 SERVER_HOST: str = os.environ.get(
     "FLUX_SERVER_HOST",
-    "0.0.0.0" if os.environ.get("FLUX_SERVER_TOKEN") else "127.0.0.1",  # noqa: S104
+    (
+        "0.0.0.0"  # noqa: S104
+        if os.environ.get("FLUX_SERVER_TOKEN") or os.environ.get("FLUX_SERVER_TOKENS")
+        else "127.0.0.1"
+    ),
 )
 
 # Port for `router.server`. How to tune: change FLUX_SERVER_PORT if 8000 collides
@@ -576,7 +590,35 @@ SERVER_PORT: int = int(os.environ.get("FLUX_SERVER_PORT", "8000"))
 # request (except /health). Derived from whether the token env var is set at all —
 # there is no way to run with SERVER_REQUIRE_AUTH=True and no token, since that
 # would lock every caller out.
-SERVER_REQUIRE_AUTH: bool = bool(os.environ.get("FLUX_SERVER_TOKEN"))
+SERVER_REQUIRE_AUTH: bool = bool(
+    os.environ.get("FLUX_SERVER_TOKEN") or os.environ.get("FLUX_SERVER_TOKENS")
+)
+
+# Optional multi-tenant token map: FLUX_SERVER_TOKENS='{"tok-acme":"acme",...}'.
+# With a single shared FLUX_SERVER_TOKEN, every caller who holds it is
+# authenticated as every tenant — X-Flux-Tenant-Id is a bare, self-declared
+# claim (see SECURITY_ARCHITECTURE.md: "identity fields must come from
+# authenticated context"). Setting FLUX_SERVER_TOKENS instead binds each
+# bearer token to exactly one tenant_id server-side; the proxy then ignores
+# any client-supplied X-Flux-Tenant-Id and uses the token's bound tenant, so
+# a caller can no longer read another tenant's /v1/usage or rotate identities
+# to dodge per-tenant budget caps by forging the header. Takes priority over
+# FLUX_SERVER_TOKEN when both are set. Malformed JSON is treated as unset
+# (logged, not raised) rather than failing startup.
+def _parse_server_tokens() -> dict[str, str]:
+    raw = os.environ.get("FLUX_SERVER_TOKENS")
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(k): str(v) for k, v in parsed.items()}
+
+
+SERVER_TOKENS: dict[str, str] = _parse_server_tokens()
 
 # Hard cap on request body size for the proxy endpoint, checked against
 # Content-Length and enforced again while streaming the body off the wire (so a
@@ -714,6 +756,16 @@ ATTRIBUTION_METRICS_MAX_LABEL_COMBOS: int = 10_000
 
 # Page size cap for GET /v1/usage on the proxy.
 ATTRIBUTION_USAGE_PAGE_MAX: int = 500
+
+# Bound on how many UsageRecords may sit queued for the background SQLite
+# writer thread (see SqliteUsageStore) before record() starts dropping new
+# ones rather than blocking the caller. record() is called synchronously from
+# async request handlers (the HTTP proxy's hot path); this cap trades a rare
+# dropped usage record (logged) for never blocking the event loop on disk I/O.
+# How to tune: raise for bursty high-throughput deployments if the writer
+# thread ever falls meaningfully behind (watch for
+# attribution_write_queue_full log lines).
+ATTRIBUTION_WRITE_QUEUE_MAX_SIZE: int = 10_000
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CASCADE / ESCALATION (Task 8: router/cascade.py, flux.py)

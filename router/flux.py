@@ -289,10 +289,17 @@ class Flux:
                     attempt=attempts,
                     fallback=attempts > 0,
                 )
+                # A fallback may have dispatched a different model than
+                # decision.chosen_model, at a different rate — rescale the
+                # estimate to the model actually called instead of recording
+                # the originally-chosen (possibly much cheaper) model's cost.
+                actual_cost = estimate_step_cost(
+                    model, decision.chosen_model, decision.estimated_cost
+                )
                 # SS#4: record actual plan-level spend after a successful provider call.
                 self._engine._budget.record_spend(
                     user_id=request.user_id,
-                    amount=decision.estimated_cost,
+                    amount=actual_cost,
                     model_id=model.model_id,
                     correlation_id=request.correlation_id,
                     task_type="unknown",
@@ -301,7 +308,7 @@ class Flux:
                 if request.max_daily_cost is not None:
                     self._engine._daily_budget.record_spend(
                         customer_id=request.customer_id or request.user_id,
-                        amount=decision.estimated_cost,
+                        amount=actual_cost,
                         model_id=model.model_id,
                         correlation_id=request.correlation_id,
                         task_type="unknown",
@@ -313,7 +320,7 @@ class Flux:
                     self._engine._run_budget.record_step(
                         request.run_id,
                         model.model_id,
-                        decision.estimated_cost,
+                        actual_cost,
                         max(len(text) // 4, 1),
                     )
                 # Task 7: cost attribution — costs/metadata only, never `text`.
@@ -323,7 +330,7 @@ class Flux:
                     task_type=decision.task_type,
                     step_type=decision.step_type,
                     model_id=model.model_id,
-                    cost_usd=decision.estimated_cost,
+                    cost_usd=actual_cost,
                 )
                 return text, model, attempts > 0, last_error
 
@@ -442,10 +449,13 @@ class Flux:
 
         # Task 3: run-budget accounting for the FINAL attempt only — matches
         # the non-cascade path's convention of recording one step per
-        # complete() call, not one per internal escalation attempt.
+        # complete() call, not one per internal escalation attempt. Rescaled
+        # to last_model's rate, since an escalated tier can cost far more
+        # than decision.chosen_model (the cheapest tier cascade starts at).
+        final_cost = estimate_step_cost(last_model, decision.chosen_model, decision.estimated_cost)
         self._engine._budget.record_spend(
             user_id=request.user_id,
-            amount=decision.estimated_cost,
+            amount=final_cost,
             model_id=last_model.model_id,
             correlation_id=request.correlation_id,
             task_type="unknown",
@@ -455,7 +465,7 @@ class Flux:
             self._engine._run_budget.record_step(
                 request.run_id,
                 last_model.model_id,
-                decision.estimated_cost,
+                final_cost,
                 max(len(last_text) // 4, 1),
             )
 

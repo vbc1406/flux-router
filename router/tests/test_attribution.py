@@ -81,6 +81,38 @@ class TestSqliteUsageStore:
         assert store.count() == 10
         assert {r.model_id for r in page1}.isdisjoint({r.model_id for r in page2})
 
+    def test_record_does_not_block_on_disk_write(self):
+        """Regression: record() used to execute()+commit() (an fsync)
+        synchronously on the calling thread — the HTTP proxy's hot request
+        path. It must now return immediately even while the writer thread
+        is mid-write; simulated here by holding the same lock the writer
+        thread needs before it can commit."""
+        import time
+
+        store = SqliteUsageStore(":memory:")
+        store._lock.acquire()
+        try:
+            t0 = time.perf_counter()
+            store.record(UsageRecord("t", "r", "x", "y", "m", 0.01, 1000.0))
+            elapsed = time.perf_counter() - t0
+            assert elapsed < 0.05, f"record() blocked the caller for {elapsed:.3f}s"
+        finally:
+            store._lock.release()
+
+        # query() flushes first, so the record is still visible once queried.
+        assert len(store.query()) == 1
+
+    def test_record_survives_queue_overflow_without_raising(self, monkeypatch):
+        """A caller (an async request handler) must never see an exception
+        from record() just because the writer thread fell behind."""
+        import router.attribution as attribution_module
+
+        store = SqliteUsageStore(":memory:")
+        # Simulate a full queue without actually enqueuing thousands of items.
+        monkeypatch.setattr(store, "_queue", attribution_module.queue.Queue(maxsize=1))
+        store._queue.put_nowait(UsageRecord("t", "r", "x", "y", "m0", 0.01, 0.0))
+        store.record(UsageRecord("t", "r", "x", "y", "m1", 0.01, 1.0))  # must not raise
+
     def test_no_prompt_or_response_fields_exist(self):
         """UsageRecord has no field that could ever hold prompt/response text."""
         fields = set(UsageRecord.__dataclass_fields__.keys())
@@ -116,6 +148,25 @@ class TestCostAttribution:
         attribution.record_budget_exceeded("acme")
         body = attribution.render_prometheus()
         assert 'flux_budget_exceeded_total{tenant_id="acme"} 2' in body
+
+    def test_tenant_id_with_quote_is_escaped_not_injected(self):
+        """Regression: X-Flux-Tenant-Id is caller-controlled and was
+        interpolated into the Prometheus label unescaped — a tenant_id
+        containing a `"` broke the label syntax for every line after it,
+        which most scrapers reject wholesale rather than skip one metric."""
+        attribution = CostAttribution(store=SqliteUsageStore(":memory:"))
+        attribution.record(
+            tenant_id='foo"bar\\baz',
+            run_id="r1",
+            task_type="x",
+            step_type="y",
+            model_id="m",
+            cost_usd=0.01,
+        )
+        body = attribution.render_prometheus()
+        assert 'tenant_id="foo\\"bar\\\\baz"' in body
+        # No stray unescaped quote breaks the rest of the line into a new label.
+        assert 'tenant_id="foo"bar' not in body
 
     def test_missing_tenant_id_buckets_as_unknown(self):
         attribution = CostAttribution(store=SqliteUsageStore(":memory:"))

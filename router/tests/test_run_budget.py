@@ -90,6 +90,19 @@ class TestDegradationLadder:
         with pytest.raises(RunBudgetExceeded):
             rb.check_before_dispatch("run-a")
 
+    def test_zero_limit_blocks_immediately_instead_of_disabling(self):
+        """A limit explicitly set to 0 must mean 'no budget at all', not
+        'unset' — 0 is falsy in Python, so a naive `if limit` check would
+        silently disable that dimension instead of blocking on it."""
+        rb = RunBudget()
+        limits = RunLimits(
+            max_cost_usd=0.0, max_steps=1000, max_tokens=10**9, max_duration_seconds=10**9
+        )
+        rb.start("run-zero-cost", limits)
+        with pytest.raises(RunBudgetExceeded) as exc_info:
+            rb.check_before_dispatch("run-zero-cost")
+        assert exc_info.value.summary["exceeded_reason"] == "cost"
+
     def test_never_exceeds_before_raising(self):
         """The step that would push cost over budget must never be recorded —
         check_before_dispatch() raises BEFORE that step's dispatch, so the

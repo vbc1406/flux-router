@@ -89,6 +89,9 @@ class AdaptiveWeights:
     ) -> None:
         self._path = safe_resolve(state_file, base_dir) if state_file else None
         self._lock = threading.Lock()
+        # Serializes only the actual disk write (_write_to_disk), never held
+        # at the same time as self._lock — see _flush()'s docstring.
+        self._io_lock = threading.Lock()
         # Global state: key → {adjustment, sample_count, avg_quality, last_updated}
         self._state: dict[str, dict[str, Any]] = {}
         # Per-customer state: customer_id → same structure as _state
@@ -154,6 +157,7 @@ class AdaptiveWeights:
             quality_score = max(0.0, min(1.0, quality_score))
 
         key = f"{model_id}:{task_type}"
+        pending_flush: dict[str, Any] | None = None
         with self._lock:
             # Per-customer flood protection. Global signals (customer_id=None)
             # are not rate-limited because the C5 resource caps already protect
@@ -217,10 +221,15 @@ class AdaptiveWeights:
             self._dirty += 1
             self._total_signals += 1
             if self._dirty >= _WRITE_INTERVAL:
-                self._flush()
+                pending_flush = self._prepare_flush()
             # Periodic snapshot + corruption check
             self._maybe_snapshot()
             self._check_for_corruption()
+
+        # The actual disk write (fsync + rename) happens here, after
+        # self._lock has been released — see _prepare_flush()'s docstring.
+        if pending_flush is not None:
+            self._write_to_disk(pending_flush)
 
     def get_adjusted_score(
         self,
@@ -345,7 +354,9 @@ class AdaptiveWeights:
     def flush(self) -> None:
         """Force an immediate write to disk (e.g., on shutdown)."""
         with self._lock:
-            self._flush()
+            pending_flush = self._prepare_flush()
+        if pending_flush is not None:
+            self._write_to_disk(pending_flush)
 
     def set_decay_factor(self, model_id: str, task_type: str, decay: float) -> None:
         """
@@ -581,17 +592,42 @@ class AdaptiveWeights:
             log.warning("adaptive_weights_load_failed", error=str(exc))
             self._state = {}
 
-    def _flush(self) -> None:
-        """Write global and per-customer weights to disk.  Caller must hold self._lock."""
+    def _prepare_flush(self) -> dict[str, Any] | None:
+        """Snapshot global + per-customer weights for a disk write, and mark
+        the in-memory state as clean. Caller must hold self._lock.
+
+        Returns None (no I/O to do) if there's no state file configured.
+        Otherwise returns a deep copy of the current state — deep, not
+        shallow, because entry dicts are mutated in place by _update_ema()
+        elsewhere; a shallow copy would let a concurrent record() call mutate
+        an entry while _write_to_disk() is serializing it after this method
+        returns and self._lock has been released.
+
+        This split (snapshot under the lock, write without it) exists
+        because the write itself — atomic_write_json's fsync + rename — used
+        to happen while holding self._lock, blocking every other record()/
+        get_adjusted_score() caller for the duration of a disk write that
+        scales with _state/_customer_state size (up to MAX_ADAPTIVE_KEYS /
+        MAX_CUSTOMERS). The deep copy is a bounded, in-memory cost; the I/O
+        that used to serialize under the lock no longer does.
+        """
+        self._dirty = 0
         if not self._path:
-            return
-        try:
-            data = {
-                "version": _FORMAT_VERSION,
-                "global": self._state,
-                "customers": {k: dict(v) for k, v in self._customer_state.items()},
-            }
-            atomic_write_json(self._path, data)
-            self._dirty = 0
-        except OSError as exc:
-            log.warning("adaptive_weights_flush_failed", error=str(exc))
+            return None
+        return {
+            "version": _FORMAT_VERSION,
+            "global": copy.deepcopy(self._state),
+            "customers": {k: copy.deepcopy(dict(v)) for k, v in self._customer_state.items()},
+        }
+
+    def _write_to_disk(self, data: dict[str, Any]) -> None:
+        """Write a snapshot built by _prepare_flush() to disk. Must NOT be
+        called while holding self._lock. _io_lock only serializes concurrent
+        writers against each other (each writes its own temp file and
+        atomically renames, so this isn't required for correctness — it's
+        just to avoid two flushes racing to write the same path pointlessly)."""
+        with self._io_lock:
+            try:
+                atomic_write_json(self._path, data)
+            except OSError as exc:
+                log.warning("adaptive_weights_flush_failed", error=str(exc))

@@ -25,6 +25,7 @@ SECURITY_ARCHITECTURE.md.
 
 from __future__ import annotations
 
+import queue
 import sqlite3
 import threading
 import time
@@ -34,11 +35,23 @@ from typing import Protocol
 
 import structlog
 
-from .config import ATTRIBUTION_DB_PATH, ATTRIBUTION_METRICS_MAX_LABEL_COMBOS
+from .config import (
+    ATTRIBUTION_DB_PATH,
+    ATTRIBUTION_METRICS_MAX_LABEL_COMBOS,
+    ATTRIBUTION_WRITE_QUEUE_MAX_SIZE,
+)
 
 log = structlog.get_logger(__name__)
 
 _OVERFLOW_LABEL = "_overflow_"
+
+
+def _escape_label(value: str) -> str:
+    """Escape a Prometheus label value per the text exposition format: a raw
+    backslash, double-quote, or newline in a caller-controlled value (e.g.
+    X-Flux-Tenant-Id) would otherwise break the label syntax for every line
+    after it, causing scrapers to reject the whole /metrics payload."""
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
 @dataclass
@@ -73,6 +86,16 @@ class SqliteUsageStore:
     ephemeral deployments). Fine for one process; NOT shared across
     multiple server instances.
 
+    Writes go through a background thread, not the calling thread: record()
+    is called synchronously from async request handlers (the HTTP proxy's
+    hot path), and a blocking execute()+commit() there means every request
+    pays for a disk fsync serialized behind one lock, on the event loop
+    thread. record() instead enqueues and returns immediately; a single
+    writer thread drains the queue and does the actual insert+commit.
+    query()/count() call _flush() first so reads stay consistent with any
+    writes issued before them, at the cost of a (usually tiny) wait on that
+    admin/reporting path instead of the hot write path.
+
     🔧 EXTENSION POINT: implement the UsageStore protocol against Postgres
     for multi-instance deployments — swap the constructor call in
     CostAttribution.__init__, the query surface (record/query/count) stays
@@ -83,6 +106,10 @@ class SqliteUsageStore:
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         with self._lock:
+            # WAL mode makes the writer thread's commits cheaper (no-op for
+            # ":memory:" databases, which don't support WAL — sqlite silently
+            # keeps them in "memory" journal mode instead).
+            self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS usage (
@@ -101,23 +128,50 @@ class SqliteUsageStore:
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_run ON usage(run_id)")
             self._conn.commit()
 
+        self._queue: queue.Queue[UsageRecord] = queue.Queue(
+            maxsize=ATTRIBUTION_WRITE_QUEUE_MAX_SIZE
+        )
+        self._writer_thread = threading.Thread(
+            target=self._writer_loop, name="flux-usage-writer", daemon=True
+        )
+        self._writer_thread.start()
+
+    def _writer_loop(self) -> None:
+        while True:
+            rec = self._queue.get()
+            try:
+                with self._lock:
+                    self._conn.execute(
+                        "INSERT INTO usage "
+                        "(tenant_id, run_id, task_type, step_type, model_id, cost_usd, timestamp) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            rec.tenant_id,
+                            rec.run_id,
+                            rec.task_type,
+                            rec.step_type,
+                            rec.model_id,
+                            rec.cost_usd,
+                            rec.timestamp,
+                        ),
+                    )
+                    self._conn.commit()
+            finally:
+                self._queue.task_done()
+
     def record(self, rec: UsageRecord) -> None:
-        with self._lock:
-            self._conn.execute(
-                "INSERT INTO usage "
-                "(tenant_id, run_id, task_type, step_type, model_id, cost_usd, timestamp) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    rec.tenant_id,
-                    rec.run_id,
-                    rec.task_type,
-                    rec.step_type,
-                    rec.model_id,
-                    rec.cost_usd,
-                    rec.timestamp,
-                ),
+        try:
+            self._queue.put_nowait(rec)
+        except queue.Full:
+            log.warning(
+                "attribution_write_queue_full",
+                limit=ATTRIBUTION_WRITE_QUEUE_MAX_SIZE,
+                msg="usage-store writer thread is falling behind; dropping this record",
             )
-            self._conn.commit()
+
+    def _flush(self) -> None:
+        """Block until every record enqueued so far has been committed."""
+        self._queue.join()
 
     def _where(self, tenant_id: str | None, run_id: str | None) -> tuple[str, list]:
         clauses, params = [], []
@@ -138,6 +192,7 @@ class SqliteUsageStore:
         limit: int = 100,
         offset: int = 0,
     ) -> list[UsageRecord]:
+        self._flush()
         where, params = self._where(tenant_id, run_id)
         with self._lock:
             cur = self._conn.execute(
@@ -149,6 +204,7 @@ class SqliteUsageStore:
         return [UsageRecord(*row) for row in rows]
 
     def count(self, *, tenant_id: str | None = None, run_id: str | None = None) -> int:
+        self._flush()
         where, params = self._where(tenant_id, run_id)
         with self._lock:
             cur = self._conn.execute(f"SELECT COUNT(*) FROM usage {where}", params)  # noqa: S608
@@ -243,18 +299,21 @@ class CostAttribution:
         with self._lock:
             for (tenant, model), cost in sorted(self._cost_by_label.items()):
                 lines.append(
-                    f'flux_cost_usd_total{{tenant_id="{tenant}",model_id="{model}"}} {cost:.6f}'
+                    f'flux_cost_usd_total{{tenant_id="{_escape_label(tenant)}",'
+                    f'model_id="{_escape_label(model)}"}} {cost:.6f}'
                 )
             lines += [
                 "# HELP flux_run_steps Total routing steps recorded, labelled by tenant.",
                 "# TYPE flux_run_steps counter",
             ]
             for tenant, count in sorted(self._run_steps_by_tenant.items()):
-                lines.append(f'flux_run_steps{{tenant_id="{tenant}"}} {count}')
+                lines.append(f'flux_run_steps{{tenant_id="{_escape_label(tenant)}"}} {count}')
             lines += [
                 "# HELP flux_budget_exceeded_total Run-budget exceeded events, labelled by tenant.",
                 "# TYPE flux_budget_exceeded_total counter",
             ]
             for tenant, count in sorted(self._budget_exceeded_by_tenant.items()):
-                lines.append(f'flux_budget_exceeded_total{{tenant_id="{tenant}"}} {count}')
+                lines.append(
+                    f'flux_budget_exceeded_total{{tenant_id="{_escape_label(tenant)}"}} {count}'
+                )
         return "\n".join(lines) + "\n"

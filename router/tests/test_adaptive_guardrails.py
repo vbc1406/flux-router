@@ -42,6 +42,7 @@ Test classes:
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -478,3 +479,90 @@ class TestDataMigration:
         aw.flush()
         data = json.loads(state_file.read_text())
         assert data.get("version") == _FORMAT_VERSION
+
+
+class TestFlushLockContention:
+    """Regression: record()'s periodic flush used to hold self._lock for the
+    entire atomic_write_json() call (fsync + rename), blocking every other
+    record()/get_adjusted_score() caller for the duration of a disk write
+    that scales with state size. The write must happen after self._lock is
+    released."""
+
+    def test_periodic_flush_does_not_hold_state_lock_during_io(self, tmp_path, monkeypatch):
+        state_file = tmp_path / "state.json"
+        aw = AdaptiveWeights(state_file=str(state_file), base_dir=tmp_path)
+
+        lock_held_during_write = []
+        real_write = aw._write_to_disk
+
+        def spying_write(data):
+            lock_held_during_write.append(aw._lock.locked())
+            real_write(data)
+
+        monkeypatch.setattr(aw, "_write_to_disk", spying_write)
+
+        for _ in range(_WRITE_INTERVAL):
+            aw.record("gpt-4o", "reasoning", 0.8)
+
+        assert lock_held_during_write == [False]
+
+    def test_explicit_flush_does_not_hold_state_lock_during_io(self, tmp_path, monkeypatch):
+        state_file = tmp_path / "state.json"
+        aw = AdaptiveWeights(state_file=str(state_file), base_dir=tmp_path)
+        aw.record("gpt-4o", "reasoning", 0.8)
+
+        lock_held_during_write = []
+        real_write = aw._write_to_disk
+
+        def spying_write(data):
+            lock_held_during_write.append(aw._lock.locked())
+            real_write(data)
+
+        monkeypatch.setattr(aw, "_write_to_disk", spying_write)
+        aw.flush()
+
+        assert lock_held_during_write == [False]
+
+    def test_record_not_blocked_by_concurrent_disk_write(self, tmp_path):
+        """A record() call that only needs self._lock must not wait on
+        _io_lock, even while a (simulated slow) write is in progress."""
+        state_file = tmp_path / "state.json"
+        aw = AdaptiveWeights(state_file=str(state_file), base_dir=tmp_path)
+
+        aw._io_lock.acquire()
+        try:
+            t0 = time.perf_counter()
+            aw.record("gpt-4o", "reasoning", 0.8)
+            aw.get_adjusted_score("gpt-4o", "reasoning", 0.5)
+            elapsed = time.perf_counter() - t0
+        finally:
+            aw._io_lock.release()
+
+        assert elapsed < 0.05, f"record()/get_adjusted_score() blocked for {elapsed:.3f}s"
+
+    def test_flush_still_round_trips_correctly(self, tmp_path):
+        state_file = tmp_path / "state.json"
+        aw = AdaptiveWeights(state_file=str(state_file), base_dir=tmp_path)
+        for _ in range(5):
+            aw.record("gpt-4o", "reasoning", 0.8, customer_id="cust-1")
+        aw.flush()
+
+        reloaded = AdaptiveWeights(state_file=str(state_file), base_dir=tmp_path)
+        assert reloaded._state["gpt-4o:reasoning"]["sample_count"] == 5
+        assert reloaded._customer_state["cust-1"]["gpt-4o:reasoning"]["sample_count"] == 5
+
+    def test_snapshot_is_isolated_from_later_mutation(self, tmp_path):
+        """The flush snapshot must be a deep copy — entry dicts are mutated
+        in place by _update_ema(), so a shallow copy could let a later
+        record() call corrupt data that's still being written to disk."""
+        state_file = tmp_path / "state.json"
+        aw = AdaptiveWeights(state_file=str(state_file), base_dir=tmp_path)
+        aw.record("gpt-4o", "reasoning", 0.8, customer_id="cust-1")
+
+        snapshot = aw._prepare_flush()
+        assert snapshot is not None
+        before = snapshot["global"]["gpt-4o:reasoning"]["sample_count"]
+
+        aw.record("gpt-4o", "reasoning", 0.9, customer_id="cust-1")
+
+        assert snapshot["global"]["gpt-4o:reasoning"]["sample_count"] == before

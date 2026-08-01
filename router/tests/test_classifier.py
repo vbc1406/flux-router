@@ -106,6 +106,22 @@ class TestTaskTypeDetection:
         analysis = self.clf.analyze(_req("Prove that √2 is irrational, show all steps"))
         assert analysis.task_type == "reasoning"
 
+    def test_help_me_understand_tradeoffs_is_analysis_not_reasoning(self):
+        """Regression: "help me understand" matches the extended-reasoning
+        pattern, but a prompt about tradeoffs/comparisons is really an
+        analysis task — misclassifying it as reasoning pushed it into the
+        pricier premium-tier quality floor for no quality benefit."""
+        analysis = self.clf.analyze(
+            _req("Help me understand the tradeoffs between SQL and NoSQL databases")
+        )
+        assert analysis.task_type == "analysis"
+
+    def test_help_me_figure_out_proof_is_still_reasoning(self):
+        """A genuine reasoning prompt using the same "help me" phrasing but
+        with no analysis-keyword signal must still classify as reasoning."""
+        analysis = self.clf.analyze(_req("Help me figure out this proof by induction"))
+        assert analysis.task_type == "reasoning"
+
     def test_vision_capability(self):
         req = _req("Describe what's in this image.", required_capabilities=["vision"])
         assert self.clf.analyze(req).task_type == "vision"

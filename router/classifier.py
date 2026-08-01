@@ -538,6 +538,17 @@ class RequestClassifier:
         ):
             return "reasoning", 0.8
 
+        # Analysis / comparison — checked before the extended reasoning
+        # patterns below: "help me understand the tradeoffs between X and Y"
+        # matches _REASONING_EXTENDED_RE's "help me understand", but its real
+        # signal is the comparison, not open-ended reasoning. Comparison
+        # prompts belong in the cheaper analysis bucket, not the premium
+        # reasoning one — checking analysis first only redirects prompts that
+        # ALSO carry an explicit analysis keyword, so plain reasoning prompts
+        # ("help me figure out this proof") are unaffected.
+        if _ANALYSIS_RE.search(prompt):
+            return "analysis", 0.7
+
         # Extended reasoning patterns
         if _REASONING_EXTENDED_RE.search(prompt):
             return "reasoning", 0.7
@@ -565,10 +576,6 @@ class RequestClassifier:
         # Creative writing (extended patterns)
         if _CREATIVE_EXTENDED_RE.search(prompt):
             return "creative_writing", 0.7
-
-        # Analysis / comparison
-        if _ANALYSIS_RE.search(prompt):
-            return "analysis", 0.7
 
         # Reasoning (broader: why / explain) — only for substantive prompts
         if _REASONING_RE.search(prompt) and word_count > 8:
