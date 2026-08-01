@@ -253,9 +253,17 @@ class TestAgentLoopIntegration:
         priorities_used: list[str] = []
         exceeded: RunBudgetExceeded | None = None
 
+        # Bugfix note: this cap must stay comfortably below 50 steps *
+        # (per-step cost of the CHEAPEST available cost-optimized model),
+        # not just below the cost of whatever model happened to be cheapest
+        # when this test was written — the model catalog grows over time
+        # (see models.json) and a newly-added cheaper model must not make
+        # this test flake by never crossing the cap in 50 steps.
+        max_cost_usd = 0.01
+
         async def run_loop():
             nonlocal exceeded
-            with flux.start_run(max_cost_usd=0.03, max_steps=50) as run_id:
+            with flux.start_run(max_cost_usd=max_cost_usd, max_steps=50) as run_id:
                 for _ in range(50):
                     try:
                         resp = await flux.complete(
@@ -269,13 +277,15 @@ class TestAgentLoopIntegration:
 
         rr(run_loop())
 
-        assert exceeded is not None, "50 steps should exceed a $0.03 run budget well before step 50"
+        assert exceeded is not None, (
+            f"50 steps should exceed a ${max_cost_usd} run budget well before step 50"
+        )
         # The summary reflects cumulative spend as of the LAST successfully
         # dispatched step (check_before_dispatch only looks at prior steps,
         # so a step's own cost can tick the total slightly past the cap —
         # the invariant is that the NEXT step is blocked, not that the total
         # can never nominally cross the line by up to one step's cost).
-        assert exceeded.summary["total_cost_usd"] < 0.03 * 1.5
+        assert exceeded.summary["total_cost_usd"] < max_cost_usd * 1.5
         assert exceeded.summary["steps_taken"] == len(budget_states)
         assert len(exceeded.summary["step_breakdown"]) == exceeded.summary["steps_taken"]
         # The ladder must have kicked in before the hard stop.

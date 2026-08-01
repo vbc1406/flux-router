@@ -72,6 +72,37 @@ class TestRegistryLoadsFromJson:
         missing = set(from_code) - set(from_json)
         assert not missing, f"models.json missing hardcoded fallback models: {missing}"
 
+    def test_registry_includes_latest_multi_provider_models(self):
+        # Coverage for the mid-2026 catalog refresh: GPT-5.6 family, Gemini
+        # 3.6 Flash, Mistral Small 4/Large 3, and Groq's current lineup.
+        reg = ModelRegistry()
+        expected_tiers = {
+            "gpt-5.6-luna": "cheap",
+            "gpt-5.6-terra": "mid",
+            "gpt-5.6-sol": "premium",
+            "gemini-3.6-flash": "mid",
+            "mistral-small-4": "cheap",
+            "mistral-large-3": "mid",
+            "gpt-oss-120b": "mid",
+            "llama-3.1-8b-instant": "cheap",
+            "qwen-3.6-27b": "cheap",
+        }
+        for model_id, tier in expected_tiers.items():
+            m = reg.get_model(model_id)
+            assert m is not None, f"{model_id} missing from models.json"
+            assert m.tier == tier
+            assert m.is_available
+
+    def test_deprecated_llama_4_scout_is_excluded_from_routing(self):
+        # Groq deprecated llama-4-scout on 2026-06-17 — it must no longer be
+        # a routable candidate, but the entry stays in the catalog (with
+        # is_available=false) rather than being silently deleted.
+        reg = ModelRegistry()
+        assert not any(m.model_id == "llama-4-scout" for m in reg.all_available_models())
+        stale_entry = reg.get_model("llama-4-scout")
+        assert stale_entry is not None
+        assert stale_entry.is_available is False
+
     def test_registry_includes_current_gen_claude_models(self):
         # Bugfix coverage: models.json used to be missing the current Claude
         # 5-family SKUs. Assert they're present with sane tiers, not just
