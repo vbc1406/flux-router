@@ -154,8 +154,17 @@ class RoutingRequest(BaseModel):
     #   cascade         → Task 8: start at the cheapest capable tier; Flux
     #                     escalates through decision.fallback_chain on
     #                     verification failure. See router/cascade.py.
+    #   quality_max     → skip cost-minimization scoring entirely; select the
+    #                     highest-capability model that passes all hard
+    #                     constraints, regardless of cost. See
+    #                     routing_engine.py::_route_quality_max().
     routing_priority: Literal[
-        "always-premium", "quality-first", "balanced", "cost-optimized", "cascade"
+        "always-premium",
+        "quality-first",
+        "balanced",
+        "cost-optimized",
+        "cascade",
+        "quality_max",
     ] = "balanced"
 
     # ── Change 3: Per-customer adaptive memory ──────────────────────────────────

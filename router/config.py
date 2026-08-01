@@ -439,13 +439,18 @@ SCORING_WEIGHTS: dict[str, dict[str, float]] = {
     # VALID_ROUTING_PRIORITIES value should be describable in weight terms),
     # heavily cost-weighted since the whole point is to start cheap.
     "cascade": {"quality": 0.20, "cost": 0.70, "latency": 0.10},
+    # quality_max is also a shortcut priority (like always-premium/cascade)
+    # that bypasses Step 9 scoring entirely — see _route_quality_max().
+    # Entry exists purely for explainability/tooling consistency; quality=1.0
+    # documents that cost/latency play no role in the selection.
+    "quality_max": {"quality": 1.0, "cost": 0.0, "latency": 0.0},
 }
 
 # Valid values for RoutingRequest.routing_priority.
 # Validated at the start of RoutingEngine.route() — invalid values raise ValueError.
 # How to tune: add new priority tags here AND add their weights to SCORING_WEIGHTS.
 VALID_ROUTING_PRIORITIES: frozenset[str] = frozenset(
-    {"always-premium", "quality-first", "balanced", "cost-optimized", "cascade"}
+    {"always-premium", "quality-first", "balanced", "cost-optimized", "cascade", "quality_max"}
 )
 
 # ══════════════════════════════════════════════════════════════════════════════

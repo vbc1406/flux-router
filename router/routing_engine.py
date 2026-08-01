@@ -610,6 +610,37 @@ class RoutingEngine:
                 decision = await self._proxy_execute(decision, request)
             return decision
 
+        # quality_max shortcut — mirrors always-premium/cascade above: skip
+        # cost-minimization scoring (Steps 8-10) entirely and select the
+        # highest-capability model that passes all hard constraints, using
+        # the same constraint pipeline (Step 4) as every other priority.
+        if request.routing_priority == "quality_max":
+            chosen, rule = _route_quality_max(candidates, analysis)
+            chain = build_fallback_chain(chosen, candidates, analysis)
+            rl, cs, to = build_typed_fallback_chains(chosen, candidates, analysis)
+            cost = _estimate_cost(analysis, chosen)
+            decision = self._finalise(
+                chosen=chosen,
+                chain=chain,
+                analysis=analysis,
+                request=request,
+                rule=rule,
+                compressed=context_was_compressed,
+                cost=cost,
+                priority_applied="quality_max",
+                confidence_fallback=False,
+                budget_exhausted=False,
+                fallback_on_rate_limit=rl,
+                fallback_on_content_safety=cs,
+                fallback_on_timeout=to,
+            )
+            decision.last_model = conv_entry["last_model"] if conv_entry else None
+            decision.explanation = expl
+            self._post_route(decision, request)
+            if request.mode == "proxy":
+                decision = await self._proxy_execute(decision, request)
+            return decision
+
         # Trivially short conversation → always free tier
         if analysis.task_type == "conversation" and analysis.estimated_input_tokens < 50:
             free_models = [m for m in candidates if m.tier == "free"]
@@ -1245,6 +1276,38 @@ def _route_cascade_initial(
     # cheapest, matching what non-cascade routing would do in this situation.
     best = _pick_best(candidates, analysis)
     return best, "cascade_initial (quality_floor_fallback)"
+
+
+def _route_quality_max(
+    candidates: list[ModelOption],
+    analysis: TaskAnalysis,
+) -> tuple[ModelOption, str]:
+    """
+    quality_max: pick the highest-capability model among candidates that
+    already passed Step 4's hard constraints (context window, tools,
+    step_type floor, etc.) — cost and latency play no role in the choice.
+
+    Capability is ranked by per-task-type quality_rating first (the same
+    signal every other priority uses for "how good is this model at this
+    kind of task"), with tier as a tiebreak (higher tier assumed more
+    capable) and cost as a final deterministic tiebreak only — never as a
+    reason to prefer one equally-capable, equally-tiered model over another
+    that costs more.
+
+    Unlike _route_always_premium(), this does NOT restrict the search to the
+    top populated tier first — a mid-tier model with a higher quality_rating
+    for this task_type than every premium model available will win, which is
+    the whole point of "quality_max" as distinct from "always-premium".
+    """
+    best = max(
+        candidates,
+        key=lambda m: (
+            m.quality_ratings.get(analysis.task_type, 0.5),
+            _TIER_ORDER.index(m.tier),
+            -(m.cost_per_1k_input + m.cost_per_1k_output),
+        ),
+    )
+    return best, "quality_max"
 
 
 def _budget_tier_walkdown(
