@@ -501,6 +501,34 @@ class TestMisc:
         assert resp2.status_code == 400
 
 
+class TestRunStoreStartupWarning:
+    """_warn_if_unsafe_run_store() is called at import time with the real
+    env-derived config; here we call it directly with controlled args rather
+    than reloading the module (which would re-run all its other import-time
+    side effects, e.g. re-creating `app` and `_flux`)."""
+
+    def test_warns_when_multi_worker_without_redis(self, monkeypatch):
+        events: list[tuple[str, dict]] = []
+        monkeypatch.setattr(server.log, "warning", lambda ev, **kw: events.append((ev, kw)))
+        server._warn_if_unsafe_run_store(3, "memory")
+        assert any(ev == "flux_multi_worker_no_redis_run_store" for ev, _ in events)
+        matching = [kw for ev, kw in events if ev == "flux_multi_worker_no_redis_run_store"][0]
+        assert matching["workers"] == 3
+        assert matching["run_store_backend"] == "memory"
+
+    def test_no_warning_for_single_worker(self, monkeypatch):
+        events: list[tuple[str, dict]] = []
+        monkeypatch.setattr(server.log, "warning", lambda ev, **kw: events.append((ev, kw)))
+        server._warn_if_unsafe_run_store(1, "memory")
+        assert not any(ev == "flux_multi_worker_no_redis_run_store" for ev, _ in events)
+
+    def test_no_warning_for_multi_worker_with_redis(self, monkeypatch):
+        events: list[tuple[str, dict]] = []
+        monkeypatch.setattr(server.log, "warning", lambda ev, **kw: events.append((ev, kw)))
+        server._warn_if_unsafe_run_store(4, "redis")
+        assert not any(ev == "flux_multi_worker_no_redis_run_store" for ev, _ in events)
+
+
 class TestRunBudget:
     def test_run_id_auto_generated_and_echoed(self, client):
         resp = client.post("/v1/chat/completions", json=_body())

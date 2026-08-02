@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-08-01",
+  "last_updated": "2026-08-02",
   "models": [
     {
       "provider": "google",
@@ -1152,9 +1152,9 @@
       "provider": "anthropic",
       "model_id": "claude-fable-5",
       "display_name": "Claude Fable 5",
-      "tier": "cheap",
-      "cost_per_1k_input": 0.0009,
-      "cost_per_1k_output": 0.0045,
+      "tier": "premium",
+      "cost_per_1k_input": 0.01,
+      "cost_per_1k_output": 0.05,
       "max_context_window": 200000,
       "max_output_tokens": 8192,
       "capabilities": [
@@ -1200,8 +1200,8 @@
       "model_id": "claude-sonnet-5",
       "display_name": "Claude Sonnet 5",
       "tier": "mid",
-      "cost_per_1k_input": 0.0028,
-      "cost_per_1k_output": 0.014,
+      "cost_per_1k_input": 0.003,
+      "cost_per_1k_output": 0.015,
       "max_context_window": 1000000,
       "max_output_tokens": 16384,
       "capabilities": [
@@ -1247,8 +1247,8 @@
       "model_id": "claude-opus-5",
       "display_name": "Claude Opus 5",
       "tier": "premium",
-      "cost_per_1k_input": 0.0055,
-      "cost_per_1k_output": 0.028,
+      "cost_per_1k_input": 0.005,
+      "cost_per_1k_output": 0.025,
       "max_context_window": 200000,
       "max_output_tokens": 16000,
       "capabilities": [

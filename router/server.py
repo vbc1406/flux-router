@@ -38,9 +38,11 @@ except ImportError as exc:  # pragma: no cover - exercised only without the extr
 
 from .config import (
     ATTRIBUTION_USAGE_PAGE_MAX,
+    RUN_STORE_BACKEND,
     SERVER_MAX_BODY_BYTES,
     SERVER_REQUIRE_AUTH,
     SERVER_TOKENS,
+    SERVER_WORKERS,
     TENANT_DAILY_CAP_USD,
     ServerTokenBinding,
 )
@@ -86,6 +88,29 @@ elif not SERVER_TOKENS:
             "FLUX_SERVER_TOKENS to bind each bearer token to one tenant_id instead."
         ),
     )
+
+def _warn_if_unsafe_run_store(workers: int, run_store_backend: str) -> None:
+    """Multiple workers + the process-local InMemoryRunStore is a silent
+    under-enforcement bug (see run_budget.RedisRunStore's docstring): each
+    worker only sees the run steps it personally handled. We still fall back
+    to in-memory storage rather than refusing to start — better a loud
+    warning than a hard failure over a budget-accuracy tradeoff."""
+    if workers > 1 and run_store_backend != "redis":
+        log.warning(
+            "flux_multi_worker_no_redis_run_store",
+            workers=workers,
+            run_store_backend=run_store_backend,
+            msg=(
+                f"FLUX_SERVER_WORKERS={workers} but FLUX_RUN_STORE is not 'redis' — each "
+                "worker enforces run-scoped budgets against only the steps it personally "
+                "handles, silently under-counting a run's true cumulative spend. Falling "
+                "back to in-memory run storage. Set FLUX_RUN_STORE=redis (+ FLUX_REDIS_URL) "
+                "to share run state across workers."
+            ),
+        )
+
+
+_warn_if_unsafe_run_store(SERVER_WORKERS, RUN_STORE_BACKEND)
 
 app = FastAPI(title="Flux Router", version="1.0.0")
 

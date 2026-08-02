@@ -754,6 +754,16 @@ RUN_STORE_BACKEND: str = os.environ.get("FLUX_RUN_STORE", "memory").lower()
 # Connection URL for RedisRunStore, only read when RUN_STORE_BACKEND == "redis".
 REDIS_URL: str = os.environ.get("FLUX_REDIS_URL", "redis://localhost:6379/0")
 
+# Number of server worker processes, as configured by the deployer (e.g. via
+# `uvicorn --workers N` or a WSGI manager). Not auto-detected — the process
+# can't see its sibling workers — so this only reflects what's set here.
+# Used solely to warn at startup when workers > 1 but RUN_STORE_BACKEND is
+# still "memory" (see server.py), since that combination silently
+# under-enforces run budgets (each worker sees only its own steps).
+SERVER_WORKERS: int = int(
+    os.environ.get("FLUX_SERVER_WORKERS", os.environ.get("WEB_CONCURRENCY", "1"))
+)
+
 # ══════════════════════════════════════════════════════════════════════════════
 # STEP-TYPE CLASSIFICATION (Task 6: router/classifier.py, routing_engine.py)
 # ══════════════════════════════════════════════════════════════════════════════

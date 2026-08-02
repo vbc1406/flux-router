@@ -109,7 +109,7 @@ class TestRegistryLoadsFromJson:
         # that SOME models exist.
         reg = ModelRegistry()
         expected_tiers = {
-            "claude-fable-5": "cheap",
+            "claude-fable-5": "premium",
             "claude-sonnet-5": "mid",
             "claude-opus-5": "premium",
         }
