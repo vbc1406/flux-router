@@ -27,7 +27,7 @@ jobs:
           pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Run bandit
-        run: bandit -r router/ -ll
+        run: bandit -r router/ -ll -c pyproject.toml
 
       - name: Run safety
         run: safety check

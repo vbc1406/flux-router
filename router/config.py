@@ -589,7 +589,7 @@ BUDGET_TRACKER_MAX_USERS: int = 100_000
 SERVER_HOST: str = os.environ.get(
     "FLUX_SERVER_HOST",
     (
-        "0.0.0.0"  # noqa: S104
+        "0.0.0.0"  # noqa: S104 # nosec B104 - only reached when FLUX_SERVER_TOKEN(S) is set, see comment above
         if os.environ.get("FLUX_SERVER_TOKEN") or os.environ.get("FLUX_SERVER_TOKENS")
         else "127.0.0.1"
     ),

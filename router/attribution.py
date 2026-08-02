@@ -236,8 +236,11 @@ class SqliteUsageStore:
         self._flush()
         where, params = self._where(tenant_id, run_id)
         with self._lock:
+            # `where` is assembled only from the fixed clause strings above —
+            # tenant_id/run_id values always travel through `params` as `?`
+            # placeholders, never interpolated directly. Not injectable.
             cur = self._conn.execute(
-                f"SELECT tenant_id, run_id, task_type, step_type, model_id, cost_usd, timestamp, "  # noqa: S608
+                f"SELECT tenant_id, run_id, task_type, step_type, model_id, cost_usd, timestamp, "  # noqa: S608 # nosec B608
                 f"usage_source, input_tokens, output_tokens "
                 f"FROM usage {where} ORDER BY id DESC LIMIT ? OFFSET ?",
                 (*params, limit, offset),
@@ -249,7 +252,8 @@ class SqliteUsageStore:
         self._flush()
         where, params = self._where(tenant_id, run_id)
         with self._lock:
-            cur = self._conn.execute(f"SELECT COUNT(*) FROM usage {where}", params)  # noqa: S608
+            # Same fixed-clause `where` as query() above — not injectable.
+            cur = self._conn.execute(f"SELECT COUNT(*) FROM usage {where}", params)  # noqa: S608 # nosec B608
             return cur.fetchone()[0]
 
 

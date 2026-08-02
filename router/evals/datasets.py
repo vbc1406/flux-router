@@ -153,14 +153,27 @@ def _load_hub_records(name: str, n: int) -> list[dict]:
             "Install it with:  pip install 'flux-router[evals]'"
         ) from exc
 
+    # Pinned to each dataset's current `main` commit rather than a mutable
+    # branch name, so a tampered or force-pushed upstream repo can't silently
+    # swap benchmark content under us (CWE-494).
     if name == "gsm8k":
-        ds = hf_load("gsm8k", "main", split="test")
+        ds = hf_load(
+            "gsm8k", "main", split="test", revision="740312add88f781978c0658806c59bc2815b9866"
+        )
     elif name == "mmlu":
-        ds = hf_load("cais/mmlu", "all", split="test")
+        ds = hf_load(
+            "cais/mmlu", "all", split="test", revision="c30699e8356da336a370243923dbaf21066bb9fe"
+        )
     elif name == "humaneval":
-        ds = hf_load("openai_humaneval", split="test")
+        ds = hf_load(
+            "openai_humaneval", split="test", revision="7dce6050a7d6d172f3cc5c32aa97f52fa1a2e544"
+        )
     elif name == "mtbench":
-        ds = hf_load("HuggingFaceH4/mt_bench_prompts", split="train")
+        ds = hf_load(
+            "HuggingFaceH4/mt_bench_prompts",
+            split="train",
+            revision="e3a795c5e9a82ee40611c416b8a7786c73198991",
+        )
     else:
         raise ValueError(f"Unknown dataset '{name}'")
 
