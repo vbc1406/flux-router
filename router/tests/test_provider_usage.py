@@ -21,17 +21,17 @@ from router.schemas import ModelOption, RoutingRequest
 
 
 def _model(provider: str = "openai", **overrides) -> ModelOption:
-    defaults = dict(
-        provider=provider,
-        model_id="test-model",
-        display_name="Test Model",
-        tier="premium",
-        cost_per_1k_input=0.01,
-        cost_per_1k_output=0.03,
-        max_context_window=128_000,
-        max_output_tokens=4096,
-        capabilities=["general"],
-    )
+    defaults = {
+        "provider": provider,
+        "model_id": "test-model",
+        "display_name": "Test Model",
+        "tier": "premium",
+        "cost_per_1k_input": 0.01,
+        "cost_per_1k_output": 0.03,
+        "max_context_window": 128_000,
+        "max_output_tokens": 4096,
+        "capabilities": ["general"],
+    }
     defaults.update(overrides)
     return ModelOption(**defaults)
 
@@ -114,7 +114,11 @@ class TestExtractUsage:
 
     def test_response_not_a_dict_returns_none_none(self):
         result = provider_caller._extract_usage(
-            ["not", "a", "dict"], "openai", "prompt_tokens", "completion_tokens", container_key="usage"
+            ["not", "a", "dict"],
+            "openai",
+            "prompt_tokens",
+            "completion_tokens",
+            container_key="usage",
         )
         assert result == (None, None)
 

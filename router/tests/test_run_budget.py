@@ -198,7 +198,9 @@ class TestConcurrentDispatchReservation:
         rb = RunBudget()
         rb.start(
             "run-burst",
-            RunLimits(max_cost_usd=1000.0, max_steps=5, max_tokens=10**9, max_duration_seconds=10**9),
+            RunLimits(
+                max_cost_usd=1000.0, max_steps=5, max_tokens=10**9, max_duration_seconds=10**9
+            ),
         )
 
         allowed = 0
@@ -232,7 +234,9 @@ class TestConcurrentDispatchReservation:
         rb = RunBudget()
         rb.start(
             "run-release",
-            RunLimits(max_cost_usd=1000.0, max_steps=1, max_tokens=10**9, max_duration_seconds=10**9),
+            RunLimits(
+                max_cost_usd=1000.0, max_steps=1, max_tokens=10**9, max_duration_seconds=10**9
+            ),
         )
         assert rb.check_before_dispatch("run-release") == "ok"
         # Simulate the dispatch failing outright (never reaches record_step).

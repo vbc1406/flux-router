@@ -43,7 +43,9 @@ def _pr(text: str) -> ProviderResult:
     """Build a ProviderResult with no provider-reported usage (the default
     shape for a mocked _call_model that doesn't care about actual-usage
     behavior specifically) — see TestActualUsage for tests that do."""
-    return ProviderResult(text=text, input_tokens=None, output_tokens=None, usage_source="estimated")
+    return ProviderResult(
+        text=text, input_tokens=None, output_tokens=None, usage_source="estimated"
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -273,7 +275,9 @@ class TestMultiTenantTokens:
         # Exhaust the run budget for globex only.
         rb.start(
             shared_run_id,
-            RunLimits(max_cost_usd=0.0001, max_steps=1000, max_tokens=10**9, max_duration_seconds=10**9),
+            RunLimits(
+                max_cost_usd=0.0001, max_steps=1000, max_tokens=10**9, max_duration_seconds=10**9
+            ),
             tenant_id="globex",
         )
         rb.record_step(shared_run_id, "m", 1.0, 10, tenant_id="globex")
@@ -309,7 +313,9 @@ class TestPerTenantPlanBinding:
         monkeypatch.setattr(server, "SERVER_REQUIRE_AUTH", True)
         monkeypatch.setattr(server, "SERVER_TOKENS", tokens)
 
-    def test_legacy_string_token_keeps_pro_plan_default(self, client, monkeypatch, _mock_call_model):
+    def test_legacy_string_token_keeps_pro_plan_default(
+        self, client, monkeypatch, _mock_call_model
+    ):
         """No behavior change for existing deployments that haven't opted in:
         a bare tenant_id string still gets pro_plan-level model access."""
         self._enable(monkeypatch, {"tok-acme": "acme"})
@@ -431,7 +437,10 @@ class TestMisc:
         """Regression: a non-dict element in `messages` (e.g. a bare string)
         used to hit m.get(...) unconditionally, raising an uncaught
         AttributeError -> bare 500 instead of a clean 400."""
-        body = {"model": "flux-auto", "messages": ["not an object", {"role": "user", "content": "hi"}]}
+        body = {
+            "model": "flux-auto",
+            "messages": ["not an object", {"role": "user", "content": "hi"}],
+        }
         resp = client.post("/v1/chat/completions", json=body)
         assert resp.status_code == 400
 
