@@ -128,6 +128,30 @@ The router enforces caps on:
 
 These caps protect against memory exhaustion attacks.
 
+### Inbound Requests Are Rate Limited (`router/rate_limit.py`)
+
+`POST /v1/chat/completions` is rate limited per caller with a token bucket,
+checked before the request body is read and before anything is dispatched
+upstream. Configured by `FLUX_RATE_LIMIT_RPM` (default 600/min, `0` disables)
+and `FLUX_RATE_LIMIT_BURST`. Over-limit callers get `429` with `Retry-After`.
+
+The bucket key is the bearer token's **bound tenant** when running in
+`FLUX_SERVER_TOKENS` mode, and the peer IP otherwise. It is deliberately never
+keyed on the `user` field or `X-Flux-Tenant-Id` — both are self-declared, and a
+limiter keyed on either is one a caller escapes by incrementing a counter.
+`X-Forwarded-For` is ignored for the same reason; rate limit at your proxy if
+you terminate connections there.
+
+Two limits worth being explicit about:
+
+- **This is an availability control, not a cost control.** It bounds request
+  rate, not spend. `FLUX_TENANT_DAILY_CAP_USD` is what caps spend, and it is
+  off by default.
+- **Buckets are process-local.** With `FLUX_SERVER_WORKERS > 1` each worker
+  enforces its own share, so the effective global ceiling is roughly
+  `FLUX_RATE_LIMIT_RPM x workers` (the server warns about this at startup).
+  Use an ingress limiter if you need an exact global bound.
+
 ### Cost Attribution Stores Metadata Only (Task 7)
 
 `router/attribution.py` (`UsageRecord`, `SqliteUsageStore`) records, per

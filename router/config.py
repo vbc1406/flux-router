@@ -694,6 +694,43 @@ TENANT_DAILY_CAP_USD = (
     else None
 )
 
+# ── Inbound request rate limiting (router/rate_limit.py) ──────────────────────
+# Sustained requests per minute per key on POST /v1/chat/completions, where the
+# key is the bearer token's bound tenant when there is one and the client IP
+# otherwise (see server.py::_rate_limit_key). 0 disables the limiter entirely.
+#
+# Unlike every other cap in this file this one is ON by default, because every
+# other cap is a SPEND cap and none of them bound request rate: they are opt-in
+# (TENANT_DAILY_CAP_USD is None unless set, and only applies in
+# FLUX_SERVER_TOKENS mode) and they only stop a caller after the money is
+# already spent. Without this, a runaway agent loop holding a valid token had
+# no ceiling at all — every request went upstream.
+#
+# The default is deliberately generous: 600/min is ~10/s per tenant, far above
+# normal agent traffic, so it should be invisible to legitimate callers while
+# still bounding a loop that has come off the rails. It is a availability
+# control, not a cost control — pair it with FLUX_TENANT_DAILY_CAP_USD, which
+# is what actually caps spend.
+# How to tune: raise for high-throughput multi-agent fleets; lower to tighten;
+# set FLUX_RATE_LIMIT_RPM=0 to turn it off and rely on an upstream gateway.
+RATE_LIMIT_RPM: int = int(os.environ.get("FLUX_RATE_LIMIT_RPM", "600"))
+
+# Token-bucket capacity: how large an instantaneous spike is absorbed before
+# the sustained RATE_LIMIT_RPM rate starts applying. Defaults to 10 seconds'
+# worth of the sustained rate, so bursty-but-well-behaved batch traffic isn't
+# punished for arriving all at once.
+RATE_LIMIT_BURST: int = int(
+    os.environ.get("FLUX_RATE_LIMIT_BURST", str(max(1, RATE_LIMIT_RPM // 6)))
+)
+
+# Cap on how many distinct rate-limit keys are tracked at once. Keys can be
+# client IPs when auth is disabled, so an unbounded table is itself a
+# memory-exhaustion vector — same reasoning as
+# ATTRIBUTION_METRICS_MAX_LABEL_COMBOS. At the cap the least-recently-used
+# bucket is evicted (see RateLimiter's docstring for why eviction resets
+# rather than denies).
+RATE_LIMIT_MAX_TRACKED_KEYS: int = 10_000
+
 # ══════════════════════════════════════════════════════════════════════════════
 # RUN-SCOPED BUDGET ENFORCEMENT (router/run_budget.py)
 # ══════════════════════════════════════════════════════════════════════════════

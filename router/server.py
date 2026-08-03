@@ -39,6 +39,7 @@ except ImportError as exc:  # pragma: no cover - exercised only without the extr
 
 from .config import (
     ATTRIBUTION_USAGE_PAGE_MAX,
+    RATE_LIMIT_RPM,
     RUN_STORE_BACKEND,
     SERVER_MAX_BODY_BYTES,
     SERVER_REQUIRE_AUTH,
@@ -56,6 +57,7 @@ from .provider_caller import (
     stream_openai_compat_lines,
 )
 from .provider_caller import _safe_usage_int as _safe_stream_usage_int
+from .rate_limit import RateLimiter
 from .run_budget import RunBudgetExceeded
 from .schemas import RoutingRequest
 
@@ -111,13 +113,80 @@ def _warn_if_unsafe_run_store(workers: int, run_store_backend: str) -> None:
         )
 
 
+def _warn_if_rate_limit_is_per_worker(workers: int, rpm: int) -> None:
+    """Buckets are process-local (see rate_limit.RateLimiter), so N workers
+    enforce roughly N x the configured rate globally. Same class of caveat as
+    the in-memory run store above, and warned about on the same terms."""
+    if workers > 1 and rpm > 0:
+        log.warning(
+            "flux_rate_limit_per_worker",
+            workers=workers,
+            rate_limit_rpm=rpm,
+            effective_global_rpm=workers * rpm,
+            msg=(
+                f"FLUX_SERVER_WORKERS={workers} with FLUX_RATE_LIMIT_RPM={rpm} — rate-limit "
+                f"buckets are process-local, so the effective global ceiling is about "
+                f"{workers * rpm}/min, not {rpm}/min. Divide the setting by the worker "
+                "count, or enforce the limit at your ingress instead."
+            ),
+        )
+
+
 _warn_if_unsafe_run_store(SERVER_WORKERS, RUN_STORE_BACKEND)
+_warn_if_rate_limit_is_per_worker(SERVER_WORKERS, RATE_LIMIT_RPM)
 
 app = FastAPI(title="Flux Router", version="1.0.0")
+
+# 🔧 EXTENSION POINT: swap for a Redis-backed limiter to get an exact global
+# ceiling across workers, the same way FLUX_RUN_STORE=redis does for run state.
+_rate_limiter = RateLimiter()
 
 # 🔧 EXTENSION POINT: swap for a per-process pool / DI container if you need
 # multiple Flux instances (e.g. per-tenant provider keys) behind one server.
 _flux: Flux = make_flux()
+
+
+def _rate_limit_key(request: Request, bound_tenant: str | None) -> str:
+    """Pick the bucket a request counts against.
+
+    The bound tenant when there is one: it comes from the bearer token map, so
+    a caller cannot rotate it to mint itself a fresh bucket. This is exactly
+    why the limiter is NOT keyed on the `user` field or X-Flux-Tenant-Id — both
+    are self-declared, and a limiter keyed on either is one a caller escapes by
+    incrementing a counter (the same rotation hole TENANT_DAILY_CAP_USD exists
+    to close for spend).
+
+    Otherwise the peer IP. That's weaker — it's shared by everything behind one
+    NAT, and it's absent for ASGI transports with no client info — but the
+    unauthenticated case is localhost-only by default (see SERVER_HOST), so the
+    fallback is a backstop rather than the main line of defence. Requests with
+    no identifiable peer share one bucket rather than going unlimited.
+
+    Deliberately NOT read from X-Forwarded-For: that header is caller-supplied
+    and trivially spoofed, so trusting it here would hand every client an
+    unlimited supply of fresh buckets. A deployment behind a trusted proxy
+    should rate limit at that proxy.
+    """
+    if bound_tenant is not None:
+        return f"tenant:{bound_tenant}"
+    client = request.client
+    if client is not None and client.host:
+        return f"ip:{client.host}"
+    return "anonymous"
+
+
+def _enforce_rate_limit(request: Request, bound_tenant: str | None) -> None:
+    """Raise 429 if the caller is over its per-key request rate."""
+    key = _rate_limit_key(request, bound_tenant)
+    retry_after = _rate_limiter.check(key)
+    if retry_after is None:
+        return
+    log.warning("flux_rate_limited", key=key, retry_after_s=round(retry_after, 2))
+    raise HTTPException(
+        status_code=429,
+        detail=f"Rate limit exceeded ({RATE_LIMIT_RPM} requests/minute). Retry shortly.",
+        headers={"Retry-After": str(max(1, int(retry_after + 0.999)))},
+    )
 
 
 def _tokens_equal(presented: str, expected: str) -> bool:
@@ -447,6 +516,11 @@ async def chat_completions(
     binding = _check_auth(authorization)
     bound_tenant = binding.tenant_id if binding is not None else None
     bound_plan = binding.plan if binding is not None else None
+    # Before the body is read, let alone routed or dispatched: a rejected
+    # request should cost as little as possible, and reading the body first
+    # would mean a flood still gets to push SERVER_MAX_BODY_BYTES at us per
+    # request. After _check_auth so that bound_tenant is available as the key.
+    _enforce_rate_limit(request, bound_tenant)
     raw_body = await _read_bounded_body(request)
     try:
         body = json.loads(raw_body.decode("utf-8"))
