@@ -537,7 +537,27 @@ async def chat_completions(
             await _flux._dispatch_with_fallback(decision, routing_request, max_retries=2)
         )
     except AuthenticationError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        # errors.AuthenticationError means the OPERATOR's upstream provider key
+        # is missing/invalid/revoked — a server-side misconfiguration. Bugfix:
+        # this used to surface as 401 with the provider's message attached
+        # ({"detail": "HTTP 403 from google"}), which is exactly what
+        # _check_auth() returns for a bad client bearer token. A caller holding
+        # a perfectly valid token saw 401 and rotated its own credentials while
+        # the real fault was on our side, and the detail string leaked which
+        # upstream provider had been routed to. It's an upstream failure like
+        # any other FluxAPIError below: 502, with the provider detail kept in
+        # the logs rather than the response body.
+        log.error(
+            "provider_authentication_failed",
+            cid=routing_request.correlation_id,
+            model=model_id,
+            error=str(exc),
+            msg="upstream provider rejected our API key — check the provider "
+            "credentials for this deployment",
+        )
+        raise HTTPException(
+            status_code=502, detail="Upstream provider authentication failed"
+        ) from exc
     except FluxAPIError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -763,7 +783,23 @@ async def _stream_completion(
                 routing_request.run_id, tenant_id=routing_request.tenant_id
             )
         recorded = True  # resolved via release, not a bill — see comment above
-        yield f"data: {json.dumps({'error': str(exc)})}\n\n".encode()
+        # Same operator-vs-caller distinction as the non-streaming path above:
+        # a rejected upstream API key is our misconfiguration, so it's logged
+        # with the provider detail and reported generically here rather than
+        # echoing "HTTP 403 from <provider>" into the client's stream.
+        if isinstance(exc, AuthenticationError):
+            log.error(
+                "provider_authentication_failed",
+                cid=routing_request.correlation_id,
+                model=model_id,
+                error=str(exc),
+                msg="upstream provider rejected our API key — check the provider "
+                "credentials for this deployment",
+            )
+            error_text = "Upstream provider authentication failed"
+        else:
+            error_text = str(exc)
+        yield f"data: {json.dumps({'error': error_text})}\n\n".encode()
     finally:
         if not recorded:
             _record_estimated()

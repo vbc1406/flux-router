@@ -840,7 +840,30 @@ class TestFallbackChain:
     def test_auth_error_short_circuits_without_retry(self, client, _mock_call_model):
         _mock_call_model.side_effect = AuthenticationError("bad key")
         resp = client.post("/v1/chat/completions", json=_body())
-        assert resp.status_code == 401
+        # 502, not 401: a rejected UPSTREAM provider key is a server-side
+        # misconfiguration, not a bad client bearer token. See the handler in
+        # server.py for why conflating the two sent callers rotating their own
+        # (valid) credentials.
+        assert resp.status_code == 502
+
+    def test_provider_auth_error_does_not_leak_provider_detail(self, client, _mock_call_model):
+        """A caller must not be able to tell a rejected upstream key apart from
+        any other upstream failure, nor learn which provider was routed to."""
+        _mock_call_model.side_effect = AuthenticationError("HTTP 403 from google")
+        resp = client.post("/v1/chat/completions", json=_body())
+        assert resp.status_code == 502
+        detail = resp.json()["detail"]
+        assert "google" not in detail.lower()
+        assert "403" not in detail
+
+    def test_streaming_provider_auth_error_does_not_leak_provider_detail(
+        self, client, _mock_call_model
+    ):
+        _mock_call_model.side_effect = AuthenticationError("HTTP 403 from google")
+        resp = client.post("/v1/chat/completions", json=_body(stream=True))
+        assert resp.status_code == 200  # SSE errors ride in-band, not in the status
+        assert "google" not in resp.text.lower()
+        assert "403" not in resp.text
 
     def test_fallback_records_dispatched_models_own_cost(self, client, _mock_call_model):
         """Regression: recording used decision.estimated_cost (the
