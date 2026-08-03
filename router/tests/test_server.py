@@ -174,6 +174,38 @@ class TestAuth:
         )
         assert resp.status_code == 401
 
+    def test_rejects_non_ascii_token_with_401_not_500(self, client, monkeypatch):
+        """hmac.compare_digest raises TypeError on non-ASCII str, so comparing
+        raw strs would turn a garbage token into an uncaught 500. Tokens are
+        compared as UTF-8 bytes; every rejection stays on the 401 path.
+
+        Sent as pre-encoded latin-1 bytes because that is how such a header
+        actually reaches the app: ASGI servers decode header bytes as latin-1,
+        so those octets arrive as a non-ASCII str. (httpx refuses to encode a
+        non-ASCII str header itself, which is why this can't be written as a
+        plain string.)"""
+        monkeypatch.setattr(server, "SERVER_REQUIRE_AUTH", True)
+        monkeypatch.setattr(server, "_SERVER_TOKEN", "secret-token")
+        resp = client.post(
+            "/v1/chat/completions",
+            json=_body(),
+            headers={"Authorization": "Bearer ké-tökèn".encode("latin-1")},
+        )
+        assert resp.status_code == 401
+
+    def test_rejects_when_auth_required_but_no_token_configured(self, client, monkeypatch):
+        """Fails closed: SERVER_REQUIRE_AUTH without a token must reject, not
+        crash in compare_digest on None."""
+        monkeypatch.setattr(server, "SERVER_REQUIRE_AUTH", True)
+        monkeypatch.setattr(server, "_SERVER_TOKEN", None)
+        monkeypatch.setattr(server, "SERVER_TOKENS", {})
+        resp = client.post(
+            "/v1/chat/completions",
+            json=_body(),
+            headers={"Authorization": "Bearer anything"},
+        )
+        assert resp.status_code == 401
+
 
 class TestMultiTenantTokens:
     """Regression: with a single shared FLUX_SERVER_TOKEN, any caller who

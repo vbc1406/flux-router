@@ -20,6 +20,7 @@ traceback deep in a missing-module chain.
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import time
@@ -119,6 +120,21 @@ app = FastAPI(title="Flux Router", version="1.0.0")
 _flux: Flux = make_flux()
 
 
+def _tokens_equal(presented: str, expected: str) -> bool:
+    """Constant-time bearer-token comparison.
+
+    Compares UTF-8 bytes rather than str: hmac.compare_digest raises TypeError
+    on a str containing non-ASCII, and header values reach us as arbitrary
+    text, so `Authorization: Bearer ké` would otherwise be a 500 instead of a
+    401. Encoding first keeps every rejection on the same 401 path.
+
+    Note that compare_digest is only constant-time with respect to CONTENT, not
+    length — it leaks whether the two differ in length. That's inherent to the
+    primitive and not worth papering over: token length isn't the secret.
+    """
+    return hmac.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
+
+
 def _check_auth(authorization: str | None) -> ServerTokenBinding | None:
     """Validate the bearer token and return the ServerTokenBinding (tenant_id
     + plan) it's bound to, if any (FLUX_SERVER_TOKENS multi-tenant mode).
@@ -131,17 +147,30 @@ def _check_auth(authorization: str | None) -> ServerTokenBinding | None:
         raise HTTPException(status_code=401, detail="Missing or malformed Authorization header")
     token = authorization.removeprefix("Bearer ").strip()
     if SERVER_TOKENS:
-        binding = SERVER_TOKENS.get(token)
-        if binding is None:
+        # Constant-time lookup rather than SERVER_TOKENS.get(token): a dict
+        # lookup finishes as soon as it knows the answer, so how long the
+        # miss took is a (weak, but free to remove) signal about the token.
+        # Every candidate is compared, and the loop deliberately does NOT
+        # break on a hit — an early return would reintroduce exactly the
+        # timing difference this is here to erase. SERVER_TOKENS is read at
+        # call time so tests/operators can still swap it wholesale.
+        matched: ServerTokenBinding | str | None = None
+        for candidate, candidate_binding in SERVER_TOKENS.items():
+            if _tokens_equal(token, candidate):
+                matched = candidate_binding
+        if matched is None:
             raise HTTPException(status_code=401, detail="Invalid bearer token")
         # Accept a bare tenant_id string too (legacy shorthand / tests that
         # construct SERVER_TOKENS by hand) — keeps the pre-existing
         # "pro_plan" default rather than silently tightening it for callers
         # who never asked for per-tenant plan enforcement.
-        if isinstance(binding, str):
-            binding = ServerTokenBinding(tenant_id=binding)
-        return binding
-    if token != _SERVER_TOKEN:
+        if isinstance(matched, str):
+            matched = ServerTokenBinding(tenant_id=matched)
+        return matched
+    # Same reasoning for the single-shared-token mode. `_SERVER_TOKEN` is None
+    # only if SERVER_REQUIRE_AUTH was somehow set without either env var; guard
+    # so this fails closed rather than raising TypeError inside compare_digest.
+    if _SERVER_TOKEN is None or not _tokens_equal(token, _SERVER_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid bearer token")
     return None
 
