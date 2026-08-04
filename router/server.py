@@ -38,10 +38,22 @@ except ImportError as exc:  # pragma: no cover - exercised only without the extr
     ) from exc
 
 from .config import (
+    ATTRIBUTION_DB_PATH,
     ATTRIBUTION_USAGE_PAGE_MAX,
+    BUDGET_LIMITS,
+    DATA_DIR,
+    RATE_LIMIT_BURST,
     RATE_LIMIT_RPM,
+    RUN_DEGRADE_THRESHOLD,
+    RUN_MAX_COST_USD,
+    RUN_MAX_DURATION_SECONDS,
+    RUN_MAX_STEPS,
+    RUN_MAX_TOKENS,
     RUN_STORE_BACKEND,
+    RUN_WARN_THRESHOLD,
+    SERVER_HOST,
     SERVER_MAX_BODY_BYTES,
+    SERVER_PORT,
     SERVER_REQUIRE_AUTH,
     SERVER_TOKENS,
     SERVER_WORKERS,
@@ -49,7 +61,7 @@ from .config import (
     ServerTokenBinding,
 )
 from .errors import AuthenticationError, FluxAPIError
-from .flux import Flux, _routing_telemetry, make_flux
+from .flux import _PROVIDER_ENV_VARS, Flux, _routing_telemetry, make_flux
 from .provider_caller import (
     STREAMING_NATIVE_PROVIDERS,
     ProviderCallError,
@@ -485,6 +497,219 @@ async def get_usage(
             }
             for r in records
         ],
+    }
+
+
+# Named windows accepted by the /v1/stats endpoints, in seconds. A closed set
+# rather than a free-form duration string: these values reach a SQL comparison,
+# and an allowlist means the parsing can't be the weak point. "all" means no
+# lower bound on timestamp.
+_STATS_WINDOWS: dict[str, float | None] = {
+    "1h": 3600.0,
+    "24h": 86400.0,
+    "7d": 604800.0,
+    "30d": 2592000.0,
+    "all": None,
+}
+
+# Bucket width per window, chosen so a chart has a useful number of points
+# without the caller having to pick one.
+_STATS_BUCKETS: dict[str, int] = {
+    "1h": 300,  # 5 min
+    "24h": 3600,  # 1 hour
+    "7d": 21600,  # 6 hours
+    "30d": 86400,  # 1 day
+    "all": 86400,
+}
+
+
+def _stats_since(window: str) -> float | None:
+    """Resolve a named window to a lower-bound timestamp, or None for 'all'."""
+    if window not in _STATS_WINDOWS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown window '{window}'. Valid: {', '.join(_STATS_WINDOWS)}",
+        )
+    span = _STATS_WINDOWS[window]
+    return None if span is None else time.time() - span
+
+
+def _stats_scope(authorization: str | None) -> str | None:
+    """Auth + tenant scoping shared by every /v1/stats endpoint.
+
+    Same rule as /v1/usage and /metrics: in FLUX_SERVER_TOKENS multi-tenant
+    mode the bearer token's bound tenant is the only data the caller can see.
+    Outside that mode there is no verified tenant identity, so the stats span
+    every tenant — which is exactly what the single-operator, self-hosted
+    dashboard wants.
+    """
+    binding = _check_auth(authorization)
+    if not _flux._engine._attribution.stats_available:
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "The configured usage store does not support aggregate stats. "
+                "These endpoints require the built-in SqliteUsageStore."
+            ),
+        )
+    return binding.tenant_id if binding is not None else None
+
+
+@app.get("/v1/stats/summary")
+async def stats_summary(
+    authorization: str | None = Header(default=None), window: str = "24h"
+) -> dict[str, Any]:
+    """Headline spend/savings/latency numbers for the selected window."""
+    tenant_id = _stats_scope(authorization)
+    return {
+        "window": window,
+        **_flux._engine._attribution.stats_summary(
+            since=_stats_since(window), tenant_id=tenant_id
+        ),
+    }
+
+
+@app.get("/v1/stats/timeseries")
+async def stats_timeseries(
+    authorization: str | None = Header(default=None),
+    window: str = "24h",
+    bucket_seconds: int | None = None,
+) -> dict[str, Any]:
+    """Cost and request count per time bucket, oldest first."""
+    tenant_id = _stats_scope(authorization)
+    since = _stats_since(window)
+    # Clamp rather than reject: an absurd bucket width is a caller mistake,
+    # not an attack, and one-second buckets over 30 days is a lot of JSON.
+    bucket = bucket_seconds or _STATS_BUCKETS[window]
+    bucket = max(60, min(int(bucket), 86400))
+    return {
+        "window": window,
+        "bucket_seconds": bucket,
+        "data": _flux._engine._attribution.stats_timeseries(
+            since=since, bucket_seconds=bucket, tenant_id=tenant_id
+        ),
+    }
+
+
+@app.get("/v1/stats/models")
+async def stats_models(
+    authorization: str | None = Header(default=None), window: str = "24h"
+) -> dict[str, Any]:
+    """Per-model traffic, cost, and latency for the selected window."""
+    tenant_id = _stats_scope(authorization)
+    return {
+        "window": window,
+        "data": _flux._engine._attribution.stats_by_model(
+            since=_stats_since(window), tenant_id=tenant_id
+        ),
+    }
+
+
+@app.get("/v1/stats/tasks")
+async def stats_tasks(
+    authorization: str | None = Header(default=None), window: str = "24h"
+) -> dict[str, Any]:
+    """Per-task-type traffic and cost for the selected window."""
+    tenant_id = _stats_scope(authorization)
+    return {
+        "window": window,
+        "data": _flux._engine._attribution.stats_by_task_type(
+            since=_stats_since(window), tenant_id=tenant_id
+        ),
+    }
+
+
+@app.get("/v1/stats/registry")
+async def stats_registry(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    """The model registry with pricing and capabilities.
+
+    Deliberately separate from GET /v1/models, which is OpenAI-shaped
+    ({id, object, owned_by}) and must stay that way for client compatibility.
+    """
+    _check_auth(authorization)
+    registry = _flux._engine._registry
+    return {
+        "data": [
+            {
+                "model_id": m.model_id,
+                "provider": m.provider,
+                "display_name": m.display_name,
+                "tier": m.tier,
+                "cost_per_1k_input": m.cost_per_1k_input,
+                "cost_per_1k_output": m.cost_per_1k_output,
+                "max_context_window": m.max_context_window,
+                "max_output_tokens": m.max_output_tokens,
+                "capabilities": list(m.capabilities),
+                "supports_streaming": m.supports_streaming,
+                "supports_tools": m.supports_tools,
+                "avg_latency_ms": m.avg_latency_ms,
+                "rate_limit_rpm": m.rate_limit_rpm,
+                "current_load_rpm": m.current_load_rpm,
+                "is_available": m.is_available,
+            }
+            for m in registry.all_available_models()
+        ]
+    }
+
+
+@app.get("/v1/stats/config")
+async def stats_config(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    """The deployment's effective configuration, read-only.
+
+    SECURITY: this endpoint must never echo a secret. No bearer token, no
+    provider API key, and no Redis URL (which can embed credentials) appears
+    below — auth is reported as a mode name, and providers as a configured
+    yes/no. Anything added here later must clear the same bar; see
+    test_stats.py, which asserts no configured secret's value appears in the
+    response body.
+
+    Read-only by design. Every value comes from a module-level constant read
+    from the environment at import time, so there is nothing to write back to;
+    making budgets runtime-mutable needs a config file and a reload path,
+    which is its own piece of work rather than a dashboard side effect.
+    """
+    _check_auth(authorization)
+    if SERVER_TOKENS:
+        auth_mode = "bound-tokens"
+    elif SERVER_REQUIRE_AUTH:
+        auth_mode = "shared-token"
+    else:
+        auth_mode = "none"
+    return {
+        "server": {
+            "host": SERVER_HOST,
+            "port": SERVER_PORT,
+            "workers": SERVER_WORKERS,
+            "auth_mode": auth_mode,
+            "tenant_count": len({b.tenant_id for b in SERVER_TOKENS.values()}),
+            "max_body_bytes": SERVER_MAX_BODY_BYTES,
+            "run_store_backend": RUN_STORE_BACKEND,
+            "data_dir": DATA_DIR,
+            "usage_db": ATTRIBUTION_DB_PATH,
+            "usage_db_persistent": ATTRIBUTION_DB_PATH != ":memory:",
+        },
+        "providers": {
+            provider: bool(_flux._provider_keys.get(provider) or _flux._api_key)
+            for provider in sorted(_PROVIDER_ENV_VARS)
+        },
+        "budgets": {
+            "plans": BUDGET_LIMITS,
+            "tenant_daily_cap_usd": TENANT_DAILY_CAP_USD,
+            "env_var": "FLUX_TENANT_DAILY_CAP_USD",
+        },
+        "run_limits": {
+            "max_cost_usd": RUN_MAX_COST_USD,
+            "max_steps": RUN_MAX_STEPS,
+            "max_tokens": RUN_MAX_TOKENS,
+            "max_duration_seconds": RUN_MAX_DURATION_SECONDS,
+            "degrade_threshold": RUN_DEGRADE_THRESHOLD,
+            "warn_threshold": RUN_WARN_THRESHOLD,
+        },
+        "rate_limit": {
+            "rpm": RATE_LIMIT_RPM,
+            "burst": RATE_LIMIT_BURST,
+            "env_vars": ["FLUX_RATE_LIMIT_RPM", "FLUX_RATE_LIMIT_BURST"],
+        },
     }
 
 

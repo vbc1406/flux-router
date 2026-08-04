@@ -319,6 +319,194 @@ class SqliteUsageStore:
             cur = self._conn.execute(f"SELECT COUNT(*) FROM usage {where}", params)  # noqa: S608 # nosec B608
             return cur.fetchone()[0]
 
+    # ── Aggregates for the local dashboard (GET /v1/stats/*) ─────────────────
+    #
+    # These are deliberately NOT part of the UsageStore protocol: a custom
+    # store (the Postgres extension point above) only has to implement
+    # record/query/count, and CostAttribution reports the stats surface as
+    # unavailable rather than breaking when they're absent. Every one of them
+    # aggregates in SQL rather than pulling rows into Python, so a long
+    # history stays cheap to render.
+
+    def _stats_where(self, tenant_id: str | None, since: float | None) -> tuple[str, list]:
+        clauses, params = [], []
+        if tenant_id is not None:
+            clauses.append("tenant_id = ?")
+            params.append(tenant_id)
+        if since is not None:
+            clauses.append("timestamp >= ?")
+            params.append(since)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        return where, params
+
+    def _percentile(self, where: str, params: list, fraction: float) -> float | None:
+        """Nearest-rank percentile of latency_ms over the matching rows.
+
+        SQLite has no percentile function, so this is done as a count plus an
+        indexed OFFSET seek. Rows with no latency recorded (pre-migration
+        history, or the library path which doesn't time calls) are excluded
+        rather than counted as zero — a missing measurement is not a fast one.
+        """
+        latency_where = (
+            f"{where} AND latency_ms IS NOT NULL" if where else "WHERE latency_ms IS NOT NULL"
+        )
+        total = self._conn.execute(
+            f"SELECT COUNT(*) FROM usage {latency_where}", params  # noqa: S608 # nosec B608
+        ).fetchone()[0]
+        if total == 0:
+            return None
+        offset = min(int(total * fraction), total - 1)
+        row = self._conn.execute(
+            f"SELECT latency_ms FROM usage {latency_where} "  # noqa: S608 # nosec B608
+            f"ORDER BY latency_ms LIMIT 1 OFFSET ?",
+            (*params, offset),
+        ).fetchone()
+        return row[0] if row else None
+
+    def summary(self, *, since: float | None = None, tenant_id: str | None = None) -> dict:
+        """Headline numbers for the selected window."""
+        self._flush()
+        where, params = self._stats_where(tenant_id, since)
+        with self._lock:
+            # Fixed-clause `where` built above; all values are ? params.
+            row = self._conn.execute(
+                f"""SELECT COUNT(*),
+                           COALESCE(SUM(cost_usd), 0),
+                           COALESCE(SUM(estimated_savings_usd), 0),
+                           COALESCE(SUM(CASE WHEN usage_source = 'provider'
+                                             THEN cost_usd ELSE 0 END), 0),
+                           SUM(CASE WHEN cache_hit THEN 1 ELSE 0 END),
+                           SUM(CASE WHEN fallback_used THEN 1 ELSE 0 END),
+                           AVG(latency_ms),
+                           COUNT(DISTINCT model_id),
+                           COUNT(DISTINCT run_id)
+                    FROM usage {where}""",  # noqa: S608 # nosec B608
+                params,
+            ).fetchone()
+            p50 = self._percentile(where, params, 0.50)
+            p95 = self._percentile(where, params, 0.95)
+
+        requests, cost, savings, actual_cost, cache_hits, fallbacks, avg_lat, models, runs = row
+        baseline = cost + savings
+        return {
+            "requests": requests,
+            "runs": runs,
+            "distinct_models": models,
+            "total_cost_usd": cost,
+            # What the same traffic would have cost on the registry's most
+            # expensive model — the baseline RoutingDecision.estimated_savings
+            # is computed against. Savings is a projection, not a measurement.
+            "baseline_cost_usd": baseline,
+            "estimated_savings_usd": savings,
+            "savings_pct": (savings / baseline * 100) if baseline > 0 else 0.0,
+            # How much of total_cost_usd came from provider-reported usage
+            # rather than our pre-dispatch estimate. Low values mean the
+            # headline number is softer than it looks.
+            "actual_cost_usd": actual_cost,
+            "actual_cost_pct": (actual_cost / cost * 100) if cost > 0 else 0.0,
+            "cache_hits": cache_hits or 0,
+            "cache_hit_rate": ((cache_hits or 0) / requests * 100) if requests else 0.0,
+            "fallbacks": fallbacks or 0,
+            "fallback_rate": ((fallbacks or 0) / requests * 100) if requests else 0.0,
+            "avg_latency_ms": avg_lat,
+            "p50_latency_ms": p50,
+            "p95_latency_ms": p95,
+        }
+
+    def timeseries(
+        self,
+        *,
+        since: float | None = None,
+        bucket_seconds: int = 3600,
+        tenant_id: str | None = None,
+    ) -> list[dict]:
+        """Cost and request count per fixed-width time bucket, oldest first.
+
+        Buckets are aligned to epoch multiples of bucket_seconds so they stay
+        stable as the window slides. Empty buckets are absent rather than
+        zero-filled — the caller knows the width and can fill gaps itself.
+        """
+        self._flush()
+        where, params = self._stats_where(tenant_id, since)
+        bucket = max(1, int(bucket_seconds))
+        with self._lock:
+            # bucket is coerced to int above, never a caller string.
+            rows = self._conn.execute(
+                f"""SELECT CAST(timestamp / {bucket} AS INTEGER) * {bucket} AS bucket,
+                           COUNT(*),
+                           COALESCE(SUM(cost_usd), 0),
+                           COALESCE(SUM(estimated_savings_usd), 0),
+                           AVG(latency_ms)
+                    FROM usage {where}
+                    GROUP BY bucket ORDER BY bucket ASC""",  # noqa: S608 # nosec B608
+                params,
+            ).fetchall()
+        return [
+            {
+                "bucket_start": r[0],
+                "requests": r[1],
+                "cost_usd": r[2],
+                "estimated_savings_usd": r[3],
+                "avg_latency_ms": r[4],
+            }
+            for r in rows
+        ]
+
+    def by_model(self, *, since: float | None = None, tenant_id: str | None = None) -> list[dict]:
+        """Per-model breakdown, most expensive first."""
+        self._flush()
+        where, params = self._stats_where(tenant_id, since)
+        with self._lock:
+            rows = self._conn.execute(
+                f"""SELECT model_id, COUNT(*), COALESCE(SUM(cost_usd), 0),
+                           AVG(latency_ms), COALESCE(SUM(estimated_savings_usd), 0),
+                           COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0)
+                    FROM usage {where}
+                    GROUP BY model_id ORDER BY SUM(cost_usd) DESC""",  # noqa: S608 # nosec B608
+                params,
+            ).fetchall()
+        total_requests = sum(r[1] for r in rows) or 1
+        return [
+            {
+                "model_id": r[0],
+                "requests": r[1],
+                "cost_usd": r[2],
+                "avg_latency_ms": r[3],
+                "estimated_savings_usd": r[4],
+                "input_tokens": r[5],
+                "output_tokens": r[6],
+                "share_pct": r[1] / total_requests * 100,
+            }
+            for r in rows
+        ]
+
+    def by_task_type(
+        self, *, since: float | None = None, tenant_id: str | None = None
+    ) -> list[dict]:
+        """Per-task-type breakdown, most expensive first."""
+        self._flush()
+        where, params = self._stats_where(tenant_id, since)
+        with self._lock:
+            rows = self._conn.execute(
+                f"""SELECT task_type, COUNT(*), COALESCE(SUM(cost_usd), 0),
+                           AVG(complexity_score), AVG(latency_ms)
+                    FROM usage {where}
+                    GROUP BY task_type ORDER BY SUM(cost_usd) DESC""",  # noqa: S608 # nosec B608
+                params,
+            ).fetchall()
+        total_requests = sum(r[1] for r in rows) or 1
+        return [
+            {
+                "task_type": r[0],
+                "requests": r[1],
+                "cost_usd": r[2],
+                "avg_complexity_score": r[3],
+                "avg_latency_ms": r[4],
+                "share_pct": r[1] / total_requests * 100,
+            }
+            for r in rows
+        ]
+
 
 class CostAttribution:
     """
@@ -446,6 +634,41 @@ class CostAttribution:
         records = self._store.query(tenant_id=tenant_id, run_id=run_id, limit=limit, offset=offset)
         total = self._store.count(tenant_id=tenant_id, run_id=run_id)
         return records, total
+
+    @property
+    def stats_available(self) -> bool:
+        """Whether the configured store can serve the /v1/stats aggregates.
+
+        SqliteUsageStore can; a custom store implementing only the three
+        UsageStore protocol methods can't, and the endpoints report that
+        rather than raising. Checked against summary() as the representative
+        method — they're added and removed as a set.
+        """
+        return hasattr(self._store, "summary")
+
+    def stats_summary(self, *, since: float | None = None, tenant_id: str | None = None) -> dict:
+        return self._store.summary(since=since, tenant_id=tenant_id)  # type: ignore[attr-defined]
+
+    def stats_timeseries(
+        self,
+        *,
+        since: float | None = None,
+        bucket_seconds: int = 3600,
+        tenant_id: str | None = None,
+    ) -> list[dict]:
+        return self._store.timeseries(  # type: ignore[attr-defined]
+            since=since, bucket_seconds=bucket_seconds, tenant_id=tenant_id
+        )
+
+    def stats_by_model(
+        self, *, since: float | None = None, tenant_id: str | None = None
+    ) -> list[dict]:
+        return self._store.by_model(since=since, tenant_id=tenant_id)  # type: ignore[attr-defined]
+
+    def stats_by_task_type(
+        self, *, since: float | None = None, tenant_id: str | None = None
+    ) -> list[dict]:
+        return self._store.by_task_type(since=since, tenant_id=tenant_id)  # type: ignore[attr-defined]
 
     def render_prometheus(self, tenant_filter: str | None = None) -> str:
         """Render current counters in Prometheus text exposition format.
