@@ -862,12 +862,33 @@ CACHE_TRACKER_MAX_ENTRIES: int = 50_000
 # COST ATTRIBUTION (Task 7: router/attribution.py, router/server.py)
 # ══════════════════════════════════════════════════════════════════════════════
 
+# Where a self-hosted `flux serve` keeps its local state (currently just the
+# SQLite usage database). Follows the XDG base-directory spec so it lands
+# somewhere predictable and user-owned rather than in the working directory.
+# Nothing in the library reads this — only router/cli.py, which creates the
+# directory and points FLUX_ATTRIBUTION_DB at a file inside it. See the
+# library-vs-server split documented on ATTRIBUTION_DB_PATH below.
+DATA_DIR: str = os.environ.get("FLUX_DATA_DIR") or os.path.join(
+    os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "flux"
+)
+
+# Filename of the usage database inside DATA_DIR, used by `flux serve`.
+DATA_DB_FILENAME: str = "flux.db"
+
 # Path to the SQLite usage database. Defaults to ":memory:" — matching this
 # codebase's convention that new engine collaborators default to no disk I/O
 # (see ResponseCache(enabled=False), AdaptiveWeights(state_file=None)) — so
 # constructing a RoutingEngine never silently creates a file on disk. Set
 # FLUX_ATTRIBUTION_DB to a real path for cross-restart persistence; never
 # contains prompts or completions, costs and metadata only.
+#
+# The *library* default stays ephemeral on purpose. The *server* is opinionated
+# the other way: `flux serve` (router/cli.py) sets FLUX_ATTRIBUTION_DB to
+# DATA_DIR/DATA_DB_FILENAME before importing router.server, so a self-hosted
+# instance persists across restarts without the operator configuring anything.
+# That ordering matters — every constant in this module is read from the
+# environment at import time, and router/server.py builds its Flux instance at
+# module scope, so setting the env var after importing the server has no effect.
 ATTRIBUTION_DB_PATH: str = os.environ.get("FLUX_ATTRIBUTION_DB", ":memory:")
 
 # Prometheus label cardinality cap: distinct (tenant_id, model_id) label
