@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flux — Router Console</title>
+<!-- No external requests of any kind: no CDN, no webfont, no analytics. The
+     whole premise of a self-hosted router is that nothing leaves the machine,
+     and that has to be true of its dashboard too. Everything is local. -->
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <div>
+      <h1>Flux</h1>
+      <p class="tagline">Local router console — your keys and prompts never leave this machine</p>
+    </div>
+  </div>
+  <div class="controls">
+    <label class="field">
+      <span>Window</span>
+      <select id="window">
+        <option value="1h">Last hour</option>
+        <option value="24h" selected>Last 24 hours</option>
+        <option value="7d">Last 7 days</option>
+        <option value="30d">Last 30 days</option>
+        <option value="all">All time</option>
+      </select>
+    </label>
+    <button id="refresh" class="btn" type="button">Refresh</button>
+    <button id="theme" class="btn btn-icon" type="button" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+
+<div id="banner" class="banner" hidden></div>
+
+<main>
+  <!-- Headline numbers. These are stat tiles rather than charts on purpose:
+       a single value's job is to be read, not compared. -->
+  <section class="tiles" aria-label="Summary">
+    <div class="tile">
+      <span class="tile-label">Spend</span>
+      <strong class="tile-value" id="t-cost">—</strong>
+      <span class="tile-note" id="t-cost-note"></span>
+    </div>
+    <div class="tile">
+      <span class="tile-label">Estimated saving</span>
+      <strong class="tile-value accent-good" id="t-savings">—</strong>
+      <span class="tile-note" id="t-savings-note"></span>
+    </div>
+    <div class="tile">
+      <span class="tile-label">Requests</span>
+      <strong class="tile-value" id="t-requests">—</strong>
+      <span class="tile-note" id="t-requests-note"></span>
+    </div>
+    <div class="tile">
+      <span class="tile-label">Latency p95</span>
+      <strong class="tile-value" id="t-latency">—</strong>
+      <span class="tile-note" id="t-latency-note"></span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Spend over time</h2>
+      <p class="panel-sub" id="chart-sub"></p>
+    </div>
+    <div id="chart" class="chart"></div>
+  </section>
+
+  <div class="two-col">
+    <section class="panel">
+      <div class="panel-head"><h2>Models</h2><p class="panel-sub">Where the traffic and the money went</p></div>
+      <div class="table-wrap"><table id="models">
+        <thead><tr><th>Model</th><th class="num">Requests</th><th class="num">Share</th><th class="num">Cost</th><th class="num">Avg latency</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Task types</h2><p class="panel-sub">What the router classified this traffic as</p></div>
+      <div class="table-wrap"><table id="tasks">
+        <thead><tr><th>Task</th><th class="num">Requests</th><th class="num">Share</th><th class="num">Cost</th><th class="num">Avg complexity</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+  </div>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Model registry</h2>
+      <p class="panel-sub">Prices are per 1K tokens. Load is the trailing 60-second request count.</p>
+    </div>
+    <div class="table-wrap"><table id="registry">
+      <thead><tr><th>Model</th><th>Provider</th><th>Tier</th><th class="num">In</th><th class="num">Out</th><th class="num">Context</th><th class="num">Load / limit</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Configuration</h2>
+      <p class="panel-sub">
+        Read-only. Every value is read from the environment at startup — change
+        the variable shown and restart to apply.
+      </p>
+    </div>
+    <div id="config" class="config"></div>
+  </section>
+</main>
+
+<footer class="footer">
+  <span id="foot-db"></span>
+  <button id="logout" class="linkish" type="button" hidden>Clear stored token</button>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

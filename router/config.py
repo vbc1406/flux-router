@@ -599,6 +599,20 @@ SERVER_HOST: str = os.environ.get(
 # with something else in your stack.
 SERVER_PORT: int = int(os.environ.get("FLUX_SERVER_PORT", "8000"))
 
+# Whether to serve the local operator dashboard at /dashboard. On by default,
+# because a self-hosted router with no console is most of a product.
+# What breaks if misused: the dashboard shows EVERY tenant's spend and this
+# deployment's configuration to whoever loads the page. server.py refuses to
+# mount it when the bind address is non-loopback and no token is configured,
+# so leaving this on cannot by itself expose anything off-box — but set
+# FLUX_DASHBOARD=0 to be certain, e.g. for a headless production deployment.
+DASHBOARD_ENABLED: bool = os.environ.get("FLUX_DASHBOARD", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+
 # Whether the proxy requires `Authorization: Bearer <FLUX_SERVER_TOKEN>` on every
 # request (except /health). Derived from whether the token env var is set at all —
 # there is no way to run with SERVER_REQUIRE_AUTH=True and no token, since that

@@ -73,7 +73,10 @@ include = ["router*"]
 exclude = ["testing*", "tests*", "router.tests*"]
 
 [tool.setuptools.package-data]
-router = ["models.json"]
+# The dashboard is plain HTML/CSS/JS with no build step, so the sources ship
+# as-is and `pip install flux-router[server]` is the whole install — no Node,
+# no bundler, nothing fetched at runtime.
+router = ["models.json", "dashboard/*"]
 
 [tool.setuptools.exclude-package-data]
 router = ["tests/*", "tests/**/*"]

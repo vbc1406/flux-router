@@ -1,0 +1,285 @@
+/*
+ * Flux router console.
+ *
+ * Colour roles come from a validated palette: the single series hue and the
+ * success hue clear the lightness band, chroma floor, CVD separation,
+ * normal-vision floor, and 3:1 contrast against both the light (#fcfcfb) and
+ * dark (#1a1a19) chart surfaces. Dark mode is a selected set of steps for the
+ * dark surface, not an automatic inversion of the light one.
+ *
+ * Text never wears the series colour — values and labels stay in ink tokens
+ * and a coloured mark beside them carries identity.
+ */
+
+:root {
+  color-scheme: light;
+  --surface: #fcfcfb;
+  --plane: #f9f9f7;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --ink-muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.10);
+  --series: #2a78d6;
+  --series-soft: rgba(42, 120, 214, 0.14);
+  --good: #006300;
+  --warn: #fab219;
+  --crit: #d03b3b;
+  --radius: 10px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface: #1a1a19;
+    --plane: #0d0d0d;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --ink-muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --series: #3987e5;
+    --series-soft: rgba(57, 135, 229, 0.20);
+    --good: #0ca30c;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface: #1a1a19;
+  --plane: #0d0d0d;
+  --ink: #ffffff;
+  --ink-2: #c3c2b7;
+  --ink-muted: #898781;
+  --grid: #2c2c2a;
+  --axis: #383835;
+  --border: rgba(255, 255, 255, 0.10);
+  --series: #3987e5;
+  --series-soft: rgba(57, 135, 229, 0.20);
+  --good: #0ca30c;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--plane);
+  color: var(--ink);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Top bar ─────────────────────────────────────────────────────────────── */
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.brand { display: flex; align-items: center; gap: 12px; }
+
+.mark {
+  width: 30px; height: 30px; border-radius: 8px; flex: none;
+  background: linear-gradient(135deg, var(--series), var(--good));
+}
+
+.brand h1 { margin: 0; font-size: 17px; letter-spacing: -0.01em; }
+.tagline { margin: 1px 0 0; font-size: 12.5px; color: var(--ink-muted); }
+
+.controls { display: flex; align-items: center; gap: 10px; }
+
+.field { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink-2); }
+
+select, .btn {
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+select:hover, .btn:hover { border-color: var(--axis); }
+.btn-icon { width: 34px; text-align: center; }
+
+/* ── Banner (errors, auth prompt) ────────────────────────────────────────── */
+
+.banner {
+  margin: 16px 24px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 13.5px;
+  color: var(--ink-2);
+}
+
+.banner.error { border-left-color: var(--crit); }
+.banner strong { color: var(--ink); }
+.banner input {
+  font: inherit; font-size: 13px; margin-top: 8px; margin-right: 8px;
+  padding: 6px 9px; min-width: 260px;
+  border: 1px solid var(--border); border-radius: 7px;
+  background: var(--plane); color: var(--ink);
+}
+
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+
+main { padding: 20px 24px 40px; display: flex; flex-direction: column; gap: 18px; }
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 14px;
+}
+
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 15px 17px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.tile-label { font-size: 12px; color: var(--ink-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.tile-value { font-size: 27px; font-weight: 600; letter-spacing: -0.02em; }
+.tile-note { font-size: 12.5px; color: var(--ink-2); min-height: 1.2em; }
+.accent-good { color: var(--good); }
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.panel-head { padding: 15px 18px 12px; }
+.panel-head h2 { margin: 0; font-size: 14.5px; font-weight: 600; }
+.panel-sub { margin: 3px 0 0; font-size: 12.5px; color: var(--ink-muted); }
+
+.two-col { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 18px; }
+
+/* ── Chart ───────────────────────────────────────────────────────────────── */
+
+.chart { padding: 0 8px 8px; position: relative; }
+.chart svg { display: block; width: 100%; height: auto; }
+.chart .grid-line { stroke: var(--grid); stroke-width: 1; }
+.chart .axis-line { stroke: var(--axis); stroke-width: 1; }
+.chart .tick { fill: var(--ink-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart .series-line { fill: none; stroke: var(--series); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .series-area { fill: var(--series-soft); }
+/* 2px surface ring so a dot stays legible where the line passes under it. */
+.chart .dot { fill: var(--series); stroke: var(--surface); stroke-width: 2; }
+.chart .hit { fill: transparent; cursor: crosshair; }
+.chart .crosshair { stroke: var(--axis); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart .empty { fill: var(--ink-muted); font-size: 13px; }
+
+.tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 12.5px;
+  color: var(--ink);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
+  white-space: nowrap;
+  z-index: 5;
+}
+
+.tooltip .tt-when { color: var(--ink-muted); font-size: 11.5px; display: block; margin-bottom: 2px; }
+.tooltip .tt-row { display: flex; gap: 8px; justify-content: space-between; }
+.tooltip .tt-row span { color: var(--ink-2); }
+.tooltip b { font-variant-numeric: tabular-nums; }
+
+/* ── Tables ──────────────────────────────────────────────────────────────── */
+
+.table-wrap { overflow-x: auto; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+
+th, td {
+  padding: 9px 18px;
+  text-align: left;
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+th {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr:hover { background: var(--plane); }
+td.dim { color: var(--ink-2); }
+
+/* Share bar: magnitude on one hue, with the number always present beside it —
+   the bar is a secondary read, never the only one. */
+.share { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.share-bar { width: 54px; height: 6px; border-radius: 3px; background: var(--grid); overflow: hidden; flex: none; }
+.share-bar i { display: block; height: 100%; border-radius: 3px; background: var(--series); }
+
+.pill {
+  display: inline-block; padding: 1px 7px; border-radius: 20px;
+  font-size: 11.5px; border: 1px solid var(--border); color: var(--ink-2);
+}
+
+.empty-row { color: var(--ink-muted); font-style: italic; }
+
+/* ── Config ──────────────────────────────────────────────────────────────── */
+
+.config {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0 22px;
+  padding: 0 18px 16px;
+}
+
+.config-group { padding-top: 8px; }
+.config-group h3 {
+  margin: 8px 0 6px; font-size: 11.5px; color: var(--ink-muted);
+  text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;
+}
+
+.kv { display: flex; justify-content: space-between; gap: 14px; padding: 4px 0; font-size: 13px; border-top: 1px solid var(--border); }
+.kv dt { color: var(--ink-2); margin: 0; }
+.kv dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; }
+.kv code { font-size: 11.5px; color: var(--ink-muted); }
+
+.footer {
+  padding: 0 24px 28px;
+  font-size: 12px;
+  color: var(--ink-muted);
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+
+.linkish {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font: inherit; color: var(--ink-muted); text-decoration: underline;
+}
+
+@media (max-width: 640px) {
+  .topbar { align-items: flex-start; }
+  main { padding: 16px 14px 32px; }
+  th, td { padding: 8px 14px; }
+}

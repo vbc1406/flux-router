@@ -21,10 +21,12 @@ traceback deep in a missing-module chain.
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
 import os
 import time
 import uuid
+from importlib import resources
 from typing import Any
 
 import structlog
@@ -32,6 +34,7 @@ import structlog
 try:
     from fastapi import FastAPI, Header, HTTPException, Request, Response
     from fastapi.responses import JSONResponse, StreamingResponse
+    from fastapi.staticfiles import StaticFiles
 except ImportError as exc:  # pragma: no cover - exercised only without the extra installed
     raise ImportError(
         "router.server requires the 'server' extra. Install with: pip install flux-router[server]"
@@ -41,6 +44,7 @@ from .config import (
     ATTRIBUTION_DB_PATH,
     ATTRIBUTION_USAGE_PAGE_MAX,
     BUDGET_LIMITS,
+    DASHBOARD_ENABLED,
     DATA_DIR,
     RATE_LIMIT_BURST,
     RATE_LIMIT_RPM,
@@ -1149,3 +1153,102 @@ async def _stream_completion(
         if not recorded:
             _record_estimated()
     yield b"data: [DONE]\n\n"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LOCAL OPERATOR DASHBOARD
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _dashboard_dir() -> str | None:
+    """Locate the bundled dashboard assets.
+
+    Resolved through importlib.resources rather than __file__-relative paths so
+    it works the same from an installed wheel as from a source checkout.
+    Returns None if the assets aren't present (a trimmed install), which the
+    mount below treats as "no dashboard" rather than an error.
+    """
+    try:
+        path = resources.files("router").joinpath("dashboard")
+        index = path.joinpath("index.html")
+        if index.is_file():
+            return str(path)
+    except (ModuleNotFoundError, AttributeError, TypeError):  # pragma: no cover
+        pass
+    return None
+
+
+def _dashboard_refusal_reason(host: str, require_auth: bool, enabled: bool) -> str | None:
+    """Why the dashboard must not be served, or None if it's safe to mount.
+
+    The dashboard shows every tenant's spend and the deployment's configuration
+    to whoever can load the page. That is exactly right for the single-operator
+    self-hosted case it's built for — the operator owns the box — and exactly
+    wrong the moment the port is reachable from elsewhere with no token
+    required. So: loopback binding is fine unauthenticated, any other bind
+    needs auth configured, and FLUX_DASHBOARD=0 turns it off outright.
+
+    Note this checks the CONFIGURED bind address, which is what `flux serve`
+    and the Makefile use. A reverse proxy that forwards to a loopback-bound
+    server is deliberately out of scope for this check — that deployment has
+    already taken responsibility for its own edge, and should set a token.
+    """
+    if not enabled:
+        return "FLUX_DASHBOARD=0"
+    if not _is_loopback(host) and not require_auth:
+        return (
+            f"the server is bound to {host} (not loopback) and no FLUX_SERVER_TOKEN or "
+            "FLUX_SERVER_TOKENS is set, so the dashboard would expose every tenant's "
+            "spend and this deployment's configuration to anything that can reach the "
+            "port. Set a token, or bind to 127.0.0.1"
+        )
+    return None
+
+
+def _is_loopback(host: str) -> bool:
+    """Whether a bind address only accepts connections from this machine."""
+    if host in {"localhost", ""}:
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        # A hostname we can't classify without resolving it. Treat as
+        # non-loopback: the failure mode of being too cautious is a logged
+        # warning, the other way round is exposing spend data.
+        return False
+
+
+def _mount_dashboard() -> bool:
+    """Mount the dashboard at /dashboard unless it would be unsafe to.
+
+    Refusing is never fatal — the proxy and its API keep serving normally, and
+    the reason is logged loudly enough to act on.
+    """
+    reason = _dashboard_refusal_reason(SERVER_HOST, SERVER_REQUIRE_AUTH, DASHBOARD_ENABLED)
+    if reason is not None:
+        log.warning(
+            "flux_dashboard_not_mounted",
+            host=SERVER_HOST,
+            msg=f"Dashboard is not being served: {reason}.",
+        )
+        return False
+
+    directory = _dashboard_dir()
+    if directory is None:  # pragma: no cover - only on a trimmed install
+        log.warning(
+            "flux_dashboard_assets_missing",
+            msg="Dashboard assets were not found in the installed package; skipping mount.",
+        )
+        return False
+
+    app.mount("/dashboard", StaticFiles(directory=directory, html=True), name="dashboard")
+    log.info(
+        "flux_dashboard_mounted",
+        path="/dashboard",
+        auth_required=SERVER_REQUIRE_AUTH,
+        msg=f"Dashboard available at http://{SERVER_HOST}:{SERVER_PORT}/dashboard",
+    )
+    return True
+
+
+DASHBOARD_MOUNTED = _mount_dashboard()
