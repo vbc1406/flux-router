@@ -724,6 +724,22 @@ class ModelRegistry:
             if model_id in self._models:
                 self._models[model_id].current_load_rpm = len(window)
 
+    def reset_load_tracking(self) -> None:
+        """Forget all sliding-window RPM history.
+
+        The window is wall-clock based and process-global, so anything sharing
+        a registry shares its load picture. That is exactly right in
+        production — a provider's RPM quota really is shared — but it makes
+        the registry a carrier of state between otherwise unrelated callers.
+        Exists so a test suite (or an operator reloading config) can put the
+        registry back to a known-idle state instead of waiting out 60 seconds
+        of real time. Not part of the routing hot path.
+        """
+        with self._lock:
+            self._rpm_window.clear()
+            for model in self._models.values():
+                model.current_load_rpm = 0
+
     def is_near_rate_limit(self, model_id: str) -> bool:
         """
         Return True when current load is within RATE_LIMIT_SAFETY_MARGIN of the

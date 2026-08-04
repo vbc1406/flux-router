@@ -186,3 +186,56 @@ class TestModelsJsonStaleness:
 
         raw = json.loads((Path(mr.__file__).parent / "models.json").read_text())
         dt.date.fromisoformat(raw["last_updated"])
+
+
+class TestLoadTrackingReset:
+    """The sliding-window RPM counter is process-global and wall-clock based,
+    which made ModelRegistry a silent carrier of state between unrelated
+    callers: a free-tier model capped at 15 RPM drops out of the candidate
+    list at RATE_LIMIT_SAFETY_MARGIN (0.85) — i.e. the 13th request in any 60
+    second window — and nothing put it back. reset_load_tracking() exists so a
+    caller can return the registry to a known-idle state.
+    """
+
+    def _registry(self):
+        from router.model_registry import ModelRegistry
+
+        return ModelRegistry()
+
+    def test_reset_clears_the_window_and_the_reported_load(self):
+        reg = self._registry()
+        for _ in range(5):
+            reg.update_load("gemini-2.0-flash-free")
+        assert reg._models["gemini-2.0-flash-free"].current_load_rpm == 5
+
+        reg.reset_load_tracking()
+        assert reg._models["gemini-2.0-flash-free"].current_load_rpm == 0
+        assert not reg._rpm_window
+
+    def test_reset_makes_a_rate_limited_model_eligible_again(self):
+        reg = self._registry()
+        model_id = "gemini-2.0-flash-free"
+        cap = reg._models[model_id].rate_limit_rpm
+        for _ in range(cap):
+            reg.update_load(model_id)
+        assert reg.is_near_rate_limit(model_id) is True
+
+        reg.reset_load_tracking()
+        assert reg.is_near_rate_limit(model_id) is False
+
+    def test_threshold_is_the_documented_safety_margin(self):
+        """Pins the boundary the conftest fixture exists to defend against:
+        one request below the margin is fine, one at it is not."""
+        from router.config import RATE_LIMIT_SAFETY_MARGIN
+
+        reg = self._registry()
+        model_id = "gemini-2.0-flash-free"
+        cap = reg._models[model_id].rate_limit_rpm
+        threshold = cap * RATE_LIMIT_SAFETY_MARGIN
+
+        for _ in range(int(threshold)):
+            reg.update_load(model_id)
+        assert reg.is_near_rate_limit(model_id) is False
+
+        reg.update_load(model_id)
+        assert reg.is_near_rate_limit(model_id) is True

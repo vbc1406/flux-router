@@ -22,7 +22,6 @@ from unittest.mock import AsyncMock  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from router import server  # noqa: E402
-from router.flux import make_flux  # noqa: E402
 from router.provider_caller import ProviderResult  # noqa: E402
 from router.rate_limit import RateLimiter  # noqa: E402
 
@@ -46,33 +45,10 @@ def _body() -> dict:
     }
 
 
-# One throwaway Flux for this whole module, swapped in for the process-global
-# server._flux below. Built once because each instance spins up a SQLite usage
-# store and its writer thread.
-_ISOLATED_FLUX = make_flux()
-
-
 @pytest.fixture(autouse=True)
-def _isolated_engine(monkeypatch):
-    """Point the proxy at a throwaway Flux for the duration of each test.
-
-    These tests push more completions through the proxy than most, and
-    server._flux is a process-global whose routing state (adaptive weights,
-    prompt-cache warmth, circuit breakers, budget ledgers) accumulates across
-    the entire test session. Left on the shared instance, this file changes
-    which model test_server.py's later tests get routed to and breaks them —
-    a coupling that predates this file and is easy to trip into. Swapping the
-    instance keeps that blast radius at zero rather than tuning request counts
-    against a threshold nobody documented.
-    """
-    monkeypatch.setattr(server, "_flux", _ISOLATED_FLUX)
-
-
-@pytest.fixture(autouse=True)
-def _mock_call_model(_isolated_engine, monkeypatch):
+def _mock_call_model(monkeypatch):
     """Same stub as test_server.py — keeps these tests off the network so a
-    429 assertion can't be satisfied by an unrelated upstream failure.
-    Depends on _isolated_engine so it patches the throwaway instance."""
+    429 assertion can't be satisfied by an unrelated upstream failure."""
     mock = AsyncMock(
         return_value=ProviderResult(
             text="mock response text",
