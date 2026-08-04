@@ -19,7 +19,9 @@ Config Dependencies (all in config.py):
   ATTRIBUTION_USAGE_PAGE_MAX           — GET /v1/usage page size cap
 
 SECURITY: no prompts or completions are ever stored by this module — only
-cost, model_id, tenant_id, run_id, task_type, step_type, and a timestamp. See
+cost, model_id, tenant_id, run_id, task_type, step_type, a timestamp, and the
+routing telemetry listed on UsageRecord (latency, savings, complexity score,
+cache hit, routing priority). None of it derives from prompt content. See
 SECURITY_ARCHITECTURE.md.
 """
 
@@ -75,6 +77,58 @@ class UsageRecord:
     usage_source: str = "estimated"
     input_tokens: int | None = None
     output_tokens: int | None = None
+    # Routing telemetry, added for the local operator dashboard. All optional:
+    # the library dispatch path doesn't measure wall-clock latency, and older
+    # rows written before these columns existed read back as None/False. Still
+    # costs and metadata only — nothing here derives from prompt content.
+    latency_ms: float | None = None  # provider call, wall clock
+    decision_latency_ms: float | None = None  # routing decision only
+    estimated_savings_usd: float | None = None  # vs the most-expensive-model baseline
+    complexity_score: float | None = None
+    cache_hit: bool = False
+    routing_priority: str | None = None
+    fallback_used: bool = False
+
+
+# Column order for the usage table, matching UsageRecord's field order exactly.
+# Single source of truth for the INSERT and SELECT below, so the positional
+# UsageRecord(*row) construction in query() can't drift out of sync with the
+# writer when a column is added.
+_USAGE_COLUMNS: tuple[str, ...] = (
+    "tenant_id",
+    "run_id",
+    "task_type",
+    "step_type",
+    "model_id",
+    "cost_usd",
+    "timestamp",
+    "usage_source",
+    "input_tokens",
+    "output_tokens",
+    "latency_ms",
+    "decision_latency_ms",
+    "estimated_savings_usd",
+    "complexity_score",
+    "cache_hit",
+    "routing_priority",
+    "fallback_used",
+)
+
+# Columns SQLite stores as INTEGER 0/1 but UsageRecord declares as bool.
+_BOOL_COLUMNS: frozenset[str] = frozenset({"cache_hit", "fallback_used"})
+
+
+def _row_to_record(row: tuple) -> UsageRecord:
+    """Build a UsageRecord from a row selected in _USAGE_COLUMNS order.
+
+    SQLite has no boolean type, so cache_hit/fallback_used come back as 0/1
+    ints; convert them so callers (and GET /v1/usage's JSON) see real bools.
+    """
+    values = [
+        bool(row[i]) if col in _BOOL_COLUMNS else row[i]
+        for i, col in enumerate(_USAGE_COLUMNS)
+    ]
+    return UsageRecord(*values)
 
 
 class UsageStore(Protocol):
@@ -119,6 +173,16 @@ class SqliteUsageStore:
         ("usage_source", "TEXT NOT NULL DEFAULT 'estimated'"),
         ("input_tokens", "INTEGER"),
         ("output_tokens", "INTEGER"),
+        # Routing telemetry for the dashboard. Nullable / defaulted so an
+        # existing database opens and migrates in place; pre-existing rows
+        # simply read back with no latency and no savings attributed.
+        ("latency_ms", "REAL"),
+        ("decision_latency_ms", "REAL"),
+        ("estimated_savings_usd", "REAL"),
+        ("complexity_score", "REAL"),
+        ("cache_hit", "INTEGER NOT NULL DEFAULT 0"),
+        ("routing_priority", "TEXT"),
+        ("fallback_used", "INTEGER NOT NULL DEFAULT 0"),
     )
 
     def __init__(self, db_path: str = ATTRIBUTION_DB_PATH) -> None:
@@ -142,13 +206,23 @@ class SqliteUsageStore:
                     timestamp REAL NOT NULL,
                     usage_source TEXT NOT NULL DEFAULT 'estimated',
                     input_tokens INTEGER,
-                    output_tokens INTEGER
+                    output_tokens INTEGER,
+                    latency_ms REAL,
+                    decision_latency_ms REAL,
+                    estimated_savings_usd REAL,
+                    complexity_score REAL,
+                    cache_hit INTEGER NOT NULL DEFAULT 0,
+                    routing_priority TEXT,
+                    fallback_used INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
             self._migrate_schema()
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_tenant ON usage(tenant_id)")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_run ON usage(run_id)")
+            # Every dashboard aggregate filters on a time window, and the
+            # summary queries scan the whole table without it.
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON usage(timestamp)")
             self._conn.commit()
 
         self._queue: queue.Queue[UsageRecord] = queue.Queue(
@@ -178,23 +252,13 @@ class SqliteUsageStore:
             rec = self._queue.get()
             try:
                 with self._lock:
+                    # Column list and placeholders are both derived from the
+                    # fixed _USAGE_COLUMNS tuple — no caller data reaches the
+                    # SQL text, every value goes through a ? placeholder.
                     self._conn.execute(
-                        "INSERT INTO usage "
-                        "(tenant_id, run_id, task_type, step_type, model_id, cost_usd, "
-                        "timestamp, usage_source, input_tokens, output_tokens) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            rec.tenant_id,
-                            rec.run_id,
-                            rec.task_type,
-                            rec.step_type,
-                            rec.model_id,
-                            rec.cost_usd,
-                            rec.timestamp,
-                            rec.usage_source,
-                            rec.input_tokens,
-                            rec.output_tokens,
-                        ),
+                        f"INSERT INTO usage ({', '.join(_USAGE_COLUMNS)}) "  # noqa: S608 # nosec B608
+                        f"VALUES ({', '.join('?' * len(_USAGE_COLUMNS))})",
+                        tuple(getattr(rec, col) for col in _USAGE_COLUMNS),
                     )
                     self._conn.commit()
             finally:
@@ -240,13 +304,12 @@ class SqliteUsageStore:
             # tenant_id/run_id values always travel through `params` as `?`
             # placeholders, never interpolated directly. Not injectable.
             cur = self._conn.execute(
-                f"SELECT tenant_id, run_id, task_type, step_type, model_id, cost_usd, timestamp, "  # noqa: S608 # nosec B608
-                f"usage_source, input_tokens, output_tokens "
+                f"SELECT {', '.join(_USAGE_COLUMNS)} "  # noqa: S608 # nosec B608
                 f"FROM usage {where} ORDER BY id DESC LIMIT ? OFFSET ?",
                 (*params, limit, offset),
             )
             rows = cur.fetchall()
-        return [UsageRecord(*row) for row in rows]
+        return [_row_to_record(row) for row in rows]
 
     def count(self, *, tenant_id: str | None = None, run_id: str | None = None) -> int:
         self._flush()
@@ -313,12 +376,26 @@ class CostAttribution:
         usage_source: str = "estimated",
         input_tokens: int | None = None,
         output_tokens: int | None = None,
+        latency_ms: float | None = None,
+        decision_latency_ms: float | None = None,
+        estimated_savings_usd: float | None = None,
+        complexity_score: float | None = None,
+        cache_hit: bool = False,
+        routing_priority: str | None = None,
+        fallback_used: bool = False,
     ) -> None:
         """Record one completed dispatch. Never call with prompt/response text.
 
         usage_source/input_tokens/output_tokens: pass through from
         ProviderResult when the provider reported actual usage; leave at the
         defaults ("estimated", None, None) when it didn't. See UsageRecord.
+
+        The remaining arguments are routing telemetry for the dashboard and
+        are all optional — callers that don't measure them (the library
+        dispatch path doesn't time provider calls) leave them at their
+        defaults and the columns read back as NULL/False. They feed the
+        /v1/stats aggregates only; the Prometheus counters below are
+        deliberately unchanged, so no new label dimensions are introduced.
         """
         self._store.record(
             UsageRecord(
@@ -332,6 +409,13 @@ class CostAttribution:
                 usage_source,
                 input_tokens,
                 output_tokens,
+                latency_ms,
+                decision_latency_ms,
+                estimated_savings_usd,
+                complexity_score,
+                cache_hit,
+                routing_priority,
+                fallback_used,
             )
         )
         with self._lock:

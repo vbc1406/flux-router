@@ -24,10 +24,11 @@ from __future__ import annotations
 
 import contextlib
 import os
+import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from pydantic import SecretStr
@@ -92,6 +93,34 @@ class DispatchUsage:
     usage_source: str  # "provider" | "estimated" | "mixed"
     input_tokens: int | None
     output_tokens: int | None
+
+
+def _routing_telemetry(
+    decision: RoutingDecision,
+    request: RoutingRequest,
+    *,
+    latency_ms: float | None,
+    fallback_used: bool,
+) -> dict[str, Any]:
+    """Routing metadata recorded alongside each usage row, powering the
+    /v1/stats aggregates behind the local dashboard.
+
+    Costs and metadata only — nothing here derives from prompt or completion
+    content (see attribution.UsageRecord). complexity_score is only available
+    when the decision was made with verbose=True, which the HTTP proxy always
+    does; library callers who route without it record None.
+    """
+    return {
+        "latency_ms": latency_ms,
+        "decision_latency_ms": decision.decision_latency_ms,
+        "estimated_savings_usd": decision.estimated_savings,
+        "complexity_score": (
+            decision.explanation.complexity_score if decision.explanation else None
+        ),
+        "cache_hit": decision.cache_hit,
+        "routing_priority": request.routing_priority,
+        "fallback_used": fallback_used,
+    }
 
 
 @dataclass
@@ -336,7 +365,14 @@ class Flux:
                         continue
 
             try:
+                # Wall-clock time of the provider call itself, excluding
+                # routing and budget bookkeeping — the number an operator
+                # means by "how slow is this model". Recorded on the usage
+                # row below; the routing decision's own latency is separate
+                # (decision.decision_latency_ms).
+                call_started = time.monotonic()
                 result = await self._call_model(model, request)
+                latency_ms = (time.monotonic() - call_started) * 1000
                 text = result.text
                 log.info(
                     "flux_complete_success",
@@ -412,6 +448,9 @@ class Flux:
                     usage_source=usage_source,
                     input_tokens=result.input_tokens,
                     output_tokens=result.output_tokens,
+                    **_routing_telemetry(
+                        decision, request, latency_ms=latency_ms, fallback_used=attempts > 0
+                    ),
                 )
                 usage = DispatchUsage(
                     cost_usd=billed_cost,
@@ -536,7 +575,14 @@ class Flux:
         # empty STRING response still counts as "we got something from the
         # provider," vs. every attempt raising and nothing coming back at all.
 
+        # Per-tier provider latency, index-aligned with step_breakdown. A tier
+        # that raised outright still took real wall-clock time, so it gets a
+        # measurement too — cascade's cost is partly the time spent on the
+        # attempts that didn't verify.
+        step_latencies_ms: list[float] = []
+
         for model in tier_ladder:
+            tier_started = time.monotonic()
             try:
                 provider_result = await self._call_model(model, request)
             except err.AuthenticationError:
@@ -551,9 +597,11 @@ class Flux:
                     {"model_id": model.model_id, "verified": False, "reason": str(exc)}
                 )
                 step_provider_results.append(None)
+                step_latencies_ms.append((time.monotonic() - tier_started) * 1000)
                 last_reason = str(exc)
                 continue
 
+            step_latencies_ms.append((time.monotonic() - tier_started) * 1000)
             self._engine._circuit_breaker.record_success(model.provider)
             got_any_response = True
             text = provider_result.text
@@ -665,6 +713,11 @@ class Flux:
                 usage_source=per_tier_sources[i],
                 input_tokens=pr.input_tokens if pr is not None else None,
                 output_tokens=pr.output_tokens if pr is not None else None,
+                # Every tier after the first is an escalation, i.e. this call
+                # did not get what it needed from the model routing picked.
+                **_routing_telemetry(
+                    decision, request, latency_ms=step_latencies_ms[i], fallback_used=i > 0
+                ),
             )
 
         # cascade_net_savings: actual cost of every tier PAID FOR (all

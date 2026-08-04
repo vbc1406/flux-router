@@ -129,31 +129,43 @@ When a provider changes its API format (new required field, renamed parameter):
 
 The `usage` table (SQLite file at `config.ATTRIBUTION_DB_PATH`, or `:memory:`
 by default) records cost/metadata only — never prompt or completion text
-(see SECURITY_ARCHITECTURE.md). It gained three columns when actual
-provider-reported usage recording was added:
+(see SECURITY_ARCHITECTURE.md). It has been extended twice — three columns
+when actual provider-reported usage recording was added, then seven more for
+the local operator dashboard's `/v1/stats` aggregates:
 
 | Column | Type | Added | Meaning |
 |---|---|---|---|
 | `usage_source` | `TEXT NOT NULL DEFAULT 'estimated'` | actual-usage recording | `"provider"` when `cost_usd`/tokens came from the provider's own reported usage; `"estimated"` when it fell back to the pre-dispatch estimate |
 | `input_tokens` | `INTEGER` (nullable) | actual-usage recording | Provider-reported input tokens, or `NULL` when `usage_source="estimated"` |
 | `output_tokens` | `INTEGER` (nullable) | actual-usage recording | Provider-reported output tokens, or `NULL` when `usage_source="estimated"` |
+| `latency_ms` | `REAL` (nullable) | dashboard | Wall-clock time of the provider call itself. `NULL` when nobody timed it |
+| `decision_latency_ms` | `REAL` (nullable) | dashboard | Time spent making the routing decision, stamped on `RoutingDecision` by the caller that measured it (`router/server.py`). `NULL` on the library path |
+| `estimated_savings_usd` | `REAL` (nullable) | dashboard | `RoutingDecision.estimated_savings` — projected saving vs the registry's most expensive model |
+| `complexity_score` | `REAL` (nullable) | dashboard | From `RoutingExplanation`; only populated when routing ran with `verbose=True` (the HTTP proxy always does) |
+| `cache_hit` | `INTEGER NOT NULL DEFAULT 0` | dashboard | Stored 0/1, read back as a real `bool` — see `_row_to_record()` |
+| `routing_priority` | `TEXT` (nullable) | dashboard | The request's routing priority. A pydantic `Literal` on `RoutingRequest`, so it is a closed set of values, never caller free text |
+| `fallback_used` | `INTEGER NOT NULL DEFAULT 0` | dashboard | Whether this row is a fallback attempt or cascade escalation rather than the model routing first picked |
 
 ### How Auto-Migration Works
 
 `SqliteUsageStore.__init__()` always runs `CREATE TABLE IF NOT EXISTS usage`
 with the full current schema (so a brand-new database gets these columns
 directly), then calls `_migrate_schema()`, which runs `PRAGMA table_info(usage)`
-and issues `ALTER TABLE usage ADD COLUMN ...` for any of the three columns
-missing from an existing on-disk file predating them. This runs on every
-startup and is a no-op once the file is current — safe to leave in place
-indefinitely rather than gating it behind a version check.
+and issues `ALTER TABLE usage ADD COLUMN ...` for any column in
+`_MIGRATED_COLUMNS` missing from an existing on-disk file predating it. This
+runs on every startup and is a no-op once the file is current — safe to leave
+in place indefinitely rather than gating it behind a version check. It also
+means the two migrations above compose: a database written before *either* of
+them opens cleanly and picks up all ten columns in one pass.
 
-Because `usage_source` has a `NOT NULL DEFAULT 'estimated'`, SQLite backfills
-every pre-existing row with that value automatically as part of the
-`ALTER TABLE`. `input_tokens`/`output_tokens` have no default, so old rows
-read back as `NULL` (surfaced as `None` in `UsageRecord`, `null` in
+Columns declared `NOT NULL DEFAULT ...` (`usage_source`, `cache_hit`,
+`fallback_used`) are backfilled on every pre-existing row automatically by
+SQLite as part of the `ALTER TABLE`. The nullable ones have no default, so old
+rows read back as `NULL` (surfaced as `None` in `UsageRecord`, `null` in
 `GET /v1/usage` JSON) — this is expected and requires no cleanup: a row from
-before this migration genuinely never had actual usage recorded.
+before these migrations genuinely never had actual usage or latency recorded.
+The `/v1/stats` aggregates skip `NULL`s rather than treating them as zero, so
+a partially-migrated history reports "no latency data" instead of a fake 0 ms.
 
 No manual migration script or downtime is required. `GET /v1/usage` and
 `GET /metrics` (`flux_actual_cost_usd_total`, additive alongside the
@@ -168,8 +180,17 @@ post-migration rows transparently.
    (so existing on-disk databases get it via `ALTER TABLE`).
 3. Add the field to `UsageRecord`, with a default so old callers that
    construct it positionally/with fewer fields keep working.
-4. Update the `INSERT INTO usage (...)` column list and `SELECT` in `query()`.
-5. Add a test mirroring `TestSqliteUsageStoreMigration` in
+4. Add the column name to `_USAGE_COLUMNS`, in the same position as the
+   `UsageRecord` field. That tuple is the single source of truth for both the
+   `INSERT` and the `SELECT` in `query()`, which reconstructs records
+   positionally — the two cannot drift apart as long as this order matches.
+   If the column is a boolean, add it to `_BOOL_COLUMNS` too, since SQLite
+   returns 0/1 ints and `UsageRecord` declares real `bool`s.
+5. If the field could conceivably carry text, stop: check it against
+   SECURITY_ARCHITECTURE.md first. `test_no_prompt_or_response_fields_exist`
+   in `test_attribution.py` is a deliberate allowlist and will fail until you
+   add the field, which is the point — extend it consciously.
+6. Add a test mirroring `TestSqliteUsageStoreMigration` in
    `test_attribution.py` — write a row with the OLD schema to a temp on-disk
    file, reopen it with `SqliteUsageStore`, and assert the new column reads
    back with its default.

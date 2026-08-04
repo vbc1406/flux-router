@@ -434,6 +434,12 @@ class RoutingDecision(BaseModel):
     correlation_id: str = ""
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
+    # How long the routing decision itself took, in milliseconds — the caller
+    # that measured it stamps it here (router/server.py) so the dispatch path
+    # can record it against the usage row without re-measuring. None when
+    # nobody timed the call. Distinct from the provider call's own latency.
+    decision_latency_ms: float | None = None
+
     # ── Change 1: Priority applied ────────────────────────────────────────────
     priority_applied: str = "balanced"
 

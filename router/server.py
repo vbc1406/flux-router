@@ -49,7 +49,7 @@ from .config import (
     ServerTokenBinding,
 )
 from .errors import AuthenticationError, FluxAPIError
-from .flux import Flux, make_flux
+from .flux import Flux, _routing_telemetry, make_flux
 from .provider_caller import (
     STREAMING_NATIVE_PROVIDERS,
     ProviderCallError,
@@ -597,6 +597,10 @@ async def chat_completions(
             headers={"x-flux-run-id": run_id},
         )
     decision_latency_ms = (time.monotonic() - start) * 1000
+    # Stamp it on the decision so the dispatch path can persist it against the
+    # usage row — it used to be measured here, put in a response header, and
+    # then thrown away, so the dashboard had no way to show routing overhead.
+    decision.decision_latency_ms = decision_latency_ms
     decision.run_id_missing = run_id_missing
 
     if decision.chosen_model is None:
@@ -804,6 +808,18 @@ async def _stream_completion(
             usage_source=usage_source,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            # On a stream, "latency" is the whole time spent producing the
+            # response, not time-to-first-token — this is called once the
+            # stream has finished, which is also the only point at which
+            # actual usage is known. The streaming path has no fallback
+            # chain (it dispatches the chosen model directly), so
+            # fallback_used is always False here.
+            **_routing_telemetry(
+                decision,
+                routing_request,
+                latency_ms=(time.monotonic() - stream_started) * 1000,
+                fallback_used=False,
+            ),
         )
         _record_tenant_daily_spend(bound_tenant, cost_usd, model_id)
 
@@ -823,6 +839,7 @@ async def _stream_completion(
     # the third case neither of them covers: the client disconnecting mid-
     # stream before either one ran.
     recorded = False
+    stream_started = time.monotonic()
     try:
         if model.provider.lower() in STREAMING_NATIVE_PROVIDERS:
             api_key = _flux._resolve_api_key(model, routing_request)

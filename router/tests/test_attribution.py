@@ -121,7 +121,16 @@ class TestSqliteUsageStore:
         store.record(UsageRecord("t", "r", "x", "y", "m1", 0.01, 1.0))  # must not raise
 
     def test_no_prompt_or_response_fields_exist(self):
-        """UsageRecord has no field that could ever hold prompt/response text."""
+        """UsageRecord has no field that could ever hold prompt/response text.
+
+        This is an allowlist on purpose: adding a field here is a deliberate
+        act that has to be justified against SECURITY_ARCHITECTURE.md, not
+        something that happens by accident. Every entry below is a number, a
+        bool, an identifier the operator configured, or a closed set of
+        values — never anything derived from prompt or completion content.
+        routing_priority in particular is a pydantic Literal on
+        RoutingRequest (schemas.py), so it cannot carry caller free text.
+        """
         fields = set(UsageRecord.__dataclass_fields__.keys())
         assert fields == {
             "tenant_id",
@@ -134,6 +143,14 @@ class TestSqliteUsageStore:
             "usage_source",
             "input_tokens",
             "output_tokens",
+            # Routing telemetry for the local dashboard.
+            "latency_ms",
+            "decision_latency_ms",
+            "estimated_savings_usd",
+            "complexity_score",
+            "cache_hit",
+            "routing_priority",
+            "fallback_used",
         }
 
 
