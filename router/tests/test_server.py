@@ -58,7 +58,8 @@ def _mock_call_model(monkeypatch):
 
 @pytest.fixture
 def client():
-    return TestClient(server.app)
+    # Loopback peer — see the note in test_stats.py's stats_client fixture.
+    return TestClient(server.app, client=("127.0.0.1", 50000))
 
 
 def _body(model: str = "flux-auto", stream: bool = False) -> dict:

@@ -457,8 +457,51 @@ async def list_models(authorization: str | None = Header(default=None)) -> dict[
     }
 
 
+def _refuse_remote_spend_data(request: Request) -> None:
+    """Withhold spend/config data from a non-loopback caller when no auth is set.
+
+    Same rule, and the same reasoning, as the dashboard: this data is every
+    tenant's spend and the deployment's configuration, which is fine for the
+    single-operator case and not fine once the port is reachable from
+    elsewhere. Gating the dashboard alone was theatre — /dashboard returned
+    404 while /v1/stats/summary handed the identical numbers to anyone on the
+    network, and the page is only a renderer for these endpoints.
+
+    Loopback keeps working, so the local operator and a same-host reverse proxy
+    are unaffected. To read any of this from another machine, configure
+    FLUX_SERVER_TOKEN (or FLUX_SERVER_TOKENS) — including for a Prometheus
+    scrape of /metrics, which is the one legitimate remote reader likely to
+    notice this.
+    """
+    if SERVER_REQUIRE_AUTH:
+        return
+    client = request.client
+    # No peer address means it cannot be shown to be local — refuse rather
+    # than fall through to _is_loopback(""), which is True for a bind address.
+    peer = client.host if client is not None and client.host else None
+    if peer is None or not _is_loopback(peer):
+        log.warning(
+            "flux_remote_spend_data_refused",
+            peer=peer,
+            path=request.url.path,
+            msg=(
+                "Refused a non-loopback request for spend/configuration data. The server "
+                "is reachable off-box with no FLUX_SERVER_TOKEN set. Set a token to allow "
+                "remote reads."
+            ),
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Spend and configuration data is served to loopback clients only when no "
+                "authentication is configured. Set FLUX_SERVER_TOKEN to read it remotely."
+            ),
+        )
+
+
 @app.get("/v1/usage")
 async def get_usage(
+    request: Request,
     authorization: str | None = Header(default=None),
     tenant_id: str | None = None,
     run_id: str | None = None,
@@ -474,6 +517,7 @@ async def get_usage(
     always wins over ?tenant_id= — a caller can only ever see their own
     tenant's usage, regardless of what they pass on the query string.
     """
+    _refuse_remote_spend_data(request)
     binding = _check_auth(authorization)
     if binding is not None:
         tenant_id = binding.tenant_id
@@ -539,7 +583,7 @@ def _stats_since(window: str) -> float | None:
     return None if span is None else time.time() - span
 
 
-def _stats_scope(authorization: str | None) -> str | None:
+def _stats_scope(request: Request, authorization: str | None) -> str | None:
     """Auth + tenant scoping shared by every /v1/stats endpoint.
 
     Same rule as /v1/usage and /metrics: in FLUX_SERVER_TOKENS multi-tenant
@@ -548,6 +592,7 @@ def _stats_scope(authorization: str | None) -> str | None:
     every tenant — which is exactly what the single-operator, self-hosted
     dashboard wants.
     """
+    _refuse_remote_spend_data(request)
     binding = _check_auth(authorization)
     if not _flux._engine._attribution.stats_available:
         raise HTTPException(
@@ -562,10 +607,10 @@ def _stats_scope(authorization: str | None) -> str | None:
 
 @app.get("/v1/stats/summary")
 async def stats_summary(
-    authorization: str | None = Header(default=None), window: str = "24h"
+    request: Request, authorization: str | None = Header(default=None), window: str = "24h"
 ) -> dict[str, Any]:
     """Headline spend/savings/latency numbers for the selected window."""
-    tenant_id = _stats_scope(authorization)
+    tenant_id = _stats_scope(request, authorization)
     return {
         "window": window,
         **_flux._engine._attribution.stats_summary(
@@ -576,12 +621,13 @@ async def stats_summary(
 
 @app.get("/v1/stats/timeseries")
 async def stats_timeseries(
+    request: Request,
     authorization: str | None = Header(default=None),
     window: str = "24h",
     bucket_seconds: int | None = None,
 ) -> dict[str, Any]:
     """Cost and request count per time bucket, oldest first."""
-    tenant_id = _stats_scope(authorization)
+    tenant_id = _stats_scope(request, authorization)
     since = _stats_since(window)
     # Clamp rather than reject: an absurd bucket width is a caller mistake,
     # not an attack, and one-second buckets over 30 days is a lot of JSON.
@@ -598,10 +644,10 @@ async def stats_timeseries(
 
 @app.get("/v1/stats/models")
 async def stats_models(
-    authorization: str | None = Header(default=None), window: str = "24h"
+    request: Request, authorization: str | None = Header(default=None), window: str = "24h"
 ) -> dict[str, Any]:
     """Per-model traffic, cost, and latency for the selected window."""
-    tenant_id = _stats_scope(authorization)
+    tenant_id = _stats_scope(request, authorization)
     return {
         "window": window,
         "data": _flux._engine._attribution.stats_by_model(
@@ -612,10 +658,10 @@ async def stats_models(
 
 @app.get("/v1/stats/tasks")
 async def stats_tasks(
-    authorization: str | None = Header(default=None), window: str = "24h"
+    request: Request, authorization: str | None = Header(default=None), window: str = "24h"
 ) -> dict[str, Any]:
     """Per-task-type traffic and cost for the selected window."""
-    tenant_id = _stats_scope(authorization)
+    tenant_id = _stats_scope(request, authorization)
     return {
         "window": window,
         "data": _flux._engine._attribution.stats_by_task_type(
@@ -625,12 +671,15 @@ async def stats_tasks(
 
 
 @app.get("/v1/stats/registry")
-async def stats_registry(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+async def stats_registry(
+    request: Request, authorization: str | None = Header(default=None)
+) -> dict[str, Any]:
     """The model registry with pricing and capabilities.
 
     Deliberately separate from GET /v1/models, which is OpenAI-shaped
     ({id, object, owned_by}) and must stay that way for client compatibility.
     """
+    _refuse_remote_spend_data(request)
     _check_auth(authorization)
     registry = _flux._engine._registry
     return {
@@ -658,7 +707,9 @@ async def stats_registry(authorization: str | None = Header(default=None)) -> di
 
 
 @app.get("/v1/stats/config")
-async def stats_config(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+async def stats_config(
+    request: Request, authorization: str | None = Header(default=None)
+) -> dict[str, Any]:
     """The deployment's effective configuration, read-only.
 
     SECURITY: this endpoint must never echo a secret. No bearer token, no
@@ -673,6 +724,7 @@ async def stats_config(authorization: str | None = Header(default=None)) -> dict
     making budgets runtime-mutable needs a config file and a reload path,
     which is its own piece of work rather than a dashboard side effect.
     """
+    _refuse_remote_spend_data(request)
     _check_auth(authorization)
     if SERVER_TOKENS:
         auth_mode = "bound-tokens"
@@ -719,7 +771,9 @@ async def stats_config(authorization: str | None = Header(default=None)) -> dict
 
 
 @app.get("/metrics")
-async def metrics(authorization: str | None = Header(default=None)) -> Response:
+async def metrics(
+    request: Request, authorization: str | None = Header(default=None)
+) -> Response:
     """Task 7: Prometheus text-exposition metrics — flux_cost_usd_total,
     flux_run_steps, flux_budget_exceeded_total, labelled by tenant/model.
 
@@ -728,7 +782,12 @@ async def metrics(authorization: str | None = Header(default=None)) -> Response:
     authenticated caller could read every tenant's spend/usage. Outside that
     mode (auth disabled, or the legacy shared-token mode where tenant_id is
     self-declared and unverified) all series are rendered, same as before.
+
+    Scraping this from another host is the one legitimate remote read of spend
+    data, and it needs FLUX_SERVER_TOKEN — without auth configured the series
+    are served to loopback only, like every other spend endpoint.
     """
+    _refuse_remote_spend_data(request)
     binding = _check_auth(authorization)
     body = _flux._engine._attribution.render_prometheus(
         tenant_filter=binding.tenant_id if binding is not None else None

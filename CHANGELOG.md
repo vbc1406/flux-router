@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Security
+- Spend and configuration data is served to loopback callers only when no authentication is configured. This covers `/v1/stats/*`, `/v1/usage`, and `/metrics` as well as `/dashboard` — gating the page alone was ineffective, since it is only a renderer for those endpoints and `/v1/stats/summary` returned the identical numbers to any caller that could reach the port. Set `FLUX_SERVER_TOKEN` to read any of it remotely, including a Prometheus scrape of `/metrics`. The proxy API is unaffected.
 - The dashboard now refuses non-loopback requests at request time, not only at mount time. The mount decision reads the *configured* bind address, so passing the host on the command line instead (`uvicorn router.server:app --host 0.0.0.0`, which is what the Dockerfile did) left the server believing it was on loopback while serving every tenant's spend and the deployment configuration to anything that could reach the port. The check now also runs per request against the peer address, which holds however the server was started. Unaffected when `FLUX_SERVER_TOKEN` is set, and a reverse proxy on the same host still reaches it.
 
 ### Added

@@ -77,7 +77,10 @@ def stats_client(monkeypatch, store):
     and tenant scoping all run for real.
     """
     monkeypatch.setattr(server._flux._engine, "_attribution", CostAttribution(store=store))
-    return TestClient(server.app)
+    # Present a loopback peer: the spend endpoints refuse a non-loopback
+    # caller when no auth is configured, and TestClient's default peer host
+    # is the literal string "testclient", which is not a parseable address.
+    return TestClient(server.app, client=("127.0.0.1", 50000))
 
 
 class TestSummaryAggregate:
@@ -361,3 +364,64 @@ class TestConfigEndpointLeaksNoSecrets:
             ).json()["server"]["auth_mode"]
             == "shared-token"
         )
+
+
+class TestSpendDataIsLoopbackOnlyWithoutAuth:
+    """Gating /dashboard alone was theatre: the page is only a renderer for
+    these endpoints, and /v1/stats/summary served the identical numbers to
+    anyone on the network. Every endpoint that returns spend or deployment
+    configuration is gated on the peer address when no auth is configured."""
+
+    SPEND_PATHS = [
+        "/v1/stats/summary",
+        "/v1/stats/timeseries",
+        "/v1/stats/models",
+        "/v1/stats/tasks",
+        "/v1/stats/registry",
+        "/v1/stats/config",
+        "/v1/usage",
+        "/metrics",
+    ]
+
+    @staticmethod
+    def _client_from(peer: str | None):
+        return TestClient(server.app, client=(peer, 50000) if peer else None)
+
+    @pytest.mark.parametrize("path", SPEND_PATHS)
+    def test_remote_peer_is_refused(self, path, monkeypatch, store):
+        monkeypatch.setattr(server._flux._engine, "_attribution", CostAttribution(store=store))
+        resp = self._client_from("192.168.1.8").get(path)
+        assert resp.status_code == 403, f"{path} leaked to a remote peer"
+        assert "loopback" in resp.json()["detail"]
+
+    @pytest.mark.parametrize("path", SPEND_PATHS)
+    def test_loopback_peer_is_served(self, path, monkeypatch, store):
+        monkeypatch.setattr(server._flux._engine, "_attribution", CostAttribution(store=store))
+        assert self._client_from("127.0.0.1").get(path).status_code == 200
+
+    @pytest.mark.parametrize("path", SPEND_PATHS)
+    def test_remote_peer_is_allowed_once_a_token_is_configured(
+        self, path, monkeypatch, store
+    ):
+        """With auth configured the token is the control and remote reads are
+        the operator's intent — a Prometheus scrape from another host, say."""
+        monkeypatch.setattr(server._flux._engine, "_attribution", CostAttribution(store=store))
+        monkeypatch.setattr(server, "SERVER_REQUIRE_AUTH", True)
+        monkeypatch.setattr(server, "_SERVER_TOKEN", "tok-remote")
+
+        client = self._client_from("192.168.1.8")
+        assert client.get(path).status_code == 401
+        assert client.get(
+            path, headers={"Authorization": "Bearer tok-remote"}
+        ).status_code == 200
+
+    def test_the_proxy_api_stays_reachable_from_anywhere(self, monkeypatch):
+        """Only spend/config data is gated. The proxy itself is what the
+        deployment is for, and it has its own auth rules."""
+        client = self._client_from("192.168.1.8")
+        assert client.get("/health").status_code == 200
+        assert client.get("/v1/models").status_code == 200
+
+    def test_missing_peer_is_refused(self, monkeypatch, store):
+        monkeypatch.setattr(server._flux._engine, "_attribution", CostAttribution(store=store))
+        assert self._client_from(None).get("/v1/stats/summary").status_code == 403

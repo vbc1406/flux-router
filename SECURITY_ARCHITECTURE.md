@@ -194,8 +194,18 @@ narrow.
 **What it exposes.** Aggregated costs, model and task breakdowns, latency
 percentiles, the model registry, and the effective configuration. Not prompts,
 not completions — the `usage` table never receives request or response text
-(see Data Flow above), so there is none for the dashboard to leak. Every TEXT
-column in that table is an identifier or an enum.
+(see Data Flow above), so there is none for the dashboard to leak.
+
+Most TEXT columns in that table are enums or registry identifiers
+(`task_type`, `step_type`, `model_id`, `usage_source`, `routing_priority`).
+Two are not: `tenant_id` and `run_id` carry caller-supplied header values
+(`X-Flux-Tenant-Id`, `X-Flux-Run-Id`) whenever identity is not bound to a
+token, so a caller can write arbitrary strings there. They are stored and
+compared as SQL parameters, escaped before reaching `/metrics`
+(`attribution._escape_label`), and rendered with `textContent` rather than
+`innerHTML` in the dashboard — but they are caller-controlled, not validated,
+and a deployment treating `tenant_id` as trustworthy in shared-token mode is
+making the mistake the startup warning describes.
 
 **Never a secret.** `GET /v1/stats/config` reports auth as a mode name and
 providers as a configured yes/no. No bearer token, no provider API key, and no
@@ -203,27 +213,42 @@ Redis URL (which can embed credentials) appears in the response.
 `router/tests/test_stats.py` asserts that no configured secret's value appears
 anywhere in the body.
 
-**Who can reach it.** The dashboard shows *every* tenant's spend to whoever
-loads the page — correct for the single-operator case it is built for, wrong
-the moment the port is reachable from elsewhere. So access is gated twice:
+**Who can reach it.** This data is *every* tenant's spend and the deployment's
+configuration — correct for the single-operator case it is built for, wrong the
+moment the port is reachable from elsewhere. When no auth is configured, it is
+served to **loopback callers only**. That rule covers the whole surface, not
+just the page:
 
-1. **At mount time**, on the configured bind address. Loopback with no token is
-   allowed; a non-loopback bind with no token refuses to mount, logs why, and
-   leaves the proxy API serving normally. `FLUX_DASHBOARD=0` disables it
-   outright.
-2. **At request time**, on the peer address the request actually arrived from.
+```
+/dashboard         /v1/stats/summary     /v1/stats/tasks      /v1/usage
+                   /v1/stats/timeseries  /v1/stats/registry   /metrics
+                   /v1/stats/models      /v1/stats/config
+```
 
-The second check exists because the first can be bypassed without meaning to.
-It reads the *configured* bind address, which is only the truth when the bind
-came from the environment — start the server with
-`uvicorn router.server:app --host 0.0.0.0` and config still reports
-`127.0.0.1`, so the mount is allowed while the port is open to the network.
-The request-time check holds regardless of how the server was started.
+Gating the dashboard alone would be theatre: the page is only a renderer for
+those endpoints, so anyone refused at `/dashboard` could read the identical
+numbers from `/v1/stats/summary`. `server._refuse_remote_spend_data()` is the
+single gate, and `router/tests/test_stats.py` asserts every path in the list
+above refuses a remote peer, serves a loopback one, and allows a remote read
+once a token is set.
 
-Neither check applies when `FLUX_SERVER_TOKEN` or `FLUX_SERVER_TOKENS` is set:
-the token is then the control, remote access is intentional, and the stats
-endpoints require it. In `FLUX_SERVER_TOKENS` mode a caller sees only the
-tenant their token is bound to.
+For the dashboard specifically there is also a **mount-time** check on the
+configured bind address, which refuses to mount at all rather than serving a
+page whose data calls will fail. That check alone is not sufficient — it reads
+the *configured* address, which is only the truth when the bind came from the
+environment. Start the server with `uvicorn router.server:app --host 0.0.0.0`
+and config still reports `127.0.0.1`. The request-time peer check is what
+holds regardless of how the server was started.
+
+None of this applies when `FLUX_SERVER_TOKEN` or `FLUX_SERVER_TOKENS` is set:
+the token is then the control and remote access is intentional — including a
+Prometheus scrape of `/metrics` from another host, which needs a token. In
+`FLUX_SERVER_TOKENS` mode a caller sees only the tenant their token is bound
+to.
+
+The proxy API itself (`/v1/chat/completions`, `/v1/models`, `/health`) is not
+covered by this rule. It is what the deployment exists for and has its own auth
+rules.
 
 **A container never has a loopback client.** Requests arrive from the container
 bridge, so the unauthenticated localhost allowance never applies there, even

@@ -91,7 +91,9 @@ It shows, for a selected window (1h / 24h / 7d / 30d / all):
 The dashboard shows **every tenant's** spend and this deployment's
 configuration to whoever loads the page. That is right for the single-operator
 case it is built for, and wrong the moment the port is reachable from
-elsewhere. So:
+elsewhere. The same rule covers the `/v1/stats/*` endpoints behind it, plus
+`/v1/usage` and `/metrics` — gating the page alone would achieve nothing, since
+it is only a renderer for those. So:
 
 - **Loopback, no token** — served. This is the normal local case.
 - **Non-loopback bind, no token** — refused, and the reason is logged. The
@@ -123,7 +125,9 @@ available to you. All accept `?window=` of `1h`, `24h`, `7d`, `30d`, or `all`
 In `FLUX_SERVER_TOKENS` multi-tenant mode, a bearer token's bound tenant is the
 only data these return. Without tokens configured there is no verified tenant
 identity, so they span every tenant — which is what the single-operator
-dashboard wants.
+dashboard wants, and why, with no auth configured, they are served to loopback
+callers only. A remote read of any of them (including a Prometheus scrape of
+`/metrics`) needs `FLUX_SERVER_TOKEN`.
 
 | Endpoint | Returns |
 |---|---|
