@@ -67,3 +67,126 @@ jobs:
 
       - name: Run the keyless demo
         run: python -m router.demo
+
+  # Validate the container image and docker-compose.yml. A GitHub runner is the
+  # clean VM this would otherwise need: the image is built from scratch, booted,
+  # and checked for the three things that make the self-hosted story work — the
+  # API serves, the usage database survives a restart on its volume, and the
+  # dashboard is not exposed without a token.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t flux-router:ci .
+
+      # A container never has a loopback client — requests arrive from the
+      # docker bridge — so the dashboard's unauthenticated localhost-only
+      # allowance never applies. Without a token it must not be served at all.
+      - name: Dashboard is not exposed without a token
+        run: |
+          set -euo pipefail
+          docker run -d --name flux-notoken -p 8000:8000 flux-router:ci
+          trap 'docker rm -f flux-notoken >/dev/null 2>&1 || true' EXIT
+
+          for i in $(seq 1 30); do
+            if curl -fsS localhost:8000/health >/dev/null 2>&1; then break; fi
+            if [ "$i" = 30 ]; then docker logs flux-notoken; exit 1; fi
+            sleep 1
+          done
+
+          STATUS="$(curl -s -o /dev/null -w '%{http_code}' localhost:8000/dashboard/)"
+          if [ "$STATUS" = "200" ]; then
+            echo "dashboard served from a container with no token configured" >&2
+            docker logs flux-notoken
+            exit 1
+          fi
+          echo "dashboard refused as expected (HTTP $STATUS)"
+
+      - name: Dashboard is served, and the API is locked, with a token
+        run: |
+          set -euo pipefail
+          docker run -d --name flux-token -p 8001:8000 \
+            -e FLUX_SERVER_TOKEN=ci-test-token flux-router:ci
+          trap 'docker rm -f flux-token >/dev/null 2>&1 || true' EXIT
+
+          for i in $(seq 1 30); do
+            if curl -fsS localhost:8001/health >/dev/null 2>&1; then break; fi
+            if [ "$i" = 30 ]; then docker logs flux-token; exit 1; fi
+            sleep 1
+          done
+
+          curl -fsS localhost:8001/dashboard/ >/dev/null
+          curl -fsS localhost:8001/dashboard/app.js >/dev/null
+
+          # The stats the dashboard reads must require the token.
+          UNAUTH="$(curl -s -o /dev/null -w '%{http_code}' localhost:8001/v1/stats/summary)"
+          if [ "$UNAUTH" != "401" ]; then
+            echo "stats served without the token (got $UNAUTH)" >&2
+            exit 1
+          fi
+          curl -fsS -H "Authorization: Bearer ci-test-token" \
+            localhost:8001/v1/stats/summary >/dev/null
+
+      # The point of the volume: `docker restart` must not lose spend history.
+      - name: Usage database survives a container restart
+        run: |
+          set -euo pipefail
+          docker volume create flux-ci-data >/dev/null
+          docker run -d --name flux-persist -p 8002:8000 \
+            -v flux-ci-data:/data flux-router:ci
+          cleanup() {
+            docker rm -f flux-persist >/dev/null 2>&1 || true
+            docker volume rm flux-ci-data >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          for i in $(seq 1 30); do
+            if curl -fsS localhost:8002/health >/dev/null 2>&1; then break; fi
+            if [ "$i" = 30 ]; then docker logs flux-persist; exit 1; fi
+            sleep 1
+          done
+
+          # Write a usage row directly (no provider keys in CI, so no real call
+          # to generate one). count() flushes the background writer first.
+          docker exec -i flux-persist python - <<'PY'
+          import time
+          from router.attribution import SqliteUsageStore, UsageRecord
+
+          store = SqliteUsageStore("/data/flux.db")
+          store.record(UsageRecord(tenant_id="ci", run_id="r1", task_type="t",
+                                   step_type="s", model_id="m1", cost_usd=0.01,
+                                   timestamp=time.time()))
+          assert store.count() == 1, store.count()
+          PY
+
+          docker restart flux-persist
+          for i in $(seq 1 30); do
+            if curl -fsS localhost:8002/health >/dev/null 2>&1; then break; fi
+            if [ "$i" = 30 ]; then docker logs flux-persist; exit 1; fi
+            sleep 1
+          done
+
+          REQUESTS="$(curl -fsS 'localhost:8002/v1/stats/summary?window=all' \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["requests"])')"
+          if [ "$REQUESTS" != "1" ]; then
+            echo "usage row did not survive the restart (requests=$REQUESTS)" >&2
+            exit 1
+          fi
+
+      - name: docker compose brings the stack up
+        run: |
+          set -euo pipefail
+          trap 'docker compose down -v >/dev/null 2>&1 || true' EXIT
+          FLUX_SERVER_TOKEN=ci-compose-token docker compose up -d --build
+
+          for i in $(seq 1 30); do
+            if curl -fsS localhost:8000/health >/dev/null 2>&1; then break; fi
+            if [ "$i" = 30 ]; then docker compose logs; exit 1; fi
+            sleep 1
+          done
+
+          curl -fsS localhost:8000/dashboard/ >/dev/null
+          curl -fsS -H "Authorization: Bearer ci-compose-token" \
+            "localhost:8000/v1/stats/summary?window=24h" >/dev/null
