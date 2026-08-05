@@ -339,3 +339,174 @@ class TestAttributionWiredIntoFluxComplete:
         rr(flux.complete("hi", user_id="u1", exploration_rate=0.0))
         body = flux._engine._attribution.render_prometheus()
         assert 'tenant_id="unknown"' in body
+
+
+class TestDashboardTelemetryColumns:
+    """The columns added for the local dashboard (latency, savings, routing
+    detail). Costs and metadata only — nothing here derives from prompt text."""
+
+    def test_round_trip(self):
+        store = SqliteUsageStore(":memory:")
+        store.record(
+            UsageRecord(
+                tenant_id="acme",
+                run_id="run-1",
+                task_type="code_generation",
+                step_type="completion",
+                model_id="m1",
+                cost_usd=0.01,
+                timestamp=1000.0,
+                latency_ms=250.5,
+                decision_latency_ms=1.25,
+                estimated_savings_usd=0.09,
+                complexity_score=0.42,
+                cache_hit=True,
+                routing_priority="cost_optimized",
+                fallback_used=True,
+            )
+        )
+
+        rec = store.query()[0]
+        assert rec.latency_ms == 250.5
+        assert rec.decision_latency_ms == 1.25
+        assert rec.estimated_savings_usd == 0.09
+        assert rec.complexity_score == 0.42
+        assert rec.routing_priority == "cost_optimized"
+
+    def test_booleans_survive_sqlites_lack_of_a_bool_type(self):
+        store = SqliteUsageStore(":memory:")
+        store.record(
+            UsageRecord(
+                tenant_id=None, run_id=None, task_type="t", step_type="s", model_id="m",
+                cost_usd=0.01, timestamp=1000.0, cache_hit=True, fallback_used=False,
+            )
+        )
+
+        rec = store.query()[0]
+        assert rec.cache_hit is True
+        assert rec.fallback_used is False
+
+    def test_telemetry_is_optional(self):
+        """The library dispatch path doesn't measure wall-clock latency, so
+        every one of these stays writable as None."""
+        store = SqliteUsageStore(":memory:")
+        store.record(
+            UsageRecord(
+                tenant_id=None, run_id=None, task_type="t", step_type="s", model_id="m",
+                cost_usd=0.01, timestamp=1000.0,
+            )
+        )
+
+        rec = store.query()[0]
+        assert rec.latency_ms is None
+        assert rec.decision_latency_ms is None
+        assert rec.estimated_savings_usd is None
+        assert rec.complexity_score is None
+        assert rec.routing_priority is None
+        assert rec.cache_hit is False
+        assert rec.fallback_used is False
+
+
+class TestSchemaMigration:
+    """A database written by an older Flux must open in place, not blow up.
+    Anyone self-hosting already has one; `flux serve` opens it on every start."""
+
+    ORIGINAL_COLUMNS = (
+        "tenant_id TEXT", "run_id TEXT", "task_type TEXT", "step_type TEXT",
+        "model_id TEXT NOT NULL", "cost_usd REAL NOT NULL", "timestamp REAL NOT NULL",
+    )
+
+    def _legacy_db(self, path: str, *, rows: int = 1) -> None:
+        """Create a database with the pre-telemetry schema and seed it."""
+        import sqlite3
+
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "CREATE TABLE usage (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            + ", ".join(self.ORIGINAL_COLUMNS)
+            + ")"
+        )
+        for i in range(rows):
+            conn.execute(
+                "INSERT INTO usage (tenant_id, run_id, task_type, step_type, model_id, "
+                "cost_usd, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ("acme", f"run-{i}", "code_generation", "completion", "m1", 0.01, 1000.0 + i),
+            )
+        conn.commit()
+        conn.close()
+
+    def test_old_database_opens_and_migrates(self, tmp_path):
+        path = str(tmp_path / "legacy.db")
+        self._legacy_db(path)
+
+        store = SqliteUsageStore(path)
+        columns = {r[1] for r in store._conn.execute("PRAGMA table_info(usage)").fetchall()}
+        for column, _ddl in SqliteUsageStore._MIGRATED_COLUMNS:
+            assert column in columns
+
+    def test_pre_migration_rows_read_back_as_null(self, tmp_path):
+        path = str(tmp_path / "legacy.db")
+        self._legacy_db(path)
+
+        rec = SqliteUsageStore(path).query()[0]
+        assert rec.cost_usd == 0.01  # the original data is intact
+        assert rec.latency_ms is None
+        assert rec.estimated_savings_usd is None
+        assert rec.routing_priority is None
+        # NOT NULL DEFAULT columns backfill rather than reading NULL.
+        assert rec.usage_source == "estimated"
+        assert rec.cache_hit is False
+        assert rec.fallback_used is False
+
+    def test_new_rows_land_alongside_migrated_ones(self, tmp_path):
+        path = str(tmp_path / "legacy.db")
+        self._legacy_db(path)
+
+        store = SqliteUsageStore(path)
+        store.record(
+            UsageRecord(
+                tenant_id="acme", run_id="run-new", task_type="t", step_type="s",
+                model_id="m1", cost_usd=0.02, timestamp=2000.0, latency_ms=99.0,
+            )
+        )
+
+        assert store.count() == 2
+        newest = store.query()[0]
+        assert newest.run_id == "run-new"
+        assert newest.latency_ms == 99.0
+
+    def test_aggregates_tolerate_a_mix_of_old_and_new_rows(self, tmp_path):
+        """Pre-migration rows have no latency; they must be skipped in the
+        latency stats rather than counted as zero."""
+        path = str(tmp_path / "legacy.db")
+        self._legacy_db(path, rows=2)
+
+        store = SqliteUsageStore(path)
+        store.record(
+            UsageRecord(
+                tenant_id="acme", run_id="run-new", task_type="t", step_type="s",
+                model_id="m1", cost_usd=0.02, timestamp=2000.0, latency_ms=100.0,
+                estimated_savings_usd=0.08,
+            )
+        )
+
+        summary = store.summary()
+        assert summary["requests"] == 3
+        assert summary["avg_latency_ms"] == 100.0
+        assert summary["estimated_savings_usd"] == 0.08
+
+    def test_reopening_an_already_migrated_database_is_a_no_op(self, tmp_path):
+        path = str(tmp_path / "flux.db")
+        first = SqliteUsageStore(path)
+        first.record(
+            UsageRecord(
+                tenant_id="acme", run_id="r1", task_type="t", step_type="s", model_id="m1",
+                cost_usd=0.01, timestamp=1000.0, latency_ms=50.0,
+            )
+        )
+        first._flush()
+
+        # What `flux serve` does on every restart.
+        reopened = SqliteUsageStore(path)
+        assert reopened.count() == 1
+        assert reopened.query()[0].latency_ms == 50.0

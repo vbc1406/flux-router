@@ -106,7 +106,10 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"router/tests/*" = ["S101", "S105", "S106", "F841"]
+# S104 ("0.0.0.0") is unavoidable in tests/: the dashboard mount guard and the
+# CLI's bind-address handling are *about* non-loopback addresses, so the string
+# has to appear as test data. Nothing in tests/ binds a socket.
+"router/tests/*" = ["S101", "S104", "S105", "S106", "F841"]
 
 [tool.pytest.ini_options]
 testpaths = ["router/tests"]

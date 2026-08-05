@@ -1139,3 +1139,111 @@ class TestActualUsage:
         )
         cost_so_far, steps_so_far = server._flux._engine._run_budget.snapshot(run_id)
         assert steps_so_far == 1, "run-budget reservation must be resolved exactly once"
+
+
+class TestDashboardMountGuard:
+    """The dashboard shows every tenant's spend and the deployment's config.
+    Whether it mounts is decided from the CONFIGURED bind address, at import
+    time — these test the decision function directly, since the mount itself
+    happens once when the module loads."""
+
+    def test_mounts_unauthenticated_on_loopback(self):
+        """The single-operator self-hosted case it exists for."""
+        assert server._dashboard_refusal_reason("127.0.0.1", False, True) is None
+
+    def test_refuses_on_bind_all_without_auth(self):
+        reason = server._dashboard_refusal_reason("0.0.0.0", False, True)
+        assert reason is not None
+        assert "0.0.0.0" in reason
+
+    def test_mounts_on_bind_all_when_a_token_is_configured(self):
+        assert server._dashboard_refusal_reason("0.0.0.0", True, True) is None
+
+    def test_disabled_flag_refuses_even_on_loopback(self):
+        assert server._dashboard_refusal_reason("127.0.0.1", False, False) == "FLUX_DASHBOARD=0"
+
+    @pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "::1", "[::1]", "127.0.0.5", ""])
+    def test_loopback_addresses(self, host):
+        assert server._is_loopback(host) is True
+
+    @pytest.mark.parametrize("host", ["0.0.0.0", "10.0.0.5", "192.168.1.10", "::", "example.com"])
+    def test_non_loopback_addresses(self, host):
+        assert server._is_loopback(host) is False
+
+    def test_unresolvable_hostname_is_treated_as_non_loopback(self):
+        """Too cautious costs a warning; the other way round exposes spend."""
+        assert server._is_loopback("some-host.internal") is False
+
+    def test_refusal_is_not_fatal(self, client):
+        """The proxy and its API keep serving when the dashboard is refused."""
+        assert client.post("/v1/chat/completions", json=_body()).status_code == 200
+        assert client.get("/health").status_code == 200
+
+    def test_openai_models_shape_is_unchanged_by_the_dashboard_work(self, client):
+        """/v1/models is what OpenAI SDK clients read; the richer registry
+        view lives at /v1/stats/registry precisely so this stays stable."""
+        data = client.get("/v1/models").json()
+        assert data["object"] == "list"
+        entry = next(m for m in data["data"] if m["id"] == "gpt-5-mini")
+        assert set(entry) == {"id", "object", "owned_by"}
+        assert entry["object"] == "model"
+
+
+class TestLatencyRecorded:
+    """Routing overhead and provider wall-clock were previously measured and
+    thrown away, so the dashboard had nothing to show. Both paths record now."""
+
+    @pytest.fixture
+    def recorded(self, monkeypatch):
+        """Capture what the proxy hands to attribution.record()."""
+        calls = []
+        original = server._flux._engine._attribution.record
+
+        def spy(**kwargs):
+            calls.append(kwargs)
+            return original(**kwargs)
+
+        monkeypatch.setattr(server._flux._engine._attribution, "record", spy)
+        return calls
+
+    def test_non_streaming_records_latency(self, client, recorded):
+        assert client.post("/v1/chat/completions", json=_body()).status_code == 200
+
+        assert len(recorded) == 1
+        assert recorded[0]["latency_ms"] is not None
+        assert recorded[0]["latency_ms"] >= 0
+
+    def test_streaming_records_latency_at_stream_end(self, client, recorded, monkeypatch):
+        async def fake_stream(model, request, api_key):
+            yield b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
+            yield b"data: [DONE]\n\n"
+
+        monkeypatch.setattr(server, "stream_openai_compat_lines", fake_stream)
+        resp = client.post("/v1/chat/completions", json=_body("gpt-5-mini", stream=True))
+        assert resp.status_code == 200
+        assert resp.text  # consume the stream so the end-of-stream hook runs
+
+        assert len(recorded) == 1
+        assert recorded[0]["latency_ms"] is not None
+
+    def test_decision_latency_is_recorded_separately(self, client, recorded):
+        """Routing overhead, not the provider call — the number that answers
+        'is Flux itself slow?'."""
+        client.post("/v1/chat/completions", json=_body())
+
+        decision = recorded[0]["decision_latency_ms"]
+        assert decision is not None
+        assert decision < recorded[0]["latency_ms"] + 1
+
+    def test_decision_latency_header_is_exposed(self, client):
+        resp = client.post("/v1/chat/completions", json=_body())
+        assert "x-flux-decision-latency-ms" in resp.headers
+        assert float(resp.headers["x-flux-decision-latency-ms"]) >= 0
+
+    def test_savings_and_routing_detail_are_recorded(self, client, recorded):
+        client.post("/v1/chat/completions", json=_body("flux-cheap"))
+
+        rec = recorded[0]
+        assert rec["estimated_savings_usd"] is not None
+        assert rec["complexity_score"] is not None
+        assert rec["routing_priority"] == "cost-optimized"
