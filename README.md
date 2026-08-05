@@ -46,10 +46,8 @@ Or with Docker, which mounts a volume for the usage database:
 FLUX_SERVER_TOKEN=$(openssl rand -hex 32) docker compose up -d   # or: make docker-up
 ```
 
-A container never has a loopback client — requests arrive from the docker
-bridge — so the dashboard's unauthenticated localhost-only allowance doesn't
-apply there. Set `FLUX_SERVER_TOKEN` to use the dashboard under Docker and
-paste the same value into its token prompt; without one you get the API alone.
+A token is required for the dashboard under Docker — see
+[SELF_HOSTING.md](./SELF_HOSTING.md#docker) for why.
 
 ```python
 from openai import OpenAI
@@ -211,25 +209,71 @@ See [MIGRATIONS.md](./MIGRATIONS.md) for the `usage` table's `usage_source`/
 
 ---
 
+## The dashboard
+
+`flux serve` also serves a local operator console at
+`http://127.0.0.1:8000/dashboard` — plain HTML and JavaScript, no build step,
+no CDN, served by the same process as the API.
+
+It answers the question a router should be able to answer: where did the money
+go? Spend and savings over time, a per-model and per-task breakdown, latency
+percentiles, cache-hit and fallback rates, the live model registry with
+pricing, and the deployment's effective configuration. The window selector
+covers 1h through all-time.
+
+Everything it renders comes from `GET /v1/stats/*`, which you can query
+directly — there is nothing available to the dashboard that isn't available to
+you.
+
+The usage database behind it holds **costs and metadata only**; no prompt or
+completion text is ever written to disk. And the dashboard shows every tenant's
+spend, so it is served to loopback clients only unless you configure a token.
+
+See [SELF_HOSTING.md](./SELF_HOSTING.md) for the full guide: flags, the data
+directory, the stats API reference, Docker, multi-worker caveats, and the
+access model.
+
+---
+
 ## How Flux compares
 
-Flux overlaps with LiteLLM, OpenRouter, and similar tools. The differences that matter:
+Flux overlaps with LiteLLM, OpenRouter, and Portkey. The differences that matter:
 
-| | Flux | LiteLLM | OpenRouter |
-|---|---|---|---|
-| Routing decision | Pure-Python heuristic, sub-millisecond (~0.23 ms P50) | Config-driven, no automatic per-task selection | Server-side, network round trip |
-| Per-task model selection | Yes (15 task types, complexity scoring) | Manual | Manual |
-| Adaptive learning from response quality | Yes (per-(model, task) EMA, optional per-customer) | No | No |
-| Typed fallback chains (rate-limit / timeout / content-filter) | Yes, separate per failure mode | Yes (single chain) | Yes |
-| Runs in your infrastructure | Yes | Yes | No (hosted) |
-| License | AGPL-3.0 (or commercial) | MIT | Proprietary |
+| | Flux | LiteLLM | OpenRouter | Portkey |
+|---|---|---|---|---|
+| Routing decision | Pure-Python heuristic, sub-millisecond (~0.23 ms P50) | Config-driven, no automatic per-task selection | Server-side, network round trip | Server-side, network round trip |
+| Per-task model selection | Yes (15 task types, complexity scoring) | Manual | Manual | Manual / rule-based |
+| Adaptive learning from response quality | Yes (per-(model, task) EMA, optional per-customer) | No | No | No |
+| Typed fallback chains (rate-limit / timeout / content-filter) | Yes, separate per failure mode | Yes (single chain) | Yes | Yes |
+| Runs in your infrastructure | Yes | Yes | No (hosted) | Gateway self-hostable; observability is hosted |
+| Where your API keys live | Your machine, only | Your machine | Their platform | Their vault |
+| Cost dashboard | Local, in-process, no account | Separate hosted/self-hosted UI | Hosted | Hosted |
+| License | AGPL-3.0 (or commercial) | MIT | Proprietary | Proprietary (OSS gateway) |
 
-Use LiteLLM if you want a permissively-licensed SDK and you're happy choosing models yourself. Use OpenRouter if you want a managed gateway and don't mind sending traffic through a third party. Use Flux if you want per-request automatic model selection that learns from outcomes, running entirely in your own infrastructure.
+The structural difference is where the data ends up. A hosted gateway sees
+every prompt you route through it, and a hosted observability layer sees your
+spend, your traffic shape, and your model mix. Flux is a process on your
+machine writing to a SQLite file on your disk: the dashboard is served by the
+same process, over loopback, with no account, no telemetry, and no callback
+home. The only outbound network calls Flux makes are to the model providers
+you configured.
+
+That matters most when prompts are the sensitive asset — regulated data,
+proprietary agent traces, customer content under a DPA that doesn't cover a
+third-party gateway.
+
+Use **LiteLLM** if you want a permissively-licensed SDK and you're happy
+choosing models yourself. Use **OpenRouter** if you want a managed gateway and
+don't mind third-party traffic. Use **Portkey** if you want hosted
+observability and guardrails as a product. Use **Flux** if you want per-request
+automatic model selection that learns from outcomes, and you want the routing,
+the keys, and the spend history to stay on hardware you control.
 
 ---
 
 ## Documentation
 
+- [SELF_HOSTING.md](./SELF_HOSTING.md) — running `flux serve`: flags, persistence, the dashboard, the stats API, Docker
 - [SECURITY_ARCHITECTURE.md](./SECURITY_ARCHITECTURE.md) — data flows, code-level guarantees, multi-tenant caveats
 - [CODEBASE_MAP.md](./CODEBASE_MAP.md) — directory layout and per-file purpose
 - [FEATURES.md](./FEATURES.md) — extension points for adding providers, models, or task types

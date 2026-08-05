@@ -184,6 +184,58 @@ bound.
 
 ---
 
+## The Dashboard and the Stats API
+
+`flux serve` serves a local operator console at `/dashboard` and the
+`GET /v1/stats/*` endpoints behind it. Both are read-only. What they expose is
+the deployment's spend and configuration, so the access model is deliberately
+narrow.
+
+**What it exposes.** Aggregated costs, model and task breakdowns, latency
+percentiles, the model registry, and the effective configuration. Not prompts,
+not completions — the `usage` table never receives request or response text
+(see Data Flow above), so there is none for the dashboard to leak. Every TEXT
+column in that table is an identifier or an enum.
+
+**Never a secret.** `GET /v1/stats/config` reports auth as a mode name and
+providers as a configured yes/no. No bearer token, no provider API key, and no
+Redis URL (which can embed credentials) appears in the response.
+`router/tests/test_stats.py` asserts that no configured secret's value appears
+anywhere in the body.
+
+**Who can reach it.** The dashboard shows *every* tenant's spend to whoever
+loads the page — correct for the single-operator case it is built for, wrong
+the moment the port is reachable from elsewhere. So access is gated twice:
+
+1. **At mount time**, on the configured bind address. Loopback with no token is
+   allowed; a non-loopback bind with no token refuses to mount, logs why, and
+   leaves the proxy API serving normally. `FLUX_DASHBOARD=0` disables it
+   outright.
+2. **At request time**, on the peer address the request actually arrived from.
+
+The second check exists because the first can be bypassed without meaning to.
+It reads the *configured* bind address, which is only the truth when the bind
+came from the environment — start the server with
+`uvicorn router.server:app --host 0.0.0.0` and config still reports
+`127.0.0.1`, so the mount is allowed while the port is open to the network.
+The request-time check holds regardless of how the server was started.
+
+Neither check applies when `FLUX_SERVER_TOKEN` or `FLUX_SERVER_TOKENS` is set:
+the token is then the control, remote access is intentional, and the stats
+endpoints require it. In `FLUX_SERVER_TOKENS` mode a caller sees only the
+tenant their token is bound to.
+
+**A container never has a loopback client.** Requests arrive from the container
+bridge, so the unauthenticated localhost allowance never applies there, even
+when the port is published to `127.0.0.1`. A token is required to use the
+dashboard under Docker.
+
+**A same-host reverse proxy still reaches it**, since its peer address is
+loopback. That is intentional: such a deployment has taken responsibility for
+its own edge, and should configure a token.
+
+---
+
 ## What Flux Does NOT Protect Against
 
 We are honest about our threat model. Flux does NOT protect against:
@@ -208,6 +260,15 @@ Every claim above can be verified by reading the code:
 4. **Cache hashing:** Read `router/cache.py` `fingerprint()`. It uses SHA-256.
 5. **Atomic writes:** Read `router/adaptive_weights.py` `_flush()`. It uses tempfile + os.replace.
 6. **Resource limits:** Read `router/config.py` for MAX_CUSTOMERS, MAX_ADAPTIVE_KEYS, etc.
+7. **Dashboard exposure:** Read `router/server.py` `_dashboard_refusal_reason()` (mount-time) and `_LoopbackOnlyDashboard` (request-time). Or check it live — start the server bound off-loopback with no token and confirm `/dashboard` is not served:
+
+   ```bash
+   FLUX_SERVER_HOST=0.0.0.0 flux serve --port 8000
+   curl -s -o /dev/null -w '%{http_code}\n' http://<your-lan-ip>:8000/dashboard/   # 404
+   curl -s -o /dev/null -w '%{http_code}\n' http://<your-lan-ip>:8000/health       # 200
+   ```
+
+8. **No prompt text on disk:** Route a request containing a distinctive string, then `strings ~/.local/share/flux/flux.db | grep <that string>` — no match.
 
 You can also run the security audit yourself:
 
