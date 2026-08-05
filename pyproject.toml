@@ -50,6 +50,11 @@ dev = [
     "hypothesis>=6.0,<7.0",
     # In-memory Redis fake for RedisRunStore tests — no real server required.
     "fakeredis>=2.20,<3.0",
+    # fastapi.testclient (test_server.py, test_stats.py) is built on
+    # starlette's TestClient, which needs httpx or it raises at import and
+    # takes the whole file down at collection. Declared explicitly: it was
+    # previously present only as a transitive dependency of `safety`.
+    "httpx>=0.27,<1.0",
 ]
 # Only needed to pull the full public benchmarks for `python -m router.evals
 # --live --source hub`. The harness runs offline (fixtures + simulated

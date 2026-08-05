@@ -11,3 +11,6 @@ hypothesis>=6.0,<7.0
 # Must stay in sync with the `dev` extra in pyproject.toml; without it
 # test_run_store_backends.py skips for anyone installing from this file.
 fakeredis>=2.20,<3.0
+# Required by fastapi.testclient / starlette's TestClient — without it
+# test_server.py and test_stats.py fail at collection, not as skips.
+httpx>=0.27,<1.0
