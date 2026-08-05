@@ -24,6 +24,7 @@ Test coverage:
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -1247,3 +1248,79 @@ class TestLatencyRecorded:
         assert rec["estimated_savings_usd"] is not None
         assert rec["complexity_score"] is not None
         assert rec["routing_priority"] == "cost-optimized"
+
+
+class TestDashboardRemoteRequestGuard:
+    """The mount decision reads the CONFIGURED bind address, which is only the
+    truth when the bind came from the environment. `uvicorn --host 0.0.0.0`
+    leaves config reporting 127.0.0.1, the mount is allowed, and without this
+    request-time check the dashboard is served to the whole network."""
+
+    @staticmethod
+    def _scope(peer: str | None) -> dict:
+        return {"type": "http", "client": (peer, 54321) if peer else None}
+
+    async def _call(self, peer: str | None):
+        """Drive the wrapped app directly and capture what it sent."""
+        sent = []
+        inner_ran = []
+
+        async def inner(scope, receive, send):
+            inner_ran.append(True)
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"dashboard"})
+
+        async def send(message):
+            sent.append(message)
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        await server._LoopbackOnlyDashboard(inner)(self._scope(peer), receive, send)
+        status = next(m["status"] for m in sent if m["type"] == "http.response.start")
+        return status, bool(inner_ran)
+
+    @pytest.mark.parametrize("peer", ["127.0.0.1", "::1", "localhost"])
+    def test_loopback_peers_are_served(self, peer):
+        status, inner_ran = asyncio.run(self._call(peer))
+        assert status == 200
+        assert inner_ran is True
+
+    @pytest.mark.parametrize("peer", ["192.168.1.8", "10.0.0.5", "203.0.113.7"])
+    def test_remote_peers_are_refused(self, peer):
+        status, inner_ran = asyncio.run(self._call(peer))
+        assert status == 403
+        assert inner_ran is False, "static files must not be served to a remote peer"
+
+    def test_missing_client_is_refused(self):
+        """No peer address means it can't be shown to be local."""
+        status, _ = asyncio.run(self._call(None))
+        assert status == 403
+
+    def test_remote_peers_allowed_once_a_token_is_configured(self, monkeypatch):
+        """With auth configured the token is the control, and remote access
+        is the operator's intent rather than an accident."""
+        monkeypatch.setattr(server, "SERVER_REQUIRE_AUTH", True)
+        status, inner_ran = asyncio.run(self._call("192.168.1.8"))
+        assert status == 200
+        assert inner_ran is True
+
+    def test_non_http_scopes_pass_through(self):
+        """Lifespan/websocket messages must not be turned into JSON responses."""
+        ran = []
+
+        async def inner(scope, receive, send):
+            ran.append(scope["type"])
+
+        async def noop(*a):
+            return {"type": "lifespan.startup"}
+
+        asyncio.run(
+            server._LoopbackOnlyDashboard(inner)({"type": "lifespan"}, noop, noop)
+        )
+        assert ran == ["lifespan"]
+
+    def test_the_proxy_api_is_not_affected(self, client):
+        """Only /dashboard is loopback-gated; the API keeps its own auth rules."""
+        assert client.post("/v1/chat/completions", json=_body()).status_code == 200
+        assert client.get("/health").status_code == 200

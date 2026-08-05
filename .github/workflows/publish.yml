@@ -75,6 +75,61 @@ jobs:
           python -c "import router; from router.flux import make_flux; make_flux()"
           python -m router.demo
 
+      # The library alone is not the product any more. Everything below runs
+      # against the `server` extra, from a directory that is not the source
+      # checkout — so a missing package-data entry (the dashboard assets ship
+      # as files, not code) fails the release instead of shipping broken.
+      - name: Install the server extra
+        run: python -m pip install "$(ls dist/*.whl)[server]"
+
+      - name: Boot flux serve and exercise the endpoints
+        run: |
+          set -euo pipefail
+          cd "$(mktemp -d)"
+
+          flux version
+          flux serve --data-dir ./fluxdata --port 8000 &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+
+          for i in $(seq 1 30); do
+            if curl -fsS localhost:8000/health >/dev/null 2>&1; then break; fi
+            if [ "$i" = 30 ]; then echo "server did not become healthy" >&2; exit 1; fi
+            sleep 1
+          done
+
+          # The dashboard is package data — this is what catches it going missing.
+          curl -fsS localhost:8000/dashboard/ >/dev/null
+          curl -fsS localhost:8000/dashboard/app.js >/dev/null
+          curl -fsS "localhost:8000/v1/stats/summary?window=24h" >/dev/null
+          curl -fsS localhost:8000/v1/stats/registry >/dev/null
+          curl -fsS localhost:8000/v1/models >/dev/null
+
+          # `flux serve` is persistent-by-default; an empty data dir means the
+          # database silently went back to ":memory:".
+          test -f ./fluxdata/flux.db
+
+      - name: Refuse the dashboard when bound off-loopback with no token
+        run: |
+          set -euo pipefail
+          cd "$(mktemp -d)"
+
+          FLUX_SERVER_HOST=0.0.0.0 flux serve --data-dir ./fluxdata --port 8001 &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+
+          for i in $(seq 1 30); do
+            if curl -fsS localhost:8001/health >/dev/null 2>&1; then break; fi
+            if [ "$i" = 30 ]; then echo "server did not become healthy" >&2; exit 1; fi
+            sleep 1
+          done
+
+          STATUS="$(curl -s -o /dev/null -w '%{http_code}' localhost:8001/dashboard/)"
+          if [ "$STATUS" != "404" ]; then
+            echo "dashboard mounted on a non-loopback bind with no token (got $STATUS)" >&2
+            exit 1
+          fi
+
   # Trusted publishing (OIDC) — no PyPI API token stored in repo secrets.
   # One-time setup required on pypi.org: Project settings > Publishing >
   # add a trusted publisher for this repo/workflow/environment.

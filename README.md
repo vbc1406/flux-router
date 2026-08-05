@@ -40,6 +40,17 @@ database in `$XDG_DATA_HOME/flux` (override with `--data-dir`), so spend history
 survives a restart. `flux serve --help` lists the flags; each one maps to a
 `FLUX_*` environment variable.
 
+Or with Docker, which mounts a volume for the usage database:
+
+```bash
+FLUX_SERVER_TOKEN=$(openssl rand -hex 32) docker compose up -d   # or: make docker-up
+```
+
+A container never has a loopback client — requests arrive from the docker
+bridge — so the dashboard's unauthenticated localhost-only allowance doesn't
+apply there. Set `FLUX_SERVER_TOKEN` to use the dashboard under Docker and
+paste the same value into its token prompt; without one you get the API alone.
+
 ```python
 from openai import OpenAI
 

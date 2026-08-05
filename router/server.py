@@ -26,6 +26,7 @@ import json
 import os
 import time
 import uuid
+from collections.abc import MutableMapping
 from importlib import resources
 from typing import Any
 
@@ -1218,6 +1219,65 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
+class _LoopbackOnlyDashboard:
+    """Wraps the dashboard's StaticFiles app in a request-time origin check.
+
+    _dashboard_refusal_reason() reads the CONFIGURED bind address, which is
+    only the truth when the bind address came from the environment. Pass it on
+    the command line instead — `uvicorn router.server:app --host 0.0.0.0`, as
+    the Dockerfile did — and config still reports 127.0.0.1, the mount is
+    allowed, and the dashboard is served to the whole network unauthenticated.
+
+    So the mount decision is not the only line of defence: every request is
+    also checked against the peer address it actually arrived from. That holds
+    however the server was started. A reverse proxy on the same host still
+    reaches the dashboard (its peer address is loopback), which is the
+    documented stance — that deployment owns its own edge and should set a
+    token.
+
+    Only engaged when no auth is configured; with a token set, the token is
+    the control and remote access is intentional.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self._app = app
+
+    async def __call__(
+        self, scope: MutableMapping[str, Any], receive: Any, send: Any
+    ) -> None:
+        if scope["type"] == "http" and not SERVER_REQUIRE_AUTH:
+            client = scope.get("client")
+            # No peer address (some transports, e.g. a unix socket) means it
+            # cannot be shown to be local. _is_loopback("") is True — that is
+            # correct for a BIND address, where empty means "unset", and wrong
+            # for a peer, so the absent case is refused here rather than
+            # falling through to it.
+            peer = client[0] if client else None
+            if peer is None or not _is_loopback(peer):
+                log.warning(
+                    "flux_dashboard_remote_request_refused",
+                    peer=peer,
+                    msg=(
+                        "Refused a non-loopback request for the dashboard. The server is "
+                        "reachable off-box with no FLUX_SERVER_TOKEN set — serving it would "
+                        "expose every tenant's spend and this deployment's configuration."
+                    ),
+                )
+                response = JSONResponse(
+                    {
+                        "detail": (
+                            "The dashboard is only served to loopback clients when no "
+                            "authentication is configured. Set FLUX_SERVER_TOKEN, or reach "
+                            "it from the host itself."
+                        )
+                    },
+                    status_code=403,
+                )
+                await response(scope, receive, send)
+                return
+        await self._app(scope, receive, send)
+
+
 def _mount_dashboard() -> bool:
     """Mount the dashboard at /dashboard unless it would be unsafe to.
 
@@ -1241,7 +1301,11 @@ def _mount_dashboard() -> bool:
         )
         return False
 
-    app.mount("/dashboard", StaticFiles(directory=directory, html=True), name="dashboard")
+    app.mount(
+        "/dashboard",
+        _LoopbackOnlyDashboard(StaticFiles(directory=directory, html=True)),
+        name="dashboard",
+    )
     log.info(
         "flux_dashboard_mounted",
         path="/dashboard",

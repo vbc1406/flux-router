@@ -1,4 +1,4 @@
-.PHONY: install install-dev install-server test test-fast lint security-check format clean run serve evals docker-build help
+.PHONY: install install-dev install-server test test-fast lint security-check format clean run serve evals docker-build docker-up docker-down help
 
 help:
 	@echo "Flux — Available commands:"
@@ -15,6 +15,8 @@ help:
 	@echo "  serve           Run the OpenAI-compatible HTTP proxy (router/server.py)"
 	@echo "  evals           Run the cost-vs-quality eval harness (mock, offline)"
 	@echo "  docker-build    Build Docker image"
+	@echo "  docker-up       Start the self-hosted stack (docker compose)"
+	@echo "  docker-down     Stop it, keeping the usage database volume"
 
 install:
 	pip install -r requirements.txt
@@ -59,3 +61,10 @@ evals:
 
 docker-build:
 	docker build -t flux-router:latest .
+
+docker-up:
+	docker compose up -d --build
+
+# Without -v, so the flux-data volume (and the spend history in it) survives.
+docker-down:
+	docker compose down
