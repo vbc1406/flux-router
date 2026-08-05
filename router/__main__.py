@@ -1,20 +1,14 @@
 """Entry point for `python -m router`.
 
-Flux is a library, not a standalone service.
-This file exists so `python -m router` and the Docker default
-CMD exit cleanly with a helpful message instead of an error.
+Delegates to the same CLI as the installed `flux` command, so
+`python -m router serve` and `flux serve` behave identically — the module
+form matters for the Docker default CMD and for source checkouts where the
+console script was never installed.
 """
 
 import sys
 
-
-def main() -> int:
-    print("Flux router loaded successfully.")
-    print("This module is a library — integrate it into your application.")
-    print("See README.md for usage.")
-    print("To run the demo: python -m router.demo")
-    return 0
-
+from .cli import main
 
 if __name__ == "__main__":
     sys.exit(main())

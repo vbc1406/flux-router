@@ -32,8 +32,13 @@ no call-site rewrites required.
 ```bash
 pip install -e ".[server]"
 export OPENAI_API_KEY=sk-...        # + whichever other provider keys you use
-make serve                          # or: uvicorn router.server:app
+flux serve                          # or: make serve / python -m router serve
 ```
+
+`flux serve` prints the API and dashboard URLs on startup and keeps its usage
+database in `$XDG_DATA_HOME/flux` (override with `--data-dir`), so spend history
+survives a restart. `flux serve --help` lists the flags; each one maps to a
+`FLUX_*` environment variable.
 
 ```python
 from openai import OpenAI

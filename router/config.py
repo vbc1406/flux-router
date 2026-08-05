@@ -19,6 +19,9 @@ import json
 import os
 from dataclasses import dataclass
 
+from .paths import DATA_DB_FILENAME as _DATA_DB_FILENAME
+from .paths import default_data_dir
+
 # ══════════════════════════════════════════════════════════════════════════════
 # COMPLEXITY SCORING
 # ══════════════════════════════════════════════════════════════════════════════
@@ -882,12 +885,12 @@ CACHE_TRACKER_MAX_ENTRIES: int = 50_000
 # Nothing in the library reads this — only router/cli.py, which creates the
 # directory and points FLUX_ATTRIBUTION_DB at a file inside it. See the
 # library-vs-server split documented on ATTRIBUTION_DB_PATH below.
-DATA_DIR: str = os.environ.get("FLUX_DATA_DIR") or os.path.join(
-    os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "flux"
-)
+DATA_DIR: str = os.environ.get("FLUX_DATA_DIR") or default_data_dir()
 
 # Filename of the usage database inside DATA_DIR, used by `flux serve`.
-DATA_DB_FILENAME: str = "flux.db"
+# Re-exported from router.paths, which owns both so cli.py can resolve them
+# without importing this module too early — see the note in paths.py.
+DATA_DB_FILENAME: str = _DATA_DB_FILENAME
 
 # Path to the SQLite usage database. Defaults to ":memory:" — matching this
 # codebase's convention that new engine collaborators default to no disk I/O
@@ -898,11 +901,12 @@ DATA_DB_FILENAME: str = "flux.db"
 #
 # The *library* default stays ephemeral on purpose. The *server* is opinionated
 # the other way: `flux serve` (router/cli.py) sets FLUX_ATTRIBUTION_DB to
-# DATA_DIR/DATA_DB_FILENAME before importing router.server, so a self-hosted
-# instance persists across restarts without the operator configuring anything.
-# That ordering matters — every constant in this module is read from the
-# environment at import time, and router/server.py builds its Flux instance at
-# module scope, so setting the env var after importing the server has no effect.
+# DATA_DIR/DATA_DB_FILENAME, so a self-hosted instance persists across restarts
+# without the operator configuring anything. It then execs a fresh interpreter
+# (router/_serve.py) rather than importing the server in-process, because every
+# constant in this module is read from the environment at import time — and
+# `import router` has already loaded router.attribution, baking this value into
+# the SqliteUsageStore default argument, before any CLI code gets to run.
 ATTRIBUTION_DB_PATH: str = os.environ.get("FLUX_ATTRIBUTION_DB", ":memory:")
 
 # Prometheus label cardinality cap: distinct (tenant_id, model_id) label

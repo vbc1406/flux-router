@@ -52,7 +52,7 @@ run:
 	python -m router.demo
 
 serve:
-	uvicorn router.server:app --host $${FLUX_SERVER_HOST:-127.0.0.1} --port $${FLUX_SERVER_PORT:-8000}
+	python -m router serve
 
 evals:
 	python -m router.evals
