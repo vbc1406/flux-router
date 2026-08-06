@@ -232,6 +232,23 @@ single gate, and `router/tests/test_stats.py` asserts every path in the list
 above refuses a remote peer, serves a loopback one, and allows a remote read
 once a token is set.
 
+**Loopback means both the peer and the `Host` header.** The peer address alone
+answers "did this connection come from this box", which is not the same
+question as "did something on this box mean to send it". A page on
+`evil.example` that the operator visits can lower its DNS TTL, rebind
+`evil.example` to `127.0.0.1`, and `fetch("http://evil.example:8000/v1/stats/config")`
+from the operator's own browser. The peer address is loopback, so a peer-only
+check passes — and because the page's origin *is* that host and port, the
+responses come back same-origin and fully readable, with no CORS step to
+withhold. The `Host` header is the part of that request the attacker cannot
+forge: the browser puts their hostname in it. `server._is_local_host_header()`
+requires it to name this machine, which closes the rebinding path.
+
+If a same-host reverse proxy passes its own public hostname through
+(`Host: flux.internal`) and you have deliberately not set a token, name it in
+`FLUX_ALLOWED_HOSTS` (comma-separated). Do not put a name an attacker can
+resolve to `127.0.0.1` in that list — it restores the hole exactly.
+
 For the dashboard specifically there is also a **mount-time** check on the
 configured bind address, which refuses to mount at all rather than serving a
 page whose data calls will fail. That check alone is not sufficient — it reads
@@ -256,8 +273,9 @@ when the port is published to `127.0.0.1`. A token is required to use the
 dashboard under Docker.
 
 **A same-host reverse proxy still reaches it**, since its peer address is
-loopback. That is intentional: such a deployment has taken responsibility for
-its own edge, and should configure a token.
+loopback — provided the `Host` it forwards is a loopback name or is listed in
+`FLUX_ALLOWED_HOSTS`. That is intentional: such a deployment has taken
+responsibility for its own edge, and should configure a token.
 
 ---
 

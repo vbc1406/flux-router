@@ -45,9 +45,15 @@ command line you can also set in a systemd unit or a container.
 | `--db` | `FLUX_ATTRIBUTION_DB` | `<data-dir>/flux.db` |
 | `--no-dashboard` | `FLUX_DASHBOARD=0` | dashboard on |
 | `--workers` | `FLUX_SERVER_WORKERS` | `1` |
+| — | `FLUX_ALLOWED_HOSTS` | empty; loopback names only |
 
 A flag always wins over the environment variable; leaving a flag off keeps
 whatever you exported.
+
+`FLUX_ALLOWED_HOSTS` is a comma-separated list of extra `Host` header values
+the unauthenticated dashboard and stats endpoints will answer to — see
+[Who can see it](#who-can-see-it) below. You need it only for a same-host
+reverse proxy running without a token.
 
 ### Persistence
 
@@ -110,9 +116,16 @@ the truth when the bind came from the environment — start the server with
 `uvicorn router.server:app --host 0.0.0.0` and the configured value still says
 loopback.
 
+"Loopback" means the peer address *and* the `Host` header. A page you visit
+elsewhere can point its own hostname at `127.0.0.1` and make your browser
+fetch these endpoints for it — the connection is loopback, but the request was
+not meant for this machine. The `Host` header is what tells the two apart.
+
 A reverse proxy on the same host still reaches the dashboard, since its peer
-address is loopback. That deployment has taken responsibility for its own edge
-and should set a token.
+address is loopback. If it forwards its own hostname rather than a loopback
+one, list it in `FLUX_ALLOWED_HOSTS` (comma-separated). That deployment has
+taken responsibility for its own edge and should really set a token, which
+turns this whole gate off.
 
 ---
 

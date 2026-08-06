@@ -58,8 +58,8 @@ def _mock_call_model(monkeypatch):
 
 @pytest.fixture
 def client():
-    # Loopback peer — see the note in test_stats.py's stats_client fixture.
-    return TestClient(server.app, client=("127.0.0.1", 50000))
+    # Loopback peer and Host — see the note in test_stats.py's stats_client fixture.
+    return TestClient(server.app, client=("127.0.0.1", 50000), base_url="http://127.0.0.1:8000")
 
 
 def _body(model: str = "flux-auto", stream: bool = False) -> dict:
@@ -1176,6 +1176,46 @@ class TestDashboardMountGuard:
         """Too cautious costs a warning; the other way round exposes spend."""
         assert server._is_loopback("some-host.internal") is False
 
+    @pytest.mark.parametrize(
+        "header",
+        [
+            "localhost",
+            "localhost:8000",
+            "LocalHost:8000",
+            "127.0.0.1",
+            "127.0.0.1:8000",
+            "127.0.0.5:8000",
+            "[::1]",
+            "[::1]:8000",
+            "::1",
+        ],
+    )
+    def test_local_host_headers(self, header):
+        assert server._is_local_host_header(header) is True
+
+    @pytest.mark.parametrize(
+        "header",
+        [
+            None,
+            "",
+            "evil.example",
+            "evil.example:8000",
+            "192.168.1.10:8000",
+            "0.0.0.0:8000",
+            # "localhost.evil.example" must not pass on a prefix/suffix match.
+            "localhost.evil.example",
+            "evil.example.localhost",
+        ],
+    )
+    def test_non_local_host_headers(self, header):
+        assert server._is_local_host_header(header) is False
+
+    def test_allowed_hosts_are_honoured_with_and_without_a_port(self, monkeypatch):
+        monkeypatch.setattr(server, "SERVER_ALLOWED_HOSTS", frozenset({"flux.internal"}))
+        assert server._is_local_host_header("flux.internal") is True
+        assert server._is_local_host_header("flux.internal:8000") is True
+        assert server._is_local_host_header("other.internal") is False
+
     def test_refusal_is_not_fatal(self, client):
         """The proxy and its API keep serving when the dashboard is refused."""
         assert client.post("/v1/chat/completions", json=_body()).status_code == 200
@@ -1258,10 +1298,14 @@ class TestDashboardRemoteRequestGuard:
     request-time check the dashboard is served to the whole network."""
 
     @staticmethod
-    def _scope(peer: str | None) -> dict:
-        return {"type": "http", "client": (peer, 54321) if peer else None}
+    def _scope(peer: str | None, host: str = "127.0.0.1:8000") -> dict:
+        return {
+            "type": "http",
+            "client": (peer, 54321) if peer else None,
+            "headers": [(b"host", host.encode())] if host else [],
+        }
 
-    async def _call(self, peer: str | None):
+    async def _call(self, peer: str | None, host: str = "127.0.0.1:8000"):
         """Drive the wrapped app directly and capture what it sent."""
         sent = []
         inner_ran = []
@@ -1277,7 +1321,7 @@ class TestDashboardRemoteRequestGuard:
         async def receive():
             return {"type": "http.request", "body": b"", "more_body": False}
 
-        await server._LoopbackOnlyDashboard(inner)(self._scope(peer), receive, send)
+        await server._LoopbackOnlyDashboard(inner)(self._scope(peer, host), receive, send)
         status = next(m["status"] for m in sent if m["type"] == "http.response.start")
         return status, bool(inner_ran)
 
@@ -1303,6 +1347,30 @@ class TestDashboardRemoteRequestGuard:
         is the operator's intent rather than an accident."""
         monkeypatch.setattr(server, "SERVER_REQUIRE_AUTH", True)
         status, inner_ran = asyncio.run(self._call("192.168.1.8"))
+        assert status == 200
+        assert inner_ran is True
+
+    @pytest.mark.parametrize(
+        "host", ["evil.example", "evil.example:8000", "attacker.test:80"]
+    )
+    def test_a_rebound_hostname_is_refused_despite_a_loopback_peer(self, host):
+        """DNS rebinding: an attacker page the operator visits re-points its
+        own hostname at 127.0.0.1, so the peer address is loopback and the
+        request is same-origin to that page. The Host header still names the
+        attacker, which is the only part of the request they cannot forge."""
+        status, inner_ran = asyncio.run(self._call("127.0.0.1", host=host))
+        assert status == 403
+        assert inner_ran is False
+
+    def test_a_missing_host_header_is_refused(self):
+        status, _ = asyncio.run(self._call("127.0.0.1", host=""))
+        assert status == 403
+
+    def test_an_operator_named_host_is_served(self, monkeypatch):
+        """FLUX_ALLOWED_HOSTS is the escape hatch for a same-host reverse
+        proxy that passes its own hostname through."""
+        monkeypatch.setattr(server, "SERVER_ALLOWED_HOSTS", frozenset({"flux.internal"}))
+        status, inner_ran = asyncio.run(self._call("127.0.0.1", host="flux.internal"))
         assert status == 200
         assert inner_ran is True
 

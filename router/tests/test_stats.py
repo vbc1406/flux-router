@@ -77,10 +77,11 @@ def stats_client(monkeypatch, store):
     and tenant scoping all run for real.
     """
     monkeypatch.setattr(server._flux._engine, "_attribution", CostAttribution(store=store))
-    # Present a loopback peer: the spend endpoints refuse a non-loopback
-    # caller when no auth is configured, and TestClient's default peer host
-    # is the literal string "testclient", which is not a parseable address.
-    return TestClient(server.app, client=("127.0.0.1", 50000))
+    # Present a loopback peer AND a loopback Host: the spend endpoints refuse
+    # a caller that fails either when no auth is configured. TestClient's
+    # defaults are the literal strings "testclient" and "testserver", neither
+    # of which is a local address.
+    return TestClient(server.app, client=("127.0.0.1", 50000), base_url="http://127.0.0.1:8000")
 
 
 class TestSummaryAggregate:
@@ -384,8 +385,12 @@ class TestSpendDataIsLoopbackOnlyWithoutAuth:
     ]
 
     @staticmethod
-    def _client_from(peer: str | None):
-        return TestClient(server.app, client=(peer, 50000) if peer else None)
+    def _client_from(peer: str | None, host: str = "127.0.0.1:8000"):
+        return TestClient(
+            server.app,
+            client=(peer, 50000) if peer else None,
+            base_url=f"http://{host}",
+        )
 
     @pytest.mark.parametrize("path", SPEND_PATHS)
     def test_remote_peer_is_refused(self, path, monkeypatch, store):
@@ -421,6 +426,26 @@ class TestSpendDataIsLoopbackOnlyWithoutAuth:
         client = self._client_from("192.168.1.8")
         assert client.get("/health").status_code == 200
         assert client.get("/v1/models").status_code == 200
+
+    @pytest.mark.parametrize("path", SPEND_PATHS)
+    def test_a_rebound_hostname_is_refused_despite_a_loopback_peer(
+        self, path, monkeypatch, store
+    ):
+        """The peer check alone passes for a DNS-rebinding page driving the
+        operator's own browser, and the responses are same-origin to that
+        page, so there is no CORS step to save us. The Host header names the
+        attacker and is what actually closes this."""
+        monkeypatch.setattr(server._flux._engine, "_attribution", CostAttribution(store=store))
+        resp = self._client_from("127.0.0.1", host="evil.example:8000").get(path)
+        assert resp.status_code == 403, f"{path} leaked to a rebound hostname"
+
+    @pytest.mark.parametrize("path", SPEND_PATHS)
+    def test_an_operator_named_host_is_served(self, path, monkeypatch, store):
+        monkeypatch.setattr(server._flux._engine, "_attribution", CostAttribution(store=store))
+        monkeypatch.setattr(server, "SERVER_ALLOWED_HOSTS", frozenset({"flux.internal"}))
+        assert (
+            self._client_from("127.0.0.1", host="flux.internal").get(path).status_code == 200
+        )
 
     def test_missing_peer_is_refused(self, monkeypatch, store):
         monkeypatch.setattr(server._flux._engine, "_attribution", CostAttribution(store=store))

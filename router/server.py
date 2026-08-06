@@ -56,6 +56,7 @@ from .config import (
     RUN_MAX_TOKENS,
     RUN_STORE_BACKEND,
     RUN_WARN_THRESHOLD,
+    SERVER_ALLOWED_HOSTS,
     SERVER_HOST,
     SERVER_MAX_BODY_BYTES,
     SERVER_PORT,
@@ -479,15 +480,21 @@ def _refuse_remote_spend_data(request: Request) -> None:
     # No peer address means it cannot be shown to be local — refuse rather
     # than fall through to _is_loopback(""), which is True for a bind address.
     peer = client.host if client is not None and client.host else None
-    if peer is None or not _is_loopback(peer):
+    host_header = request.headers.get("host")
+    # Both must hold: the connection came from this box AND it was addressed to
+    # this box. The second is what a rebound DNS name fails — see
+    # _is_local_host_header().
+    if peer is None or not _is_loopback(peer) or not _is_local_host_header(host_header):
         log.warning(
             "flux_remote_spend_data_refused",
             peer=peer,
+            host_header=host_header,
             path=request.url.path,
             msg=(
-                "Refused a non-loopback request for spend/configuration data. The server "
+                "Refused a non-local request for spend/configuration data. The server "
                 "is reachable off-box with no FLUX_SERVER_TOKEN set. Set a token to allow "
-                "remote reads."
+                "remote reads, or FLUX_ALLOWED_HOSTS if a same-host proxy passes its own "
+                "hostname through."
             ),
         )
         raise HTTPException(
@@ -1278,6 +1285,43 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
+def _is_local_host_header(host_header: str | None) -> bool:
+    """Whether a request's Host header names this machine.
+
+    The peer-address check answers "did this connection come from this box",
+    which is not the same question as "did something on this box mean to send
+    it". A page on evil.example the operator visits can lower its TTL, rebind
+    evil.example to 127.0.0.1, and fetch http://evil.example:8000/v1/stats/*
+    from the operator's own browser: the peer address is loopback, the guard
+    passes, and because the page's origin IS that host:port the responses come
+    back same-origin and fully readable. No CORS header is involved, so
+    withholding one prevents nothing.
+
+    The Host header is what separates the two cases, because the browser puts
+    the attacker's hostname in it and cannot be talked out of that. Requiring
+    it to be a loopback name closes the rebinding path; FLUX_ALLOWED_HOSTS
+    reopens exactly the names an operator names.
+    """
+    if not host_header:
+        # HTTP/1.1 requires Host. Absent means we cannot tell, so refuse.
+        return False
+    host = host_header.strip().lower()
+    # Strip the port. IPv6 literals are bracketed ("[::1]:8000"), so split
+    # after the bracket; otherwise a bare "::1" would split on its own colons.
+    if host.startswith("["):
+        host = host.partition("]")[0].lstrip("[")
+    elif host.count(":") == 1:
+        host = host.partition(":")[0]
+    if host in SERVER_ALLOWED_HOSTS or host_header.strip().lower() in SERVER_ALLOWED_HOSTS:
+        return True
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 class _LoopbackOnlyDashboard:
     """Wraps the dashboard's StaticFiles app in a request-time origin check.
 
@@ -1312,12 +1356,24 @@ class _LoopbackOnlyDashboard:
             # for a peer, so the absent case is refused here rather than
             # falling through to it.
             peer = client[0] if client else None
-            if peer is None or not _is_loopback(peer):
+            # The Host header is checked too: a loopback peer is also what a
+            # DNS-rebinding page gets when it drives the operator's own
+            # browser. See _is_local_host_header().
+            host_header = next(
+                (
+                    v.decode("latin-1")
+                    for k, v in scope.get("headers", ())
+                    if k == b"host"
+                ),
+                None,
+            )
+            if peer is None or not _is_loopback(peer) or not _is_local_host_header(host_header):
                 log.warning(
                     "flux_dashboard_remote_request_refused",
                     peer=peer,
+                    host_header=host_header,
                     msg=(
-                        "Refused a non-loopback request for the dashboard. The server is "
+                        "Refused a non-local request for the dashboard. The server is "
                         "reachable off-box with no FLUX_SERVER_TOKEN set — serving it would "
                         "expose every tenant's spend and this deployment's configuration."
                     ),

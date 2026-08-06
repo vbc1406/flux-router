@@ -74,3 +74,8 @@ _internal_reviews/
 # macOS metadata
 .DS_Store
 **/.DS_Store
+
+# Local databases (flux serve writes flux.db; tests leave *.db behind)
+*.db
+*.db-shm
+*.db-wal

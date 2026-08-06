@@ -616,6 +616,27 @@ DASHBOARD_ENABLED: bool = os.environ.get("FLUX_DASHBOARD", "1").strip().lower() 
     "off",
 }
 
+# Extra Host header values the unauthenticated spend surface (/dashboard and
+# the /v1/stats read endpoints) will answer to, comma-separated.
+#
+# The loopback guards check the peer address, which stops a caller on the
+# network. It does NOT stop DNS rebinding: an attacker page the operator
+# visits can re-point its own hostname at 127.0.0.1 and have the operator's
+# BROWSER make the request, whose peer address is loopback and therefore
+# allowed. The Host header is what distinguishes the two — the browser sends
+# the attacker's hostname there — so the guards require it to name this
+# machine as well.
+#
+# The cost is that a same-host reverse proxy passing its own public hostname
+# through (Host: flux.internal) is refused unless named here. That deployment
+# should really set FLUX_SERVER_TOKEN, which disables these guards entirely;
+# this exists for the case where it deliberately hasn't.
+# What breaks if misused: adding a wildcard or a hostname an attacker can
+# resolve to 127.0.0.1 puts the rebinding hole straight back.
+SERVER_ALLOWED_HOSTS: frozenset[str] = frozenset(
+    h.strip().lower() for h in os.environ.get("FLUX_ALLOWED_HOSTS", "").split(",") if h.strip()
+)
+
 # Whether the proxy requires `Authorization: Bearer <FLUX_SERVER_TOKEN>` on every
 # request (except /health). Derived from whether the token env var is set at all —
 # there is no way to run with SERVER_REQUIRE_AUTH=True and no token, since that
