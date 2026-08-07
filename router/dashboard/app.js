@@ -228,8 +228,20 @@
       + " L" + x(series.length - 1).toFixed(2) + " " + (PAD.top + plotH)
       + " L" + x(0).toFixed(2) + " " + (PAD.top + plotH) + " Z";
 
-    svg.appendChild(node("path", { d: area }, "series-area"));
-    svg.appendChild(node("path", { d: path }, "series-line"));
+    // A one-bucket series has no segment to stroke: "M x y" paints nothing and
+    // the area collapses to zero width, so the panel reads as broken on any
+    // instance with less than one bucket of history. Mark the single value
+    // instead — a stem down to the axis plus a dot, which is what a lone
+    // reading should look like.
+    if (series.length === 1) {
+      svg.appendChild(node("line", {
+        x1: x(0), y1: y(series[0].cost_usd), x2: x(0), y2: PAD.top + plotH
+      }, "series-stem"));
+      svg.appendChild(node("circle", { cx: x(0), cy: y(series[0].cost_usd), r: 4.5 }, "dot"));
+    } else {
+      svg.appendChild(node("path", { d: area }, "series-area"));
+      svg.appendChild(node("path", { d: path }, "series-line"));
+    }
     svg.appendChild(node("line", {
       x1: PAD.left, y1: PAD.top + plotH, x2: W - PAD.right, y2: PAD.top + plotH
     }, "axis-line"));
@@ -314,10 +326,12 @@
     });
 
     host.appendChild(svg);
-    el("chart-sub").textContent =
-      series.length + " buckets of " + (bucketWidth >= 86400
-        ? (bucketWidth / 86400) + " day"
-        : bucketWidth >= 3600 ? (bucketWidth / 3600) + " hour" : (bucketWidth / 60) + " min");
+    var bucketName = bucketWidth >= 86400
+      ? (bucketWidth / 86400) + " day"
+      : bucketWidth >= 3600 ? (bucketWidth / 3600) + " hour" : (bucketWidth / 60) + " min";
+    el("chart-sub").textContent = series.length === 1
+      ? "1 bucket of " + bucketName + " — not enough history to trend yet"
+      : series.length + " buckets of " + bucketName;
   }
 
   // ── Tables ────────────────────────────────────────────────────────────────
@@ -488,7 +502,12 @@
 
     el("foot-db").textContent = c.server.usage_db_persistent
       ? "Usage database: " + c.server.usage_db
-      : "Usage is not being persisted — set FLUX_DATA_DIR or run `flux serve` to keep history across restarts.";
+      // FLUX_DATA_DIR alone does NOT enable persistence: nothing in the library
+      // reads it, and only router/cli.py translates it into FLUX_ATTRIBUTION_DB
+      // (see config.py::DATA_DIR). Naming it here sent operators to a variable
+      // they could set correctly and still see this same warning.
+      : "Usage is not being persisted — run `flux serve`, or set FLUX_ATTRIBUTION_DB "
+        + "to a file path, to keep history across restarts.";
   }
 
   // ── Load ──────────────────────────────────────────────────────────────────

@@ -183,6 +183,7 @@ main { padding: 20px 24px 40px; display: flex; flex-direction: column; gap: 18px
 .chart .series-area { fill: var(--series-soft); }
 /* 2px surface ring so a dot stays legible where the line passes under it. */
 .chart .dot { fill: var(--series); stroke: var(--surface); stroke-width: 2; }
+.chart .series-stem { stroke: var(--series); stroke-width: 2; opacity: 0.35; }
 .chart .hit { fill: transparent; cursor: crosshair; }
 .chart .crosshair { stroke: var(--axis); stroke-width: 1; stroke-dasharray: 3 3; }
 .chart .empty { fill: var(--ink-muted); font-size: 13px; }
