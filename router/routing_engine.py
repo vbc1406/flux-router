@@ -1042,10 +1042,13 @@ class RoutingEngine:
                 self._conversation_store.update(
                     request.conversation_id, decision.chosen_model.model_id
                 )
-        # Periodically purge expired conversation entries to prevent memory growth.
+        # Periodically purge expired per-user state to prevent memory growth.
+        # Both stores are keyed by client-supplied values (conversation_id and
+        # user_id), so neither can be left to grow with unique keys.
         self._route_count += 1
         if self._route_count % 500 == 0:
             self._conversation_store.expire_old()
+            self._expire_user_free_rpm()
 
     async def _proxy_execute(
         self,
@@ -1231,8 +1234,20 @@ class RoutingEngine:
         return decision
 
     def _get_user_free_rpm(self, user_id: str) -> int:
+        """Free-tier requests this user made in the last 60 seconds.
+
+        Deliberately a .get() and not `self._user_free_rpm[user_id]`: this is
+        called on EVERY route (see Step 7), and a defaultdict subscript would
+        create a permanent entry for every user_id ever seen — including the
+        large majority who never touch the free tier at all. user_id comes
+        straight from the client (`user` in the proxy body), so a caller
+        rotating it per request could grow this dict without bound. Only
+        _inc_user_free_rpm() creates entries, and only for free-tier traffic.
+        """
+        window = self._user_free_rpm.get(user_id)
+        if not window:
+            return 0
         now = time.monotonic()
-        window = self._user_free_rpm[user_id]
         while window and now - window[0] >= 60.0:
             window.popleft()
         return len(window)
@@ -1240,6 +1255,23 @@ class RoutingEngine:
     def _inc_user_free_rpm(self, user_id: str, tier: str) -> None:
         if tier == "free":
             self._user_free_rpm[user_id].append(time.monotonic())
+
+    def _expire_user_free_rpm(self) -> None:
+        """Drop users whose 60-second window has fully drained.
+
+        The deques self-trim on read, but a user who stops sending traffic is
+        never read again, so without this the key and its empty deque live for
+        the process's lifetime. Mirrors ConversationStore.expire_old(); called
+        from the same periodic housekeeping block.
+        """
+        now = time.monotonic()
+        drained = [
+            user_id
+            for user_id, window in self._user_free_rpm.items()
+            if not window or now - window[-1] >= 60.0
+        ]
+        for user_id in drained:
+            del self._user_free_rpm[user_id]
 
 
 # ── Module-level pure helpers (no self, easy to unit-test) ──────────────────

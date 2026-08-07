@@ -67,11 +67,38 @@ When disabled (default):
 
 When enabled (`FLUX_ENABLE_RESPONSE_CACHE=true`):
 - Identical normalized prompts may return previously generated responses
-- The current cache implementation does NOT segment by user, plan, or sensitivity level
-- This means **enabling the cache in a multi-tenant deployment can cause cross-tenant response bleed**
-- Tenant-scoped caching is planned for a future release
+- Cache entries **are** scoped by tenant, user, plan, and sensitivity level, so a
+  cache hit cannot cross any of those boundaries. The scope key is built in
+  `router/classifier.py::_cache_scope_key()` and mixed into the fingerprint
+- Plan is part of the scope deliberately: a response bought on one budget must
+  not be served "for free" under another
+- Sensitivity is part of the scope deliberately: a confidential answer must
+  never surface from a public-labelled lookup, or vice versa
 
-Recommendation: keep the cache disabled until tenant-scoped caching ships.
+One caveat, and it is the only way to lose that isolation: the scoping is
+applied on the **classifier path**. Any code calling `cache.fingerprint()`,
+`ResponseCache.get()`, or `ResponseCache.set()` directly — bypassing the
+classifier — gets no isolation unless it passes its own `scope_key`. If you
+have written a custom integration against `router/cache.py`, check that it
+does.
+
+Verify it yourself:
+
+```python
+from router.cache import fingerprint
+from router.classifier import _cache_scope_key
+from router.schemas import RoutingRequest
+
+a = RoutingRequest(raw_prompt="same prompt", user_id="alice", tenant_id="acme")
+b = RoutingRequest(raw_prompt="same prompt", user_id="bob", tenant_id="evilcorp")
+fa = fingerprint("same prompt", None, [], None, scope_key=_cache_scope_key(a, "public"))
+fb = fingerprint("same prompt", None, [], None, scope_key=_cache_scope_key(b, "public"))
+assert fa != fb  # identical prompts, different tenants → different cache keys
+```
+
+Recommendation: the cache is safe to enable in a multi-tenant deployment. It
+stays off by default because response caching changes behaviour (repeat prompts
+stop hitting the model), not because of an isolation gap.
 
 ### Adaptive Learning Uses Metadata Only
 

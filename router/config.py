@@ -296,12 +296,23 @@ MAX_TOKENS_REQUESTED_CEILING: int = 128_000
 # layer should emit prompt content; gate any such call with `if LOG_PROMPTS:`.
 LOG_PROMPTS: bool = os.getenv("FLUX_LOG_PROMPTS", "false").lower() == "true"
 
-# Response cache disabled by default for privacy reasons.
-# When enabled, identical prompts return cached responses — but the cache
-# does NOT segment by user_id, plan, required_capabilities, or sensitivity
-# level. Enabling shared cache in multi-tenant deployments can cause
-# cross-tenant response bleed. See SECURITY_ARCHITECTURE.md.
-# Set FLUX_ENABLE_RESPONSE_CACHE=true to opt in.
+# Response cache disabled by default: caching changes behaviour (repeat prompts
+# stop reaching the model), so it is opt-in.
+#
+# When enabled, identical prompts return cached responses. Entries ARE scoped by
+# tenant_id, user_id, plan, and sensitivity level — see
+# classifier.py::_cache_scope_key(), which is mixed into the fingerprint — so a
+# hit cannot cross a tenant, user, budget, or sensitivity boundary. (This
+# comment previously said the opposite; scoping shipped, the note went stale.)
+#
+# Still NOT part of the scope key: required_capabilities. Two requests with
+# byte-identical prompts but different capability requirements share a cache
+# entry, so a cached answer produced by a model without the requested
+# capability can be returned. In practice a capability-specific request
+# (e.g. vision) carries different prompt content and so fingerprints
+# differently, but do not rely on that if you cache aggressively.
+#
+# See SECURITY_ARCHITECTURE.md. Set FLUX_ENABLE_RESPONSE_CACHE=true to opt in.
 ENABLE_RESPONSE_CACHE: bool = (
     os.getenv("FLUX_ENABLE_RESPONSE_CACHE", "false").lower() == "true"
 )

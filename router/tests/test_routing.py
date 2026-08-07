@@ -1241,3 +1241,78 @@ class TestPickBestCostTiebreak:
         better = self._model("better", quality=0.95, rate=0.02)
         cheaper = self._model("cheaper", quality=0.8, rate=0.001)
         assert _pick_best([better, cheaper], self._analysis()).model_id == "better"
+
+
+# ── Free-tier RPM counter memory bounds ──────────────────────────────────────
+
+
+class TestUserFreeRpmMemoryBounds:
+    """
+    A pen-test probe found _user_free_rpm grew without bound: it is keyed by
+    user_id, which the OpenAI-compatible proxy takes straight from the client's
+    `user` field, and _get_user_free_rpm() subscripted the defaultdict on every
+    route — so every user_id ever seen left a permanent entry (~2KB each,
+    ~1.7GB/day at the default rate limit). These pin the two fixes.
+    """
+
+    def test_reading_the_counter_does_not_create_an_entry(self):
+        engine = _engine()
+        assert engine._get_user_free_rpm("never-seen-before") == 0
+        assert "never-seen-before" not in engine._user_free_rpm
+
+    def test_routing_does_not_leak_an_entry_per_unique_user(self):
+        engine = _engine()
+        for i in range(200):
+            rr(engine.route(_req("hi", user_id=f"rotating-user-{i}")))
+        # Only free-tier traffic may create entries, never the mere lookup.
+        assert len(engine._user_free_rpm) < 200
+
+    def test_free_tier_traffic_is_still_counted(self):
+        engine = _engine()
+        engine._inc_user_free_rpm("heavy", "free")
+        engine._inc_user_free_rpm("heavy", "free")
+        assert engine._get_user_free_rpm("heavy") == 2
+
+    def test_paid_tier_traffic_creates_no_entry(self):
+        engine = _engine()
+        engine._inc_user_free_rpm("payer", "premium")
+        assert "payer" not in engine._user_free_rpm
+
+    def test_expiry_drops_drained_users(self, monkeypatch):
+        import router.routing_engine as re_mod
+
+        engine = _engine()
+        now = [1000.0]
+        monkeypatch.setattr(re_mod.time, "monotonic", lambda: now[0])
+        for i in range(50):
+            engine._inc_user_free_rpm(f"user-{i}", "free")
+        assert len(engine._user_free_rpm) == 50
+        now[0] += 61.0  # every window has fully drained
+        engine._expire_user_free_rpm()
+        assert engine._user_free_rpm == {}
+
+    def test_expiry_keeps_users_still_inside_the_window(self, monkeypatch):
+        import router.routing_engine as re_mod
+
+        engine = _engine()
+        now = [1000.0]
+        monkeypatch.setattr(re_mod.time, "monotonic", lambda: now[0])
+        engine._inc_user_free_rpm("stale", "free")
+        now[0] += 61.0
+        engine._inc_user_free_rpm("active", "free")
+        engine._expire_user_free_rpm()
+        assert "active" in engine._user_free_rpm
+        assert "stale" not in engine._user_free_rpm
+
+    def test_housekeeping_sweep_runs_on_the_route_counter(self, monkeypatch):
+        import router.routing_engine as re_mod
+
+        engine = _engine()
+        now = [1000.0]
+        monkeypatch.setattr(re_mod.time, "monotonic", lambda: now[0])
+        engine._inc_user_free_rpm("ancient", "free")
+        now[0] += 3600.0
+        # _post_route sweeps every 500 calls; step the counter to the boundary.
+        engine._route_count = 499
+        rr(engine.route(_req("hi", user_id="fresh")))
+        assert "ancient" not in engine._user_free_rpm
