@@ -148,6 +148,7 @@ callers only. A remote read of any of them (including a Prometheus scrape of
 | `GET /v1/stats/timeseries` | `data[]` of `bucket_start`, `requests`, `cost_usd`, `estimated_savings_usd`, `avg_latency_ms`. Bucket width defaults per window; `?bucket_seconds=` overrides and is clamped to 60–86400 |
 | `GET /v1/stats/models` | `data[]` of `model_id`, `requests`, `cost_usd`, `avg_latency_ms`, `estimated_savings_usd`, `input_tokens`, `output_tokens`, `share_pct` |
 | `GET /v1/stats/tasks` | `data[]` of `task_type`, `requests`, `cost_usd`, `avg_complexity_score`, `avg_latency_ms`, `share_pct` |
+| `GET /v1/stats/tenants` | `data[]` of `tenant_id`, `requests`, `cost_usd`, `estimated_savings_usd`, `avg_latency_ms`, `runs`, `distinct_models`, `share_pct`. Untagged traffic groups under a null `tenant_id` so rows always sum to the headline total |
 | `GET /v1/stats/registry` | Every routable model with pricing, context window, capabilities, and current load |
 | `GET /v1/stats/config` | `server`, `providers`, `budgets`, `run_limits`, `rate_limit` |
 

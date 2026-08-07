@@ -550,6 +550,12 @@ async def get_usage(
                 "usage_source": r.usage_source,
                 "input_tokens": r.input_tokens,
                 "output_tokens": r.output_tokens,
+                # Routing telemetry. Persisted since the dashboard work but
+                # never projected here, so the console's activity feed had no
+                # latency to show. Additive: older rows read back as null.
+                "latency_ms": r.latency_ms,
+                "cache_hit": r.cache_hit,
+                "fallback_used": r.fallback_used,
             }
             for r in records
         ],
@@ -672,6 +678,26 @@ async def stats_tasks(
     return {
         "window": window,
         "data": _flux._engine._attribution.stats_by_task_type(
+            since=_stats_since(window), tenant_id=tenant_id
+        ),
+    }
+
+
+@app.get("/v1/stats/tenants")
+async def stats_tenants(
+    request: Request, authorization: str | None = Header(default=None), window: str = "24h"
+) -> dict[str, Any]:
+    """Per-tenant spend, savings, and traffic for the selected window.
+
+    Scoped exactly like every other stats endpoint: in FLUX_SERVER_TOKENS mode
+    _stats_scope() returns the bearer token's bound tenant and this collapses
+    to that tenant's single row, so it can't be used to enumerate other
+    tenants' spend.
+    """
+    tenant_id = _stats_scope(request, authorization)
+    return {
+        "window": window,
+        "data": _flux._engine._attribution.stats_by_tenant(
             since=_stats_since(window), tenant_id=tenant_id
         ),
     }

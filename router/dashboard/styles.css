@@ -1,64 +1,95 @@
 /*
  * Flux router console.
  *
- * Colour roles come from a validated palette: the single series hue and the
- * success hue clear the lightness band, chroma floor, CVD separation,
- * normal-vision floor, and 3:1 contrast against both the light (#fcfcfb) and
- * dark (#1a1a19) chart surfaces. Dark mode is a selected set of steps for the
- * dark surface, not an automatic inversion of the light one.
+ * Palette is the flux-llm.com brand system: indigo canvas (--bg #2C3CE3,
+ * --panel #25349E, --line #4650DD), pale-indigo inks (#C7CCFA / #8790E0),
+ * and the brand green #7CF7C4 for the savings figure. Dark mode deepens the
+ * brand indigo to #10163F so dense tables stay readable at length; it is a
+ * selected set of steps for that surface, not an inversion of the light one.
  *
- * Text never wears the series colour — values and labels stay in ink tokens
- * and a coloured mark beside them carries identity.
+ * Contrast is computed, not eyeballed:
+ *   dark  — series #B9C2FF 10.1:1, savings #7CF7C4 13.2:1, muted #8790E0
+ *           4.92:1, all against their own surface.
+ *   light — series #2C3CE3 7.34:1 on white. The brand green is 1.32:1 on
+ *           white and therefore UNUSABLE as light-mode ink; --good steps down
+ *           the same hue to #0B7F59 (5.01:1) so the savings number stays
+ *           legible. Do not "restore" #7CF7C4 here.
+ *
+ * The chart is a single series, so it carries no legend and no categorical
+ * ramp — one hue plus a status hue is the whole data palette. Text never
+ * wears the series colour; values and labels stay in ink tokens.
+ *
+ * Type: the brand faces (Bricolage Grotesque / Inter / IBM Plex Mono) are
+ * Google-hosted, and this page makes NO external requests by design — see the
+ * note in index.html. The stacks below reach for those faces if they happen
+ * to be installed locally and otherwise fall back to the system UI font.
  */
 
 :root {
   color-scheme: light;
-  --surface: #fcfcfb;
-  --plane: #f9f9f7;
-  --ink: #0b0b0b;
-  --ink-2: #52514e;
-  --ink-muted: #898781;
-  --grid: #e1e0d9;
-  --axis: #c3c2b7;
-  --border: rgba(11, 11, 11, 0.10);
-  --series: #2a78d6;
-  --series-soft: rgba(42, 120, 214, 0.14);
-  --good: #006300;
-  --warn: #fab219;
-  --crit: #d03b3b;
-  --radius: 10px;
+  --surface: #ffffff;
+  --plane: #edefff;
+  --ink: #141a4d;
+  --ink-2: #3f4a91;
+  --ink-muted: #6f78bb;
+  --grid: #e2e5ff;
+  --axis: #c3caf6;
+  --border: rgba(44, 60, 227, 0.16);
+  --series: #2c3ce3;
+  --series-soft: rgba(44, 60, 227, 0.12);
+  --good: #0b7f59;
+  --warn: #9a6100;
+  --crit: #c0392b;
+  --brand: #2c3ce3;
+  --on-brand: #ffffff;
+  --chip: rgba(44, 60, 227, 0.09);
+  --radius: 16px;
+  --radius-sm: 8px;
+  --font-display: "Bricolage Grotesque", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:where(:not([data-theme="light"])) {
     color-scheme: dark;
-    --surface: #1a1a19;
-    --plane: #0d0d0d;
+    --surface: #1a2260;
+    --plane: #10163f;
     --ink: #ffffff;
-    --ink-2: #c3c2b7;
-    --ink-muted: #898781;
-    --grid: #2c2c2a;
-    --axis: #383835;
-    --border: rgba(255, 255, 255, 0.10);
-    --series: #3987e5;
-    --series-soft: rgba(57, 135, 229, 0.20);
-    --good: #0ca30c;
+    --ink-2: #c7ccfa;
+    --ink-muted: #8790e0;
+    --grid: #2b3676;
+    --axis: #3d4a94;
+    --border: rgba(199, 204, 250, 0.16);
+    --series: #b9c2ff;
+    --series-soft: rgba(185, 194, 255, 0.16);
+    --good: #7cf7c4;
+    --warn: #ffce6a;
+    --crit: #ff8f8f;
+    --brand: #3648ee;
+    --on-brand: #ffffff;
+    --chip: rgba(199, 204, 250, 0.12);
   }
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --surface: #1a1a19;
-  --plane: #0d0d0d;
+  --surface: #1a2260;
+  --plane: #10163f;
   --ink: #ffffff;
-  --ink-2: #c3c2b7;
-  --ink-muted: #898781;
-  --grid: #2c2c2a;
-  --axis: #383835;
-  --border: rgba(255, 255, 255, 0.10);
-  --series: #3987e5;
-  --series-soft: rgba(57, 135, 229, 0.20);
-  --good: #0ca30c;
+  --ink-2: #c7ccfa;
+  --ink-muted: #8790e0;
+  --grid: #2b3676;
+  --axis: #3d4a94;
+  --border: rgba(199, 204, 250, 0.16);
+  --series: #b9c2ff;
+  --series-soft: rgba(185, 194, 255, 0.16);
+  --good: #7cf7c4;
+  --warn: #ffce6a;
+  --crit: #ff8f8f;
+  --brand: #3648ee;
+  --on-brand: #ffffff;
+  --chip: rgba(199, 204, 250, 0.12);
 }
 
 * { box-sizing: border-box; }
@@ -67,9 +98,11 @@ body {
   margin: 0;
   background: var(--plane);
   color: var(--ink);
-  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 15px/1.5 var(--font-body);
   -webkit-font-smoothing: antialiased;
 }
+
+h1, h2, .tile-value { font-family: var(--font-display); }
 
 /* ── Top bar ─────────────────────────────────────────────────────────────── */
 
@@ -87,11 +120,11 @@ body {
 .brand { display: flex; align-items: center; gap: 12px; }
 
 .mark {
-  width: 30px; height: 30px; border-radius: 8px; flex: none;
-  background: linear-gradient(135deg, var(--series), var(--good));
+  width: 30px; height: 30px; border-radius: 9px; flex: none;
+  background: linear-gradient(135deg, var(--brand), var(--good));
 }
 
-.brand h1 { margin: 0; font-size: 17px; letter-spacing: -0.01em; }
+.brand h1 { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -0.015em; }
 .tagline { margin: 1px 0 0; font-size: 12.5px; color: var(--ink-muted); }
 
 .controls { display: flex; align-items: center; gap: 10px; }
@@ -104,13 +137,24 @@ select, .btn {
   color: var(--ink);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 6px 10px;
+  border-radius: 9999px;
+  padding: 6px 13px;
   cursor: pointer;
 }
 
-select:hover, .btn:hover { border-color: var(--axis); }
-.btn-icon { width: 34px; text-align: center; }
+select { border-radius: var(--radius-sm); }
+select:hover, .btn:hover { border-color: var(--brand); }
+.btn:focus-visible, select:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.btn-icon { width: 34px; padding: 6px 0; text-align: center; }
+
+/* Live/paused toggle — the dot carries state alongside the label, never colour
+   alone (the word "Live"/"Paused" changes too). */
+.btn-live { display: inline-flex; align-items: center; gap: 7px; }
+.btn-live .dot-live {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--good);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 22%, transparent);
+}
+.btn-live[aria-pressed="false"] .dot-live { background: var(--ink-muted); box-shadow: none; }
 
 /* ── Banner (errors, auth prompt) ────────────────────────────────────────── */
 
@@ -167,10 +211,55 @@ main { padding: 20px 24px 40px; display: flex; flex-direction: column; gap: 18px
 }
 
 .panel-head { padding: 15px 18px 12px; }
-.panel-head h2 { margin: 0; font-size: 14.5px; font-weight: 600; }
+.panel-head h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
 .panel-sub { margin: 3px 0 0; font-size: 12.5px; color: var(--ink-muted); }
 
 .two-col { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 18px; }
+
+/* ── Collapsible reference panels ────────────────────────────────────────── */
+/* The registry is 38 rows and the config is static env echo: both are
+   reference, not live operational data, so they no longer compete with the
+   numbers an operator is actually watching. Closed by default; native
+   <details> keeps them keyboard-accessible and findable via in-page search
+   in browsers that expand on find. */
+
+.panel-fold > summary {
+  padding: 15px 18px;
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.panel-fold > summary::-webkit-details-marker { display: none; }
+.panel-fold > summary:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.panel-fold > summary h2 { margin: 0; font-size: 15px; font-weight: 600; font-family: var(--font-display); }
+.panel-fold > summary .panel-sub { margin: 0; }
+
+.panel-fold > summary::before {
+  content: "";
+  width: 7px; height: 7px; flex: none;
+  border-right: 1.5px solid var(--ink-muted);
+  border-bottom: 1.5px solid var(--ink-muted);
+  transform: rotate(-45deg) translate(1px, -1px);
+  transition: transform 120ms ease;
+}
+
+.panel-fold[open] > summary::before { transform: rotate(45deg) translate(-1px, -1px); }
+.panel-fold[open] > summary { border-bottom: 1px solid var(--border); }
+
+/* ── Activity feed ───────────────────────────────────────────────────────── */
+
+.feed-wrap { max-height: 340px; overflow-y: auto; }
+.feed td.when { color: var(--ink-muted); font-variant-numeric: tabular-nums; font-size: 12.5px; }
+.feed td.model { font-family: var(--font-mono); font-size: 12.5px; }
+.feed td.run { font-family: var(--font-mono); font-size: 12px; color: var(--ink-muted); }
+
+.tag {
+  display: inline-block; padding: 1px 8px; border-radius: 9999px;
+  font-size: 11.5px; background: var(--chip); color: var(--ink-2);
+}
 
 /* ── Chart ───────────────────────────────────────────────────────────────── */
 
@@ -239,9 +328,12 @@ td.dim { color: var(--ink-2); }
 .share-bar i { display: block; height: 100%; border-radius: 3px; background: var(--series); }
 
 .pill {
-  display: inline-block; padding: 1px 7px; border-radius: 20px;
+  display: inline-block; padding: 1px 9px; border-radius: 9999px;
   font-size: 11.5px; border: 1px solid var(--border); color: var(--ink-2);
 }
+
+.mono { font-family: var(--font-mono); font-size: 12.5px; }
+td.good { color: var(--good); }
 
 .empty-row { color: var(--ink-muted); font-style: italic; }
 

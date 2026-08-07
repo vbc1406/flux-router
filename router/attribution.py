@@ -507,6 +507,46 @@ class SqliteUsageStore:
             for r in rows
         ]
 
+    def by_tenant(self, *, since: float | None = None, tenant_id: str | None = None) -> list[dict]:
+        """Per-tenant breakdown, most expensive first.
+
+        The tenant_id filter is still honoured even though grouping by tenant:
+        in FLUX_SERVER_TOKENS mode a caller may only ever see their own bound
+        tenant, so this must collapse to a single row rather than becoming a
+        way to enumerate every other tenant's spend. See
+        server.py::_stats_scope().
+
+        Rows with no tenant (the library path, or a proxy caller that sent no
+        X-Flux-Tenant-Id) group under the "—" label rather than being dropped,
+        so per-tenant costs always sum to the headline total.
+        """
+        self._flush()
+        where, params = self._stats_where(tenant_id, since)
+        with self._lock:
+            rows = self._conn.execute(
+                f"""SELECT COALESCE(tenant_id, ''), COUNT(*), COALESCE(SUM(cost_usd), 0),
+                           COALESCE(SUM(estimated_savings_usd), 0), AVG(latency_ms),
+                           COUNT(DISTINCT run_id), COUNT(DISTINCT model_id)
+                    FROM usage {where}
+                    GROUP BY COALESCE(tenant_id, '')
+                    ORDER BY SUM(cost_usd) DESC""",  # noqa: S608 # nosec B608
+                params,
+            ).fetchall()
+        total_requests = sum(r[1] for r in rows) or 1
+        return [
+            {
+                "tenant_id": r[0] or None,
+                "requests": r[1],
+                "cost_usd": r[2],
+                "estimated_savings_usd": r[3],
+                "avg_latency_ms": r[4],
+                "runs": r[5],
+                "distinct_models": r[6],
+                "share_pct": r[1] / total_requests * 100,
+            }
+            for r in rows
+        ]
+
 
 class CostAttribution:
     """
@@ -669,6 +709,11 @@ class CostAttribution:
         self, *, since: float | None = None, tenant_id: str | None = None
     ) -> list[dict]:
         return self._store.by_task_type(since=since, tenant_id=tenant_id)  # type: ignore[attr-defined]
+
+    def stats_by_tenant(
+        self, *, since: float | None = None, tenant_id: str | None = None
+    ) -> list[dict]:
+        return self._store.by_tenant(since=since, tenant_id=tenant_id)  # type: ignore[attr-defined]
 
     def render_prometheus(self, tenant_filter: str | None = None) -> str:
         """Render current counters in Prometheus text exposition format.

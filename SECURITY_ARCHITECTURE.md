@@ -248,8 +248,9 @@ just the page:
 
 ```
 /dashboard         /v1/stats/summary     /v1/stats/tasks      /v1/usage
-                   /v1/stats/timeseries  /v1/stats/registry   /metrics
-                   /v1/stats/models      /v1/stats/config
+                   /v1/stats/timeseries  /v1/stats/tenants    /metrics
+                   /v1/stats/models      /v1/stats/registry
+                                         /v1/stats/config
 ```
 
 Gating the dashboard alone would be theatre: the page is only a renderer for

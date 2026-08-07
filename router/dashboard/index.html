@@ -30,6 +30,10 @@
         <option value="all">All time</option>
       </select>
     </label>
+    <button id="live" class="btn btn-live" type="button" aria-pressed="true"
+            title="Auto-refresh every 10 seconds">
+      <span class="dot-live" aria-hidden="true"></span><span id="live-label">Live</span>
+    </button>
     <button id="refresh" class="btn" type="button">Refresh</button>
     <button id="theme" class="btn btn-icon" type="button" aria-label="Toggle theme">◐</button>
   </div>
@@ -89,31 +93,55 @@
     </section>
   </div>
 
-  <section class="panel">
-    <div class="panel-head">
+  <div class="two-col">
+    <section class="panel" id="tenants-panel">
+      <div class="panel-head">
+        <h2>Tenants</h2>
+        <p class="panel-sub" id="tenants-sub">Spend and savings per tenant</p>
+      </div>
+      <div class="table-wrap"><table id="tenants">
+        <thead><tr><th>Tenant</th><th class="num">Requests</th><th class="num">Share</th><th class="num">Cost</th><th class="num">Saved</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Recent requests</h2>
+        <p class="panel-sub">The last 50 calls, newest first</p>
+      </div>
+      <div class="table-wrap feed-wrap"><table id="feed" class="feed">
+        <thead><tr><th>When</th><th>Model</th><th>Task</th><th class="num">Cost</th><th class="num">Latency</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+  </div>
+
+  <!-- Reference, not live data: collapsed so it stops competing with the
+       numbers an operator is actually watching. -->
+  <details class="panel panel-fold" id="registry-fold">
+    <summary>
       <h2>Model registry</h2>
-      <p class="panel-sub">Prices are per 1K tokens. Load is the trailing 60-second request count.</p>
-    </div>
+      <p class="panel-sub" id="registry-sub">Prices per 1K tokens · load is the trailing 60s request count</p>
+    </summary>
     <div class="table-wrap"><table id="registry">
       <thead><tr><th>Model</th><th>Provider</th><th>Tier</th><th class="num">In</th><th class="num">Out</th><th class="num">Context</th><th class="num">Load / limit</th></tr></thead>
       <tbody></tbody>
     </table></div>
-  </section>
+  </details>
 
-  <section class="panel">
-    <div class="panel-head">
+  <details class="panel panel-fold" id="config-fold">
+    <summary>
       <h2>Configuration</h2>
-      <p class="panel-sub">
-        Read-only. Every value is read from the environment at startup — change
-        the variable shown and restart to apply.
-      </p>
-    </div>
+      <p class="panel-sub">Read-only — set the variable shown and restart to apply</p>
+    </summary>
     <div id="config" class="config"></div>
-  </section>
+  </details>
 </main>
 
 <footer class="footer">
   <span id="foot-db"></span>
+  <span id="foot-updated"></span>
   <button id="logout" class="linkish" type="button" hidden>Clear stored token</button>
 </footer>
 

@@ -14,6 +14,7 @@
 
   var TOKEN_KEY = "flux.dashboard.token";
   var THEME_KEY = "flux.dashboard.theme";
+  var LIVE_KEY = "flux.dashboard.live";
 
   var el = function (id) { return document.getElementById(id); };
 
@@ -403,6 +404,60 @@
     });
   }
 
+  function renderTenants(rows) {
+    var tbody = el("tenants").querySelector("tbody");
+    tbody.textContent = "";
+    if (!rows.length) return emptyRow(tbody, 5, "No traffic in this window.");
+    rows.forEach(function (r) {
+      var tr = document.createElement("tr");
+      // A null tenant is the library path or a proxy caller that sent no
+      // X-Flux-Tenant-Id — labelled, not hidden, so the rows still sum to the
+      // headline total.
+      if (r.tenant_id) cell(tr, r.tenant_id);
+      else cell(tr, "unattributed", "dim");
+      cell(tr, num(r.requests), "num");
+      shareCell(tr, r.share_pct);
+      cell(tr, money(r.cost_usd), "num");
+      cell(tr, money(r.estimated_savings_usd), "num good");
+      tbody.appendChild(tr);
+    });
+    var named = rows.filter(function (r) { return r.tenant_id; }).length;
+    el("tenants-sub").textContent = named
+      ? named + (named === 1 ? " tenant" : " tenants") + " in this window"
+      : "No tenant ids on this traffic — send X-Flux-Tenant-Id to break spend down";
+  }
+
+  function clockTime(epochSeconds) {
+    var d = new Date(epochSeconds * 1000);
+    return String(d.getHours()).padStart(2, "0") + ":"
+      + String(d.getMinutes()).padStart(2, "0") + ":"
+      + String(d.getSeconds()).padStart(2, "0");
+  }
+
+  function renderFeed(rows) {
+    var tbody = el("feed").querySelector("tbody");
+    tbody.textContent = "";
+    if (!rows.length) return emptyRow(tbody, 5, "No requests recorded yet.");
+    // /v1/usage pages by row id, which is insertion order — the same thing as
+    // time order for live traffic, but not for backfilled or imported rows.
+    // Sort the page we were given so "newest first" is always literally true.
+    rows = rows.slice().sort(function (a, b) { return b.timestamp - a.timestamp; });
+    rows.forEach(function (r) {
+      var tr = document.createElement("tr");
+      cell(tr, clockTime(r.timestamp), "when");
+      cell(tr, r.model_id, "model");
+      var td = document.createElement("td");
+      var tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = r.task_type || "unknown";
+      td.appendChild(tag);
+      tr.appendChild(td);
+      cell(tr, money(r.cost_usd), "num");
+      cell(tr, ms(r.latency_ms), "num dim");
+      tbody.appendChild(tr);
+    });
+  }
+
   function renderRegistry(rows) {
     var tbody = el("registry").querySelector("tbody");
     tbody.textContent = "";
@@ -547,6 +602,8 @@
       get("/v1/stats/timeseries?window=" + w),
       get("/v1/stats/models?window=" + w),
       get("/v1/stats/tasks?window=" + w),
+      get("/v1/stats/tenants?window=" + w),
+      get("/v1/usage?limit=50"),
       get("/v1/stats/registry"),
       get("/v1/stats/config")
     ]).then(function (r) {
@@ -555,8 +612,11 @@
       renderChart(r[1].data, r[1].bucket_seconds);
       renderModels(r[2].data);
       renderTasks(r[3].data);
-      renderRegistry(r[4].data);
-      renderConfig(r[5]);
+      renderTenants(r[4].data);
+      renderFeed(r[5].data);
+      renderRegistry(r[6].data);
+      renderConfig(r[7]);
+      el("foot-updated").textContent = "Updated " + clockTime(Date.now() / 1000);
       el("logout").hidden = !token();
     }).catch(function (err) {
       if (err.unauthorized) askForToken();
@@ -564,6 +624,53 @@
     }).then(function () {
       loading = false;
     });
+  }
+
+  // ── Auto-refresh ──────────────────────────────────────────────────────────
+  //
+  // A console left open on a second monitor should keep itself current. Paused
+  // automatically while the tab is hidden so a backgrounded dashboard isn't
+  // quietly polling a router all day, and resumed (with an immediate refresh)
+  // when it comes back.
+
+  var REFRESH_MS = 10000;
+  var timer = null;
+
+  function livePref() {
+    try { return window.localStorage.getItem(LIVE_KEY) !== "off"; } catch (e) { return true; }
+  }
+
+  function stopTimer() {
+    if (timer) { window.clearInterval(timer); timer = null; }
+  }
+
+  function syncLive() {
+    var on = livePref();
+    var btn = el("live");
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+    el("live-label").textContent = on ? "Live" : "Paused";
+    btn.title = on
+      ? "Auto-refreshing every " + (REFRESH_MS / 1000) + " seconds — click to pause"
+      : "Auto-refresh paused — click to resume";
+    stopTimer();
+    if (on && !document.hidden) timer = window.setInterval(load, REFRESH_MS);
+  }
+
+  function initLive() {
+    el("live").addEventListener("click", function () {
+      var next = livePref() ? "off" : "on";
+      try { window.localStorage.setItem(LIVE_KEY, next); } catch (e) { /* not fatal */ }
+      syncLive();
+      if (next === "on") load();
+    });
+    document.addEventListener("visibilitychange", function () {
+      var wasPolling = !!timer;
+      syncLive();
+      // Coming back to a stale page: refresh immediately rather than waiting
+      // out a full interval.
+      if (!wasPolling && !document.hidden && livePref()) load();
+    });
+    syncLive();
   }
 
   // ── Theme ─────────────────────────────────────────────────────────────────
@@ -592,6 +699,7 @@
   // ── Wire up ───────────────────────────────────────────────────────────────
 
   initTheme();
+  initLive();
   el("window").addEventListener("change", load);
   el("refresh").addEventListener("click", load);
   el("logout").addEventListener("click", function () {

@@ -681,6 +681,11 @@ class TestAttribution:
         assert resp.status_code == 200
         usage = client.get("/v1/usage", params={"tenant_id": "no-leak-test"}).json()
         for record in usage["data"]:
+            # Deliberately an exact-set assertion, not a subset: a new field on
+            # this endpoint must be a conscious decision, because this is the
+            # response that would leak prompt or completion text if one ever
+            # crept in. Every key below is costs/metadata only — nothing here
+            # derives from prompt content.
             assert set(record.keys()) == {
                 "tenant_id",
                 "run_id",
@@ -692,6 +697,9 @@ class TestAttribution:
                 "usage_source",
                 "input_tokens",
                 "output_tokens",
+                "latency_ms",
+                "cache_hit",
+                "fallback_used",
             }
 
     def test_metrics_endpoint_returns_prometheus_text(self, client):

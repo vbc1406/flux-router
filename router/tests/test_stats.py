@@ -450,3 +450,110 @@ class TestSpendDataIsLoopbackOnlyWithoutAuth:
     def test_missing_peer_is_refused(self, monkeypatch, store):
         monkeypatch.setattr(server._flux._engine, "_attribution", CostAttribution(store=store))
         assert self._client_from(None).get("/v1/stats/summary").status_code == 403
+
+
+class TestTenantBreakdown:
+    """by_tenant() + GET /v1/stats/tenants, added for the dashboard's tenant panel."""
+
+    def test_groups_spend_by_tenant_most_expensive_first(self, store):
+        store.record(_rec(tenant="acme", cost=0.01, savings=0.09))
+        store.record(_rec(tenant="globex", cost=0.50, savings=1.20))
+        store.record(_rec(tenant="globex", cost=0.05, savings=0.30))
+
+        rows = store.by_tenant()
+        assert [r["tenant_id"] for r in rows] == ["globex", "acme"]
+        assert rows[0]["requests"] == 2
+        assert rows[0]["cost_usd"] == pytest.approx(0.55)
+        assert rows[0]["estimated_savings_usd"] == pytest.approx(1.50)
+        assert sum(r["share_pct"] for r in rows) == pytest.approx(100.0)
+
+    def test_untagged_traffic_is_labelled_not_dropped(self, store):
+        """Rows must always sum to the headline total, so a null tenant still
+        gets a row rather than silently vanishing from the breakdown."""
+        store.record(_rec(tenant=None, cost=0.02))
+        store.record(_rec(tenant="acme", cost=0.03))
+
+        rows = store.by_tenant()
+        assert {r["tenant_id"] for r in rows} == {None, "acme"}
+        assert sum(r["cost_usd"] for r in rows) == pytest.approx(
+            store.summary()["total_cost_usd"]
+        )
+
+    def test_counts_distinct_runs_and_models(self, store):
+        store.record(_rec(tenant="acme", run_id="r1", model="gpt-4o-mini"))
+        store.record(_rec(tenant="acme", run_id="r1", model="gpt-4o-mini"))
+        store.record(_rec(tenant="acme", run_id="r2", model="claude-haiku"))
+
+        row = store.by_tenant()[0]
+        assert row["runs"] == 2
+        assert row["distinct_models"] == 2
+
+    def test_empty_db_is_an_empty_list(self, store):
+        assert store.by_tenant() == []
+
+    def test_endpoint_returns_the_breakdown(self, stats_client, store):
+        store.record(_rec(tenant="acme", cost=0.01))
+        store.record(_rec(tenant="globex", cost=0.05))
+
+        resp = stats_client.get("/v1/stats/tenants?window=24h")
+        assert resp.status_code == 200
+        assert resp.json()["window"] == "24h"
+        assert {r["tenant_id"] for r in resp.json()["data"]} == {"acme", "globex"}
+
+    def test_endpoint_survives_an_empty_db(self, stats_client):
+        assert stats_client.get("/v1/stats/tenants?window=24h").status_code == 200
+
+    def test_window_filters_the_breakdown(self, stats_client, store):
+        store.record(_rec(tenant="acme", age_seconds=60))
+        store.record(_rec(tenant="globex", age_seconds=3 * HOUR))
+
+        assert len(stats_client.get("/v1/stats/tenants?window=1h").json()["data"]) == 1
+        assert len(stats_client.get("/v1/stats/tenants?window=24h").json()["data"]) == 2
+
+    def test_cannot_enumerate_other_tenants(self, stats_client, store, monkeypatch):
+        """The whole point of the scoping: a bound token must see ONE row, its
+        own — otherwise this endpoint becomes a directory of everyone's spend."""
+        monkeypatch.setattr(
+            server,
+            "SERVER_TOKENS",
+            {
+                "tok-acme": ServerTokenBinding(tenant_id="acme", plan="pro_plan"),
+                "tok-globex": ServerTokenBinding(tenant_id="globex", plan="pro_plan"),
+            },
+        )
+        monkeypatch.setattr(server, "SERVER_REQUIRE_AUTH", True)
+        store.record(_rec(tenant="acme", cost=0.01))
+        store.record(_rec(tenant="globex", cost=0.50))
+
+        data = stats_client.get(
+            "/v1/stats/tenants?window=24h", headers={"Authorization": "Bearer tok-acme"}
+        ).json()["data"]
+        assert [r["tenant_id"] for r in data] == ["acme"]
+        assert data[0]["cost_usd"] == pytest.approx(0.01)
+
+    def test_unauthenticated_tenants_endpoint_is_loopback_only(self, store):
+        """Same refusal as every other spend endpoint."""
+        remote = TestClient(
+            server.app, client=("203.0.113.9", 50000), base_url="http://127.0.0.1:8000"
+        )
+        assert remote.get("/v1/stats/tenants").status_code == 403
+
+
+class TestUsageEndpointProjection:
+    """The console's activity feed reads latency off /v1/usage; the column is
+    persisted but was missing from the endpoint's projection."""
+
+    def test_usage_rows_expose_routing_telemetry(self, stats_client, store):
+        store.record(_rec(latency=250.0, cache_hit=True, fallback_used=True))
+
+        row = stats_client.get("/v1/usage?limit=1").json()["data"][0]
+        assert row["latency_ms"] == pytest.approx(250.0)
+        assert row["cache_hit"] is True
+        assert row["fallback_used"] is True
+
+    def test_missing_telemetry_reads_back_as_null(self, stats_client, store):
+        """Rows written before those columns existed must not break the feed."""
+        store.record(_rec(latency=None))
+
+        row = stats_client.get("/v1/usage?limit=1").json()["data"][0]
+        assert row["latency_ms"] is None
