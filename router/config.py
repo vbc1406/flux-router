@@ -72,6 +72,17 @@ COMPLEXITY_MODIFIERS: dict[str, float] = {
     "high_bullet_density": +0.05,  # structured list → mild complexity signal
     "repetitive_templated": -0.10,  # fill-in-the-blank → lower complexity
     "expected_short_response": -0.10,  # short prompt, likely short answer → simpler
+    # ── Within-task magnitude signals ─────────────────────────────────────────
+    # The signals above are dominated by task_type: two code_review requests get
+    # near-identical scores whether they ask about a one-line bug or a
+    # cross-goroutine lock-ordering deadlock. These four add a "how hard, within
+    # this kind of task" axis so the easy tail can be pushed down and the hard
+    # tail escalated. They stack, so a long multi-constraint defect question
+    # clears the mid/premium boundary while a short one does not.
+    "prompt_words_gt_60": +0.08,  # a paragraph of setup → more to hold at once
+    "prompt_words_gt_150": +0.08,  # stacks with the above → substantial brief
+    "code_defect_class": +0.12,  # deadlock/race/leak → expert-grade debugging
+    "multi_constraint": +0.10,  # "do X without Y while Z" → constrained solution
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -408,9 +419,23 @@ MAX_STATE_FILE_BYTES: int = 100_000_000
 LATENCY_PRIORITY_MAP: dict[str, str] = {
     "low": "prefer_quality",  # low-priority requests can take their time
     "normal": "balanced",  # default balanced weighting
-    "high": "prefer_speed",  # high-priority requests want fast responses
-    "critical": "prefer_speed",  # critical requests need the fastest available model
+    # high/critical previously both mapped to "prefer_speed", which weights
+    # quality at only 0.30 — so an urgent request ("production is down, what do
+    # I check first?") was answered by whichever model was fastest and free,
+    # rather than the one most likely to be right. Urgency now means "fast AND
+    # good, and stop counting pennies": latency stays heavily weighted, but
+    # quality leads and cost is de-emphasised.
+    "high": "urgent",
+    "critical": "critical",
 }
+
+# request.priority values that may not be served by a free-tier model when any
+# paid model is available. Free tiers carry hard RPM caps (15/min for several
+# entries in models.json) and no availability guarantee — during an incident,
+# being rate-limited or queued is a worse outcome than paying a fraction of a
+# cent. Independent of quality: this is a reliability floor, not a quality one.
+# How to tune: set to an empty frozenset to let urgent traffic use free models.
+NO_FREE_TIER_PRIORITIES: frozenset[str] = frozenset({"critical"})
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONTEXT COMPRESSION
@@ -441,6 +466,11 @@ SCORING_WEIGHTS: dict[str, dict[str, float]] = {
     "prefer_quality": {"quality": 0.70, "cost": 0.25, "latency": 0.05},
     "balanced": {"quality": 0.50, "cost": 0.30, "latency": 0.20},
     "prefer_speed": {"quality": 0.30, "cost": 0.25, "latency": 0.45},
+    # Urgency modes (request.priority high/critical). Latency still matters a
+    # lot, but a wrong-but-fast answer is worthless during an incident, so
+    # quality leads and cost is nearly ignored as urgency rises.
+    "urgent": {"quality": 0.45, "cost": 0.20, "latency": 0.35},
+    "critical": {"quality": 0.55, "cost": 0.10, "latency": 0.35},
     # routing_priority overrides (Change 1) — these override the latency-mode entry
     "quality-first": {"quality": 0.70, "cost": 0.20, "latency": 0.10},
     "cost-optimized": {"quality": 0.30, "cost": 0.60, "latency": 0.10},

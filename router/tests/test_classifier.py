@@ -412,3 +412,114 @@ class TestClassifierFallback:
         )
         assert a.task_type == "general"
         assert 0.25 <= a.complexity_score <= 0.65
+
+
+# ── Within-task magnitude signals ────────────────────────────────────────────
+
+
+class TestWithinTaskComplexity:
+    """
+    The per-question routing probe found complexity was INVERTED on code: a
+    five-line off-by-one bug scored 0.852 while a cross-goroutine lock-ordering
+    deadlock scored 0.622, because the easy one contained a fenced code block
+    whose `+=` and `/` tripped math_symbols_present. These lock in the fix.
+    """
+
+    HARD_CODE = (
+        "I have a Go service where two goroutines occasionally deadlock on a shared "
+        "mutex during shutdown. The shutdown path acquires the connection pool lock "
+        "then the metrics lock, while the health checker takes them in the opposite "
+        "order. Walk me through how to restructure the locking so shutdown is "
+        "deadlock-free without a global lock."
+    )
+    EASY_CODE = (
+        "Review this function for bugs:\n```python\ndef avg(xs):\n    total = 0\n"
+        "    for x in xs:\n        total += x\n    return total / len(xs)\n```"
+    )
+
+    def setup_method(self):
+        self.clf = _clf()
+
+    def test_hard_code_question_outranks_easy_one(self):
+        hard = self.clf.analyze(_req(self.HARD_CODE)).complexity_score
+        easy = self.clf.analyze(_req(self.EASY_CODE)).complexity_score
+        assert hard > easy, f"hard={hard} should outrank easy={easy}"
+
+    def test_operators_inside_code_fence_are_not_math_symbols(self):
+        signals = self.clf._extract_signals(_req(self.EASY_CODE), 45, 0, 0)
+        assert signals["math_symbols_present"] is False
+
+    def test_math_symbols_outside_fence_still_count(self):
+        prompt = "Solve for x: 3 + x = 12, then explain the steps."
+        signals = self.clf._extract_signals(_req(prompt), 20, 0, 0)
+        assert signals["math_symbols_present"] is True
+
+    def test_defect_class_term_raises_complexity(self):
+        plain = self.clf.analyze(_req("Review the shutdown path in this service."))
+        defect = self.clf.analyze(
+            _req("Review the shutdown path in this service for a deadlock.")
+        )
+        assert defect.complexity_score > plain.complexity_score
+
+    def test_multi_constraint_raises_complexity(self):
+        loose = self.clf.analyze(_req("Restructure the locking in the shutdown path."))
+        tight = self.clf.analyze(
+            _req(
+                "Restructure the locking in the shutdown path without a global lock, "
+                "while maintaining the current shutdown ordering, and ensure the "
+                "health checker still runs."
+            )
+        )
+        assert tight.complexity_score > loose.complexity_score
+
+    def test_long_prompt_raises_complexity(self):
+        short = self.clf.analyze(_req("Analyse our deployment process."))
+        long = self.clf.analyze(_req("Analyse our deployment process. " + "detail " * 200))
+        assert long.complexity_score > short.complexity_score
+
+
+# ── Explicit output-length cues ──────────────────────────────────────────────
+
+
+class TestExplicitOutputLength:
+    """
+    estimated_output_tokens was flat per task type, so a haiku and a 500-word
+    story were both costed at 1500 output tokens. Cost feeds model scoring, so
+    that over-estimate biased short creative requests toward cheaper models.
+    """
+
+    def setup_method(self):
+        self.clf = _clf()
+
+    def test_haiku_is_not_costed_as_a_full_essay(self):
+        haiku = self.clf.analyze(_req("Write a haiku about debugging at 2am."))
+        story = self.clf.analyze(_req("Write a 500-word short story about a lighthouse."))
+        assert haiku.estimated_output_tokens < story.estimated_output_tokens
+        assert haiku.estimated_output_tokens <= 100
+
+    def test_word_count_cue_scales_estimate(self):
+        small = self.clf.analyze(_req("Write a 100-word summary of the report."))
+        large = self.clf.analyze(_req("Write a 2000-word summary of the report."))
+        assert large.estimated_output_tokens > small.estimated_output_tokens * 5
+
+    def test_sentence_count_cue(self):
+        a = self.clf.analyze(_req("Summarize this in two sentences: the report was long."))
+        assert a.estimated_output_tokens <= 100
+
+    def test_no_cue_falls_back_to_task_type_table(self):
+        a = self.clf.analyze(_req("Write a Python script that parses CSV orders."))
+        assert a.estimated_output_tokens == 1000
+
+    def test_max_tokens_requested_is_the_billing_ceiling(self):
+        a = self.clf.analyze(
+            _req("Write a haiku about debugging at 2am.", max_tokens_requested=4000)
+        )
+        # Anti-gaming: asking for a huge completion must still budget as one.
+        assert a.billing_output_tokens == 4000
+
+    def test_capped_request_is_not_overcharged(self):
+        a = self.clf.analyze(
+            _req("Write a Python script that parses CSV orders.", max_tokens_requested=50)
+        )
+        # The provider cannot exceed 50, so the worst-case bill is 50, not 1000.
+        assert a.billing_output_tokens == 50

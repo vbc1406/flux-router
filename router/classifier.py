@@ -145,7 +145,48 @@ _STRUCT_OUT_RE = re.compile(
 )
 _CODE_FENCE_RE = re.compile(r"```")
 _MATH_SYM_RE = re.compile(r"[∑∫≥≤∀∃≠²³√∞±∇∂∈∉⊆⊇∩∪]|(?<!\w)=(?!\w)|(?<!\w)[+\-*/^](?!\w)")
+# Fenced code blocks, stripped before math-symbol detection: `total += x` and
+# `total / len(xs)` are ordinary code, not mathematical notation, and counting
+# them made a five-line off-by-one question score *higher* than a
+# cross-goroutine deadlock question. Math symbols in the prose around the code
+# still count.
+_FENCED_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
+# "Do X without Y", "keep Z while W" — each marker is a constraint the answer
+# has to satisfy simultaneously. Two or more means the solution space is
+# genuinely narrow, which is a within-task difficulty signal.
+_CONSTRAINT_RE = re.compile(
+    r"\b(without|instead\s+of|rather\s+than|while\s+(?:still\s+)?(?:keeping|maintaining|"
+    r"preserving|the\b)|but\s+(?:still\s+)?(?:keep|maintain|preserve|avoid)|"
+    r"must\s+not|cannot\s+use|can't\s+use|no\s+(?:global|shared|additional)\s+\w+|"
+    r"ensur\w+|guarante\w+|handle\s+(?:malformed|invalid|edge))\b",
+    re.IGNORECASE,
+)
 _BULLET_RE = re.compile(r"^(\s*[-*•]\s|\s*\d+\.\s)", re.MULTILINE)
+# ── Explicit output-length cues (see _explicit_output_tokens) ────────────────
+_WORD_COUNT_RE = re.compile(r"\b(\d{2,5})[\s-]*word\b", re.IGNORECASE)
+_SENTENCE_COUNT_RE = re.compile(
+    r"\b(\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten)[\s-]*sentences?\b",
+    re.IGNORECASE,
+)
+_PARAGRAPH_COUNT_RE = re.compile(
+    r"\b(\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten)[\s-]*paragraphs?\b",
+    re.IGNORECASE,
+)
+_NUMBER_WORDS: dict[str, int] = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+# Forms whose length is fixed by the form itself, regardless of task type.
+_FIXED_FORM_TOKENS: dict[re.Pattern[str], int] = {
+    re.compile(r"\bhaiku\b", re.IGNORECASE): 40,
+    re.compile(r"\b(limerick|couplet)\b", re.IGNORECASE): 80,
+    re.compile(r"\bsonnet\b", re.IGNORECASE): 250,
+    re.compile(r"\b(tweet|headline|tagline|subject\s+line)\b", re.IGNORECASE): 60,
+    re.compile(r"\bin\s+a\s+(single|one)\s+(word|line)\b", re.IGNORECASE): 30,
+}
+# Floor for any explicit-length estimate — even "in one word" needs room for a
+# short preamble, and a near-zero estimate would make cost scoring meaningless.
+_MIN_OUTPUT_TOKENS = 30
 _QUESTION_RE = re.compile(r"\?")
 # Task 6: step_type inference — "reflect" language (self-critique / plan revision).
 _REFLECT_RE = re.compile(
@@ -336,11 +377,21 @@ class RequestClassifier:
             prompt + " " + sys_prompt + " " + self._history_text(history)
         )
         task_type, _ = self._detect_task_type(request)
-        output_tokens = self._estimate_output_tokens(task_type, input_tokens)
+        # An explicit length instruction in the prompt beats the flat
+        # per-task-type table — see _explicit_output_tokens.
+        output_tokens = self._explicit_output_tokens(prompt) or self._estimate_output_tokens(
+            task_type, input_tokens
+        )
         # Billing-relevant figure: never let the task-type heuristic UNDER-
         # estimate what the caller could actually be billed for. Per-model
         # capping still happens downstream in routing_engine._estimate_cost.
-        billing_output_tokens = max(output_tokens, request.max_tokens_requested or 0)
+        #
+        # When max_tokens_requested is set it is a hard ceiling the provider
+        # cannot exceed, so it IS the worst-case bill — using it directly keeps
+        # the anti-gaming property (asking for a huge completion still routes
+        # and budgets as a huge completion) while no longer over-charging a
+        # deliberately capped short one against a large task-type default.
+        billing_output_tokens = request.max_tokens_requested or output_tokens
         history_tokens = self._count_tokens(self._history_text(history))
         sys_tokens = self._count_tokens(sys_prompt)
         total_context = input_tokens + output_tokens + sys_tokens  # history already in input_tokens
@@ -472,6 +523,43 @@ class RequestClassifier:
                     if isinstance(block, dict) and block.get("type") == "text":
                         parts.append(block.get("text", ""))
         return " ".join(parts)
+
+    @staticmethod
+    def _explicit_output_tokens(prompt: str) -> int | None:
+        """
+        Read an explicit length instruction out of the prompt, in tokens.
+
+        The task-type table below is flat: every creative_writing request is
+        assumed to produce 1500 output tokens, so a haiku and a 500-word story
+        are costed identically (and both ~10x over for the haiku). Since the
+        cost estimate feeds model scoring, that flat figure biases short
+        creative requests toward cheaper models for no reason. When the user
+        states a length, believe them.
+
+        Returns None when the prompt carries no length instruction.
+        """
+        # "write a 500-word story", "in about 250 words"
+        m = _WORD_COUNT_RE.search(prompt)
+        if m:
+            # ~1.4 tokens per English word, +25% headroom for overshoot.
+            return max(_MIN_OUTPUT_TOKENS, int(int(m.group(1)) * 1.4 * 1.25))
+
+        m = _SENTENCE_COUNT_RE.search(prompt)
+        if m:
+            count = _NUMBER_WORDS.get(m.group(1).lower()) or int(m.group(1))
+            return max(_MIN_OUTPUT_TOKENS, count * 30)
+
+        m = _PARAGRAPH_COUNT_RE.search(prompt)
+        if m:
+            count = _NUMBER_WORDS.get(m.group(1).lower()) or int(m.group(1))
+            return max(_MIN_OUTPUT_TOKENS, count * 120)
+
+        # Fixed-length forms: a haiku is 17 syllables no matter the task type.
+        for pattern, tokens in _FIXED_FORM_TOKENS.items():
+            if pattern.search(prompt):
+                return tokens
+
+        return None
 
     @staticmethod
     def _estimate_output_tokens(task_type: str, input_tokens: int) -> int:
@@ -702,6 +790,9 @@ class RequestClassifier:
         structured = bool(_STRUCT_OUT_RE.search(prompt) or _STRUCT_OUT_RE.search(sys))
 
         question_count = len(_QUESTION_RE.findall(prompt))
+        word_count = len(prompt.split())
+        # Math symbols are judged on the prose only — see _FENCED_BLOCK_RE.
+        unfenced = _FENCED_BLOCK_RE.sub(" ", prompt)
 
         # Domain-specific heuristic
         domain_specific = bool(
@@ -725,11 +816,16 @@ class RequestClassifier:
             "domain_specific": domain_specific,
             "complex_system_prompt": complex_sys,
             "multiple_questions_detected": question_count > 1,
-            "math_symbols_present": bool(_MATH_SYM_RE.search(prompt)),
+            "math_symbols_present": bool(_MATH_SYM_RE.search(unfenced)),
             "high_code_fence_density": fences >= 2,
             "high_bullet_density": bullet_density > 0.25,
             "repetitive_templated": self._is_templated(prompt),
-            "expected_short_response": len(prompt.split()) < 15 and question_count <= 1,
+            "expected_short_response": word_count < 15 and question_count <= 1,
+            # Within-task magnitude signals (see COMPLEXITY_MODIFIERS).
+            "prompt_words_gt_60": word_count > 60,
+            "prompt_words_gt_150": word_count > 150,
+            "code_defect_class": bool(_CODE_DEFECT_RE.search(prompt)),
+            "multi_constraint": len(_CONSTRAINT_RE.findall(prompt)) >= 2,
         }
 
     @staticmethod

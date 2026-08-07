@@ -816,3 +816,49 @@ class TestPriorityEdgeCases:
         assert d.estimated_cost >= 0.0
         assert 0.0 <= d.confidence <= 1.0
         assert d.routing_rule_matched != ""
+
+
+# ── Urgency weighting (request.priority high/critical) ───────────────────────
+
+
+class TestUrgencyWeighting:
+    """
+    The per-question routing probe found "Production is down. Our Postgres
+    primary is at 100% CPU..." with priority=critical routed to a FREE model,
+    because LATENCY_PRIORITY_MAP sent critical → prefer_speed, which weights
+    quality at only 0.30. Urgency now means fast AND good.
+    """
+
+    INCIDENT = (
+        "Production is down. Our Postgres primary is at 100% CPU and "
+        "connections are maxed. What do I check first?"
+    )
+
+    def test_critical_outranks_normal_on_quality(self):
+        normal = asyncio.run(_engine().route(_req(self.INCIDENT, priority="normal")))
+        critical = asyncio.run(_engine().route(_req(self.INCIDENT, priority="critical")))
+        task = critical.task_type or "simple_qa"
+        q_normal = normal.chosen_model.quality_ratings.get(task, 0.5)
+        q_critical = critical.chosen_model.quality_ratings.get(task, 0.5)
+        assert q_critical >= q_normal
+
+    def test_critical_does_not_land_on_a_free_model(self):
+        decision = asyncio.run(_engine().route(_req(self.INCIDENT, priority="critical")))
+        assert decision.chosen_model.tier != "free"
+
+    def test_high_priority_weights_are_quality_led(self):
+        from router.config import LATENCY_PRIORITY_MAP, SCORING_WEIGHTS
+
+        for priority in ("high", "critical"):
+            weights = SCORING_WEIGHTS[LATENCY_PRIORITY_MAP[priority]]
+            assert weights["quality"] > weights["cost"]
+            assert weights["quality"] > weights["latency"]
+            assert abs(sum(weights.values()) - 1.0) < 1e-9
+
+    def test_latency_still_matters_under_urgency(self):
+        from router.config import LATENCY_PRIORITY_MAP, SCORING_WEIGHTS
+
+        weights = SCORING_WEIGHTS[LATENCY_PRIORITY_MAP["critical"]]
+        # Urgency must not collapse into plain quality-first: speed still
+        # outweighs cost during an incident.
+        assert weights["latency"] > weights["cost"]

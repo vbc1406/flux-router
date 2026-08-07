@@ -101,6 +101,7 @@ from .config import (
     MAX_COST_PER_REQUEST,
     MIN_CONFIDENCE_THRESHOLD,
     MIN_QUALITY_THRESHOLD,
+    NO_FREE_TIER_PRIORITIES,
     SCORING_WEIGHTS,
     STEP_TYPE_FLOORS,
     TIER_BOUNDARIES,
@@ -736,6 +737,15 @@ class RoutingEngine:
                 floor=quality_floor,
                 task=analysis.task_type,
             )
+
+        # Reliability floor for urgent traffic: free-tier models are hard
+        # rate-limited and carry no availability guarantee, so a critical
+        # request skips them entirely as long as something paid is available.
+        if request.priority in NO_FREE_TIER_PRIORITIES:
+            paid = [m for m in tier_candidates if m.tier != "free"]
+            if paid:
+                tier_candidates = paid
+                log.debug("free_tier_excluded_for_priority", cid=cid, priority=request.priority)
 
         # Change 1: routing_priority overrides the weight preset when set.
         weights = _get_weights_for_priority(request.routing_priority, request.priority)
