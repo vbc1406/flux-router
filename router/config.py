@@ -892,6 +892,17 @@ SERVER_WORKERS: int = int(
 # or looping; lower tool_result_summarize/extract/format's floor (or omit
 # them entirely) to push more savings into steps where mistakes are cheap to
 # catch downstream.
+#
+# Note on the "free" entries: free is TIER_ORDER[0], so those three floors admit
+# every tier and are no-ops at runtime. They are kept deliberately, as the
+# explicit record that these steps are cheap to get wrong and are MEANT to have
+# no floor — an absent key and a "free" key behave identically, and writing them
+# out stops a later reader assuming the step type was simply forgotten.
+#
+# "format" is never produced by classifier._infer_step_type(); it applies only
+# when a caller sets request.step_type explicitly. That is harmless precisely
+# because its floor is a no-op. "plan" IS inferred (see _infer_step_type rules
+# 6 and 7) and its floor is load-bearing, so it must stay reachable.
 STEP_TYPE_FLOORS: dict[str, str] = {
     "plan": "mid",
     "tool_select": "mid",

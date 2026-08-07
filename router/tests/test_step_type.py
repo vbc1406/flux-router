@@ -277,3 +277,86 @@ class TestToolCapabilityFilter:
         req = _req("Pick a tool.", tools=_TOOLS)
         decision = rr(engine.route(req))
         assert decision.chosen_model is None
+
+
+class TestPlanStepInference:
+    """
+    An agentic probe found STEP_TYPE_FLOORS defined a "plan" floor that nothing
+    could ever trigger: _infer_step_type() had no rule producing "plan", so a
+    planning step fell to "unknown" (no floor) and could route to the free tier
+    — the one step where a bad model wastes every step that follows.
+    """
+
+    def _clf(self):
+        return RequestClassifier(ResponseCache(enabled=False))
+
+    PLANNING = [
+        "What should I do next?",
+        "Plan.",
+        "Plan the next step.",
+        "Plan your approach to this migration.",
+        "Decide the next action.",
+        "How should I approach this?",
+        "Break this down into steps.",
+        "Outline the steps you'll take.",
+        "Make a plan for fixing the deadlock.",
+        "First, plan the refactor.",
+    ]
+
+    def test_planning_language_in_a_run_infers_plan(self):
+        clf = self._clf()
+        for prompt in self.PLANNING:
+            analysis = clf.analyze(_req(prompt, run_id="run-1"))
+            assert analysis.step_type == "plan", f"{prompt!r} -> {analysis.step_type}"
+
+    def test_planning_language_outside_a_run_is_untouched(self):
+        """"plan a trip to Kyoto" is ordinary chat and must keep cheap routing."""
+        clf = self._clf()
+        for prompt in ["Plan a trip to Kyoto.", "plan my week", "What should I do next?"]:
+            assert clf.analyze(_req(prompt)).step_type == "unknown"
+
+    def test_proxy_single_shot_is_not_floored(self):
+        """server.py auto-generates a run_id for every request arriving without
+        X-Flux-Run-Id, so "in a run" alone must never imply a planning step —
+        otherwise all plain proxy chat gets dragged up to the mid tier."""
+        clf = self._clf()
+        for prompt in ["What is the capital of France?", "hi", "Translate to Spanish: hello"]:
+            assert clf.analyze(_req(prompt, run_id="auto-uuid")).step_type == "unknown"
+
+    def test_plan_routes_at_or_above_the_mid_tier(self):
+        engine = _engine()
+        for prompt in self.PLANNING:
+            decision = asyncio.run(
+                engine.route(_req(prompt, run_id="run-1", routing_priority="cost-optimized"))
+            )
+            assert decision.chosen_model.tier in ("mid", "premium"), (
+                f"{prompt!r} routed to {decision.chosen_model.tier}"
+            )
+
+    def test_same_prompt_without_run_id_may_stay_cheap(self):
+        """The contrast that makes the floor meaningful: identical text, no run."""
+        engine = _engine()
+        decision = asyncio.run(
+            engine.route(_req("What should I do next?", routing_priority="cost-optimized"))
+        )
+        assert decision.chosen_model.tier in ("free", "cheap")
+
+    def test_stronger_signals_still_win_over_planning_language(self):
+        """Ordering matters: a tool call or tool result is a more specific
+        signal than planning words that happen to appear in the same prompt."""
+        clf = self._clf()
+        tools = [{
+            "type": "function",
+            "function": {"name": "s", "description": "d",
+                         "parameters": {"type": "object", "properties": {}}},
+        }]
+        assert clf.analyze(
+            _req("Plan the next step.", run_id="r", tools=tools)
+        ).step_type == "tool_select"
+        assert clf.analyze(
+            _req("Plan the next step.", run_id="r",
+                 message_history=[{"role": "tool", "content": "{}"}])
+        ).step_type == "tool_result_summarize"
+        assert clf.analyze(
+            _req("Give your final answer.", run_id="r")
+        ).step_type == "final_answer"

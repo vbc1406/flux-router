@@ -188,6 +188,21 @@ _FIXED_FORM_TOKENS: dict[re.Pattern[str], int] = {
 # short preamble, and a near-zero estimate would make cost scoring meaningless.
 _MIN_OUTPUT_TOKENS = 30
 _QUESTION_RE = re.compile(r"\?")
+# Agent planning language: "plan the steps", "how should I approach this",
+# "what should I do next", "break this down into steps". Only consulted for
+# requests carrying a run_id — see _infer_step_type — so ordinary chat like
+# "plan a trip to Kyoto" is untouched.
+_PLAN_RE = re.compile(
+    r"\b(plan\s+(?:your|the|out|this|a\s+few)|make\s+a\s+plan|come\s+up\s+with\s+a\s+plan|"
+    r"break\s+(?:this|it|the\s+task)\s+(?:down|into)|"
+    r"how\s+should\s+(?:I|we|you)\s+(?:approach|tackle|start)|"
+    r"what\s+should\s+(?:I|we|you)\s+do\s+(?:next|first)|"
+    r"decide\s+(?:the|your)\s+next\s+(?:step|action)|"
+    r"outline\s+(?:the|your)\s+(?:steps|approach)|"
+    r"first,?\s+plan|start\s+by\s+planning)\b"
+    r"|^\s*plan[.!]?\s*$",
+    re.IGNORECASE,
+)
 # Task 6: step_type inference — "reflect" language (self-critique / plan revision).
 _REFLECT_RE = re.compile(
     r"\b(reflect\s+on|self.critique|critique\s+(your|the)|review\s+your\s+(own\s+)?"
@@ -475,7 +490,25 @@ class RequestClassifier:
           4. structured response_format requested -> extract (schema-fill is
              low-stakes to verify downstream, same floor as extraction)
           5. "reflect"/"critique"/"review" language in the prompt -> reflect
-          6. fail-safe: mid-run (run_id set) with history already underway and
+          6. in-run planning language ("plan the steps", "how should I
+             approach", "what should I do next") -> plan. STEP_TYPE_FLOORS
+             defines a "plan" floor but nothing used to produce that step_type,
+             so a planning step fell to "unknown" and got NO floor — the one
+             step where a bad model wastes every step that follows. Measured:
+             "What should I do next?" routed to a free-tier model, while the
+             same prompt with an explicit step_type="plan" was floored to mid.
+
+             NOTE this is language-gated, not position-gated. Inferring "plan"
+             from "first step of a run" is tempting and wrong: server.py
+             auto-generates a run_id for every proxy request that arrives
+             without X-Flux-Run-Id, so "has a run_id and no history yet"
+             describes ordinary single-shot chat through the proxy just as well
+             as an agent's opening step, and flooring on it drags all plain
+             proxy traffic up to mid. A trajectory whose opening step carries
+             no planning language therefore still gets no floor; closing that
+             needs the caller to send step_type="plan" (or a real
+             client-supplied-run_id signal reaching the classifier).
+          7. fail-safe: mid-run (run_id set) with history already underway and
              no tools offered this step -> final_answer. An agent step that
              can't be confidently classified any other way but is clearly
              part of a tracked trajectory defaults to the highest defined
@@ -484,7 +517,11 @@ class RequestClassifier:
              real final-answer step unprotected. Single-shot, non-run
              requests (the common case for plain chat use of Flux) are
              unaffected and still resolve to "unknown".
-          7. no signal and not part of a run -> "unknown" (no floor applied)
+          8. no signal and not part of a run -> "unknown" (no floor applied)
+
+        The plan rule is gated on run_id for the same reason rule 7 is: outside
+        a tracked trajectory, "plan a trip to Kyoto" is ordinary chat and must
+        keep its cheap routing rather than being floored to mid.
         """
         if _FINAL_ANSWER_RE.search(request.raw_prompt):
             return "final_answer"
@@ -497,6 +534,8 @@ class RequestClassifier:
             return "extract"
         if _REFLECT_RE.search(request.raw_prompt):
             return "reflect"
+        if request.run_id and _PLAN_RE.search(request.raw_prompt):
+            return "plan"
         if request.run_id and history and not request.tools:
             return "final_answer"
         return "unknown"
