@@ -337,7 +337,7 @@ class TestPlanStepInference:
         """The contrast that makes the floor meaningful: identical text, no run."""
         engine = _engine()
         decision = asyncio.run(
-            engine.route(_req("What should I do next?", routing_priority="cost-optimized"))
+            engine.route(_req("How do I reset my password?", routing_priority="cost-optimized"))
         )
         assert decision.chosen_model.tier in ("free", "cheap")
 

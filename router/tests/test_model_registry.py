@@ -42,7 +42,7 @@ class TestRegistryLoadsFromJson:
         assert len(models) >= _HARDCODED_COUNT
         model_ids = {m.model_id for m in models}
         assert "gpt-4o" in model_ids
-        assert "claude-opus-4-20250514" in model_ids
+        assert "claude-opus-4-7" in model_ids
 
     def test_registry_falls_back_to_hardcoded(self, tmp_path, monkeypatch):
         # Point _load_registry_from_json at a non-existent path
@@ -84,7 +84,7 @@ class TestRegistryLoadsFromJson:
             "mistral-small-4": "cheap",
             "mistral-large-3": "mid",
             "gpt-oss-120b": "mid",
-            "llama-3.1-8b-instant": "cheap",
+            "gpt-oss-20b": "free",
             "qwen-3.6-27b": "cheap",
         }
         for model_id, tier in expected_tiers.items():
@@ -205,16 +205,16 @@ class TestLoadTrackingReset:
     def test_reset_clears_the_window_and_the_reported_load(self):
         reg = self._registry()
         for _ in range(5):
-            reg.update_load("gemini-2.0-flash-free")
-        assert reg._models["gemini-2.0-flash-free"].current_load_rpm == 5
+            reg.update_load("gpt-oss-20b")
+        assert reg._models["gpt-oss-20b"].current_load_rpm == 5
 
         reg.reset_load_tracking()
-        assert reg._models["gemini-2.0-flash-free"].current_load_rpm == 0
+        assert reg._models["gpt-oss-20b"].current_load_rpm == 0
         assert not reg._rpm_window
 
     def test_reset_makes_a_rate_limited_model_eligible_again(self):
         reg = self._registry()
-        model_id = "gemini-2.0-flash-free"
+        model_id = "gpt-oss-20b"
         cap = reg._models[model_id].rate_limit_rpm
         for _ in range(cap):
             reg.update_load(model_id)
@@ -229,7 +229,7 @@ class TestLoadTrackingReset:
         from router.config import RATE_LIMIT_SAFETY_MARGIN
 
         reg = self._registry()
-        model_id = "gemini-2.0-flash-free"
+        model_id = "gpt-oss-20b"
         cap = reg._models[model_id].rate_limit_rpm
         threshold = cap * RATE_LIMIT_SAFETY_MARGIN
 

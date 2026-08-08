@@ -32,7 +32,7 @@ class RunConfig:
     n: int = 50
     mode: str = "mock"  # "mock" | "live"
     source: str = "fixture"  # "fixture" | "hub"
-    judge_model: str = "claude-opus-4-20250514"
+    judge_model: str = "claude-opus-4-7"
     allow_code_exec: bool = False
     seed: str = "flux-eval"
     cache_dir: str | None = ".eval_cache"

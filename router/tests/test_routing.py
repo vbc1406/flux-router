@@ -1100,7 +1100,7 @@ class TestUltraCollapse:
     def test_formerly_ultra_models_are_premium(self):
         registry = ModelRegistry()
         models = {m.model_id: m for m in registry.all_available_models()}
-        for mid in ("o3", "o4-mini", "claude-opus-4-20250514-extended"):
+        for mid in ("o3", "o4-mini", "claude-opus-5"):
             assert mid in models, f"{mid} not found in registry"
             assert models[mid].tier == "premium", f"{mid} should be premium"
 

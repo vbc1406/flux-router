@@ -137,7 +137,7 @@ class TestStreaming:
         assert any('"content":"Hel"' in f for f in frames)
 
     def test_streaming_non_native_provider_synthesizes_single_chunk(self, client, _mock_call_model):
-        resp = client.post("/v1/chat/completions", json=_body("gemini-2.0-flash-lite", stream=True))
+        resp = client.post("/v1/chat/completions", json=_body("gemini-3.1-flash-lite", stream=True))
         assert resp.status_code == 200
         body = resp.text
         assert "mock response text" in body
@@ -1097,7 +1097,7 @@ class TestActualUsage:
             )
 
         monkeypatch.setattr(server._flux, "_call_model", mock_call)
-        body = _body("gemini-2.0-flash-lite", stream=True)
+        body = _body("gemini-3.1-flash-lite", stream=True)
         resp = client.post(
             "/v1/chat/completions", json=body, headers={"X-Flux-Tenant-Id": "synth-usage-tenant"}
         )

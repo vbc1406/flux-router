@@ -20,7 +20,7 @@ grades it:
 | `mid`               | a representative mid-tier model                   | a midpoint reference        |
 | `cheapest`          | always the cheapest capable model                 | quality + cost **floor**    |
 | `default_openai`    | `gpt-4o`                                           | OpenAI's general-purpose default |
-| `default_anthropic` | `claude-sonnet-4`                                 | Anthropic's default flagship |
+| `default_anthropic` | `claude-sonnet-4-6`                               | Anthropic's default flagship |
 | `default_google`    | `gemini-2.5-pro`                                  | Google's default flagship   |
 
 The `default_*` strategies represent the model a company would **normally call

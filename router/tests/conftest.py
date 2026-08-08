@@ -8,21 +8,29 @@ def _no_fallback_delays(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _reset_model_load_windows():
-    """Clear the registry's sliding-window RPM history between tests.
+def _reset_model_load_and_circuits():
+    """Clear the registry's RPM window and the per-provider circuit breaker
+    between tests — both are process-global state on the shared `server._flux`
+    singleton, so either one leaking between tests silently changes which
+    model a LATER, unrelated test gets routed to.
 
-    ModelRegistry tracks per-model requests-per-minute in a wall-clock window
-    and drops a model from the candidate list once it reaches
-    RATE_LIMIT_SAFETY_MARGIN of its stated cap. `gemini-2.0-flash-free` — the
-    model most proxy tests expect to be routed to — is capped at 15 RPM, so
-    the threshold is 15 * 0.85 = 12.75: the 13th proxy request in any 60
-    second window retires it and everything after that routes elsewhere.
+    RPM window: ModelRegistry tracks per-model requests-per-minute in a
+    wall-clock window and drops a model from the candidate list once it
+    reaches RATE_LIMIT_SAFETY_MARGIN of its stated cap — e.g. a free-tier
+    model capped at 15 RPM retires after its 13th request in any 60 second
+    window. A file dispatching 13+ completions to the same model silently
+    changed routing for tests in other files, surfacing as fallback chains
+    finding no candidates or usage records attributed to an unexpected model.
 
-    Nothing resets that between tests, so a file dispatching 13+ completions
-    silently changed which model LATER tests in OTHER files were routed to.
-    It surfaced as failures in test_server.py (fallback chains finding no
-    candidates, usage records attributed to an unexpected model) that pointed
-    nowhere near the file actually responsible.
+    Circuit breaker: CircuitBreaker trips a provider open after
+    CIRCUIT_BREAKER_FAILURE_THRESHOLD consecutive failures and excludes every
+    model from that provider until the recovery timeout elapses. Tests that
+    simulate persistent provider failures (auth errors, "always 429") trip
+    it; without a reset, the tripped provider stays excluded from every
+    later test in the process for up to CIRCUIT_BREAKER_RECOVERY_TIMEOUT
+    seconds — invisible when the free/cheap tiers have enough other-provider
+    headroom to mask it, and a wrong-model / no-fallback-candidates failure
+    in some unrelated later test when they don't.
     """
     try:
         from router import server
@@ -30,8 +38,10 @@ def _reset_model_load_windows():
         yield
         return
     server._flux._engine._registry.reset_load_tracking()
+    server._flux._engine._circuit_breaker.reset()
     yield
     server._flux._engine._registry.reset_load_tracking()
+    server._flux._engine._circuit_breaker.reset()
 
 
 @pytest.fixture(autouse=True)

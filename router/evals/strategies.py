@@ -33,10 +33,10 @@ def _capable(models: list[ModelOption], request: RoutingRequest) -> list[ModelOp
 # most expensive option. Grounded in 2025/26 API guidance (OpenAI's GPT-4o as the
 # best-value general default, Anthropic's Sonnet as the cost-effective flagship,
 # Google's Gemini Pro as the flagship). Mapped onto this repo's registry. Change a
-# value here to re-pin a baseline (e.g. claude-opus-4-20250514 for Anthropic).
+# value here to re-pin a baseline (e.g. claude-opus-4-7 for Anthropic).
 _PROVIDER_DEFAULTS = {
     "default_openai": "gpt-4o",
-    "default_anthropic": "claude-sonnet-4-20250514",
+    "default_anthropic": "claude-sonnet-4-6",
     "default_google": "gemini-2.5-pro",
 }
 

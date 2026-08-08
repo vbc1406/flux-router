@@ -65,6 +65,7 @@ INTERNAL_README.md
 routeengine.md
 weight review.txt
 ycapplication.md
+benchmark_verification_report.md
 
 # Review artifacts (never commit)
 flux_for_review.zip

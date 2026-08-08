@@ -29,41 +29,23 @@ log = structlog.get_logger(__name__)
 
 # Quality rating tables per task type (0.0 – 1.0).
 # Values reflect documented benchmark results and community evals.
-_FREE_FLASH_LITE_QUALITY: dict[str, float] = {
-    "simple_qa": 0.75,
-    "conversation": 0.80,
-    "translation": 0.75,
-    "classification": 0.70,
-    "extraction": 0.65,
-    "summarization": 0.65,
-    "code_generation": 0.50,
-    "code_review": 0.45,
-    "creative_writing": 0.55,
-    "analysis": 0.55,
-    "reasoning": 0.45,
-    "function_calling": 0.50,
-    "vision": 0.60,
-    "long_document": 0.60,
-    "unknown": 0.60,
-    "general": 0.60,
-}
-_LLAMA_70B_QUALITY: dict[str, float] = {
-    "simple_qa": 0.80,
-    "conversation": 0.82,
-    "translation": 0.78,
-    "classification": 0.82,
+_GPT_OSS_20B_QUALITY: dict[str, float] = {
+    "simple_qa": 0.82,
+    "conversation": 0.78,
+    "translation": 0.76,
+    "classification": 0.81,
     "extraction": 0.78,
-    "summarization": 0.78,
-    "code_generation": 0.75,
-    "code_review": 0.72,
-    "creative_writing": 0.72,
-    "analysis": 0.75,
-    "reasoning": 0.72,
-    "function_calling": 0.70,
+    "summarization": 0.76,
+    "code_generation": 0.84,
+    "code_review": 0.76,
+    "creative_writing": 0.68,
+    "analysis": 0.78,
+    "reasoning": 0.78,
+    "function_calling": 0.78,
     "vision": 0.00,
-    "long_document": 0.70,
-    "unknown": 0.72,
-    "general": 0.72,
+    "long_document": 0.72,
+    "unknown": 0.76,
+    "general": 0.77,
 }
 _MISTRAL_SMALL_QUALITY: dict[str, float] = {
     "simple_qa": 0.75,
@@ -82,24 +64,6 @@ _MISTRAL_SMALL_QUALITY: dict[str, float] = {
     "long_document": 0.65,
     "unknown": 0.68,
     "general": 0.68,
-}
-_FREE_FLASH_QUALITY: dict[str, float] = {
-    "simple_qa": 0.80,
-    "conversation": 0.82,
-    "translation": 0.80,
-    "classification": 0.80,
-    "extraction": 0.78,
-    "summarization": 0.78,
-    "code_generation": 0.72,
-    "code_review": 0.68,
-    "creative_writing": 0.70,
-    "analysis": 0.72,
-    "reasoning": 0.68,
-    "function_calling": 0.70,
-    "vision": 0.80,
-    "long_document": 0.78,
-    "unknown": 0.72,
-    "general": 0.72,
 }
 _HAIKU_QUALITY: dict[str, float] = {
     "simple_qa": 0.82,
@@ -137,42 +101,6 @@ _GPT4O_MINI_QUALITY: dict[str, float] = {
     "unknown": 0.76,
     "general": 0.76,
 }
-_FLASH_PAID_QUALITY: dict[str, float] = {
-    "simple_qa": 0.82,
-    "conversation": 0.82,
-    "translation": 0.83,
-    "classification": 0.82,
-    "extraction": 0.80,
-    "summarization": 0.80,
-    "code_generation": 0.76,
-    "code_review": 0.74,
-    "creative_writing": 0.74,
-    "analysis": 0.76,
-    "reasoning": 0.72,
-    "function_calling": 0.76,
-    "vision": 0.85,
-    "long_document": 0.83,
-    "unknown": 0.78,
-    "general": 0.78,
-}
-_SONNET_QUALITY: dict[str, float] = {
-    "simple_qa": 0.90,
-    "conversation": 0.88,
-    "translation": 0.88,
-    "classification": 0.90,
-    "extraction": 0.90,
-    "summarization": 0.88,
-    "code_generation": 0.92,
-    "code_review": 0.90,
-    "creative_writing": 0.87,
-    "analysis": 0.90,
-    "reasoning": 0.88,
-    "function_calling": 0.90,
-    "vision": 0.85,
-    "long_document": 0.88,
-    "unknown": 0.88,
-    "general": 0.88,
-}
 _GPT4O_QUALITY: dict[str, float] = {
     "simple_qa": 0.88,
     "conversation": 0.87,
@@ -209,60 +137,6 @@ _GEMINI25_PRO_QUALITY: dict[str, float] = {
     "unknown": 0.87,
     "general": 0.87,
 }
-_OPUS_QUALITY: dict[str, float] = {
-    "simple_qa": 0.93,
-    "conversation": 0.93,
-    "translation": 0.92,
-    "classification": 0.93,
-    "extraction": 0.93,
-    "summarization": 0.93,
-    "code_generation": 0.95,
-    "code_review": 0.95,
-    "creative_writing": 0.92,
-    "analysis": 0.95,
-    "reasoning": 0.93,
-    "function_calling": 0.92,
-    "vision": 0.90,
-    "long_document": 0.93,
-    "unknown": 0.92,
-    "general": 0.92,
-}
-_GPT45_PREVIEW_QUALITY: dict[str, float] = {
-    "simple_qa": 0.90,
-    "conversation": 0.92,
-    "translation": 0.90,
-    "classification": 0.90,
-    "extraction": 0.90,
-    "summarization": 0.90,
-    "code_generation": 0.91,
-    "code_review": 0.91,
-    "creative_writing": 0.93,
-    "analysis": 0.92,
-    "reasoning": 0.90,
-    "function_calling": 0.93,
-    "vision": 0.91,
-    "long_document": 0.88,
-    "unknown": 0.90,
-    "general": 0.90,
-}
-_GEMINI25_PRO_THINKING_QUALITY: dict[str, float] = {
-    "simple_qa": 0.90,
-    "conversation": 0.87,
-    "translation": 0.88,
-    "classification": 0.90,
-    "extraction": 0.90,
-    "summarization": 0.90,
-    "code_generation": 0.91,
-    "code_review": 0.91,
-    "creative_writing": 0.85,
-    "analysis": 0.93,
-    "reasoning": 0.95,
-    "function_calling": 0.88,
-    "vision": 0.89,
-    "long_document": 0.94,
-    "unknown": 0.90,
-    "general": 0.90,
-}
 _O3_QUALITY: dict[str, float] = {
     "simple_qa": 0.88,
     "conversation": 0.80,
@@ -298,24 +172,6 @@ _O4_MINI_QUALITY: dict[str, float] = {
     "long_document": 0.87,
     "unknown": 0.85,
     "general": 0.85,
-}
-_OPUS_EXTENDED_QUALITY: dict[str, float] = {
-    "simple_qa": 0.92,
-    "conversation": 0.90,
-    "translation": 0.92,
-    "classification": 0.94,
-    "extraction": 0.94,
-    "summarization": 0.94,
-    "code_generation": 0.97,
-    "code_review": 0.97,
-    "creative_writing": 0.93,
-    "analysis": 0.97,
-    "reasoning": 0.99,
-    "function_calling": 0.93,
-    "vision": 0.91,
-    "long_document": 0.95,
-    "unknown": 0.93,
-    "general": 0.93,
 }
 
 # Sensitivity levels allowed per provider category.
@@ -380,51 +236,22 @@ def _build_hardcoded_registry() -> dict[str, ModelOption]:
     """Instantiate the canonical model catalog with verified 2025 pricing (hardcoded fallback)."""
     models: list[ModelOption] = [
         # ── FREE TIER ────────────────────────────────────────────────────────
-        ModelOption(
-            provider="google",
-            model_id="gemini-2.0-flash-lite",
-            display_name="Gemini 2.0 Flash Lite (free)",
-            tier="free",
-            cost_per_1k_input=0.0,
-            cost_per_1k_output=0.0,
-            max_context_window=1_048_576,
-            max_output_tokens=8_192,
-            capabilities=["vision"],
-            supports_streaming=True,
-            quality_ratings=_FREE_FLASH_LITE_QUALITY,
-            avg_latency_ms=400,
-            rate_limit_rpm=15,  # Free tier: 15 RPM
-            allowed_sensitivity_levels=_PUBLIC_INTERNAL,
-        ),
-        ModelOption(
-            provider="google",
-            model_id="gemini-2.0-flash-free",
-            display_name="Gemini 2.0 Flash (free)",
-            tier="free",
-            cost_per_1k_input=0.0,
-            cost_per_1k_output=0.0,
-            max_context_window=1_048_576,
-            max_output_tokens=8_192,
-            capabilities=["vision"],
-            supports_streaming=True,
-            quality_ratings=_FREE_FLASH_QUALITY,
-            avg_latency_ms=450,
-            rate_limit_rpm=15,
-            allowed_sensitivity_levels=_PUBLIC_INTERNAL,
-        ),
+        # gemini-2.0-flash-lite, gemini-2.0-flash-free, llama-3.3-70b removed:
+        # Google shut down the 2.0 Flash line 2026-06-01 and Groq retired
+        # Llama 3.3 70B 2026-08-16 (see models.json last_updated 2026-08-08).
         ModelOption(
             provider="groq",
-            model_id="llama-3.3-70b",
-            display_name="Llama 3.3 70B (Groq free)",
+            model_id="gpt-oss-20b",
+            display_name="GPT-OSS 20B (Groq free)",
             tier="free",
             cost_per_1k_input=0.0,
             cost_per_1k_output=0.0,
-            max_context_window=128_000,
-            max_output_tokens=8_192,
+            max_context_window=131_072,
+            max_output_tokens=32_768,
             capabilities=[],
             supports_streaming=True,
-            quality_ratings=_LLAMA_70B_QUALITY,
-            avg_latency_ms=250,  # Groq is extremely fast
+            quality_ratings=_GPT_OSS_20B_QUALITY,
+            avg_latency_ms=300,  # Groq is extremely fast
             rate_limit_rpm=30,
             allowed_sensitivity_levels=_PUBLIC_INTERNAL,
         ),
@@ -479,41 +306,11 @@ def _build_hardcoded_registry() -> dict[str, ModelOption]:
             rate_limit_rpm=500,
             allowed_sensitivity_levels=_ALL_LEVELS,
         ),
-        # gemini-2.0-flash paid: $0.10/M input, $0.40/M output (Google 2025)
-        ModelOption(
-            provider="google",
-            model_id="gemini-2.0-flash",
-            display_name="Gemini 2.0 Flash (paid)",
-            tier="cheap",
-            cost_per_1k_input=0.0001,
-            cost_per_1k_output=0.0004,
-            max_context_window=1_048_576,
-            max_output_tokens=8_192,
-            capabilities=["vision"],
-            supports_streaming=True,
-            quality_ratings=_FLASH_PAID_QUALITY,
-            avg_latency_ms=500,
-            rate_limit_rpm=2000,
-            allowed_sensitivity_levels=_NO_RESTRICTED,
-        ),
+        # gemini-2.0-flash removed: Google shut down the entire 2.0 Flash line
+        # 2026-06-01 (see models.json last_updated 2026-08-08).
         # ── MID TIER ─────────────────────────────────────────────────────────
-        # claude-sonnet-4: $3.00/M input, $15.00/M output (Anthropic 2025)
-        ModelOption(
-            provider="anthropic",
-            model_id="claude-sonnet-4-20250514",
-            display_name="Claude Sonnet 4",
-            tier="mid",
-            cost_per_1k_input=0.003,
-            cost_per_1k_output=0.015,
-            max_context_window=200_000,
-            max_output_tokens=8_192,
-            capabilities=["vision", "function_calling"],
-            supports_streaming=True,
-            quality_ratings=_SONNET_QUALITY,
-            avg_latency_ms=2000,
-            rate_limit_rpm=500,
-            allowed_sensitivity_levels=_ALL_LEVELS,
-        ),
+        # claude-sonnet-4-20250514 removed: retired by Anthropic 2026-06-15,
+        # replaced in the routing pool by claude-sonnet-4-6 (loaded via models.json).
         # gpt-4o: $2.50/M input, $10.00/M output (OpenAI 2025)
         ModelOption(
             provider="openai",
@@ -549,57 +346,14 @@ def _build_hardcoded_registry() -> dict[str, ModelOption]:
             allowed_sensitivity_levels=_NO_RESTRICTED,
         ),
         # ── PREMIUM TIER ─────────────────────────────────────────────────────
-        # claude-opus-4: $15.00/M input, $75.00/M output (Anthropic 2025)
-        ModelOption(
-            provider="anthropic",
-            model_id="claude-opus-4-20250514",
-            display_name="Claude Opus 4",
-            tier="premium",
-            cost_per_1k_input=0.015,
-            cost_per_1k_output=0.075,
-            max_context_window=200_000,
-            max_output_tokens=8_192,
-            capabilities=["vision", "function_calling"],
-            supports_streaming=True,
-            quality_ratings=_OPUS_QUALITY,
-            avg_latency_ms=4000,
-            rate_limit_rpm=200,
-            allowed_sensitivity_levels=_ALL_LEVELS,
-        ),
-        # gpt-4.5-preview: $75/M input, $150/M output (OpenAI 2025)
-        ModelOption(
-            provider="openai",
-            model_id="gpt-4.5-preview",
-            display_name="GPT-4.5 Preview",
-            tier="premium",
-            cost_per_1k_input=0.075,
-            cost_per_1k_output=0.150,
-            max_context_window=128_000,
-            max_output_tokens=16_384,
-            capabilities=["vision", "function_calling"],
-            supports_streaming=True,
-            quality_ratings=_GPT45_PREVIEW_QUALITY,
-            avg_latency_ms=5000,
-            rate_limit_rpm=100,
-            allowed_sensitivity_levels=_ALL_LEVELS,
-        ),
-        # gemini-2.5-pro with thinking: same model, different config tier
-        ModelOption(
-            provider="google",
-            model_id="gemini-2.5-pro-thinking",
-            display_name="Gemini 2.5 Pro (thinking)",
-            tier="premium",
-            cost_per_1k_input=0.00350,
-            cost_per_1k_output=0.015,
-            max_context_window=1_048_576,
-            max_output_tokens=16_384,
-            capabilities=["vision", "function_calling"],
-            supports_streaming=True,
-            quality_ratings=_GEMINI25_PRO_THINKING_QUALITY,
-            avg_latency_ms=6000,
-            rate_limit_rpm=100,
-            allowed_sensitivity_levels=_NO_RESTRICTED,
-        ),
+        # claude-opus-4-20250514 removed: retired by Anthropic 2026-06-15,
+        # replaced in the routing pool by claude-opus-4-7 (loaded via models.json).
+        # gpt-4.5-preview removed: OpenAI retired it 2025-07-14 (was already
+        # is_available=false in models.json; this fallback catalog just never
+        # reflected that it's gone entirely, not merely disabled).
+        # gemini-2.5-pro-thinking removed: never a real, separate model SKU —
+        # "thinking" is a request-level config (thinkingConfig) on gemini-2.5-pro,
+        # not its own model id.
         # ── PREMIUM TIER (continued — formerly "ultra") ───────────────────────
         # Change 8: ultra tier merged into premium. These models were previously
         # tagged "ultra"; they are now premium alongside Opus 4, GPT-4.5, and
@@ -638,23 +392,10 @@ def _build_hardcoded_registry() -> dict[str, ModelOption]:
             rate_limit_rpm=100,
             allowed_sensitivity_levels=_ALL_LEVELS,
         ),
-        # claude-opus-4 with extended thinking
-        ModelOption(
-            provider="anthropic",
-            model_id="claude-opus-4-20250514-extended",
-            display_name="Claude Opus 4 (extended thinking)",
-            tier="premium",
-            cost_per_1k_input=0.015,
-            cost_per_1k_output=0.075,
-            max_context_window=200_000,
-            max_output_tokens=16_000,
-            capabilities=["vision", "function_calling"],
-            supports_streaming=True,
-            quality_ratings=_OPUS_EXTENDED_QUALITY,
-            avg_latency_ms=20_000,
-            rate_limit_rpm=50,
-            allowed_sensitivity_levels=_ALL_LEVELS,
-        ),
+        # claude-opus-4-20250514-extended removed: never a real, separate model
+        # SKU — extended thinking is the `thinking.type: "enabled"` request
+        # parameter on a base model, not its own id; the base model
+        # (claude-opus-4-20250514) is retired anyway (see above).
     ]
     return {m.model_id: m for m in models}
 

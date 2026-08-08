@@ -5,7 +5,7 @@ Examples:
     python -m router.evals                         # mock, offline, CI-safe
     python -m router.evals --datasets gsm8k,mmlu --n 100
     python -m router.evals --live --n 30 --allow-code-exec
-    python -m router.evals --live --judge-model claude-opus-4-20250514 --md EVALS_RESULT.md
+    python -m router.evals --live --judge-model claude-opus-4-7 --md EVALS_RESULT.md
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
                    help="make real provider calls (needs *_API_KEY env vars); implies --source hub")
     p.add_argument("--source", choices=["fixture", "hub"], default=None,
                    help="dataset source (default: fixture, or hub when --live)")
-    p.add_argument("--judge-model", default="claude-opus-4-20250514",
+    p.add_argument("--judge-model", default="claude-opus-4-7",
                    help="model id used as the LLM judge for open-ended samples (live only)")
     p.add_argument("--allow-code-exec", action="store_true",
                    help="permit executing live model-generated code for HumanEval (off by default)")

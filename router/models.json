@@ -1,124 +1,6 @@
 {
-  "last_updated": "2026-08-02",
+  "last_updated": "2026-08-08",
   "models": [
-    {
-      "provider": "google",
-      "model_id": "gemini-2.0-flash-lite",
-      "display_name": "Gemini 2.0 Flash Lite (free)",
-      "tier": "free",
-      "cost_per_1k_input": 0.0,
-      "cost_per_1k_output": 0.0,
-      "max_context_window": 1048576,
-      "max_output_tokens": 8192,
-      "capabilities": [
-        "vision"
-      ],
-      "supports_streaming": true,
-      "avg_latency_ms": 400,
-      "rate_limit_rpm": 15,
-      "allowed_sensitivity_levels": [
-        "public",
-        "internal"
-      ],
-      "quality_ratings": {
-        "simple_qa": 0.75,
-        "conversation": 0.8,
-        "translation": 0.75,
-        "classification": 0.7,
-        "extraction": 0.65,
-        "summarization": 0.65,
-        "code_generation": 0.5,
-        "code_review": 0.45,
-        "creative_writing": 0.55,
-        "analysis": 0.55,
-        "reasoning": 0.45,
-        "function_calling": 0.5,
-        "vision": 0.6,
-        "long_document": 0.6,
-        "unknown": 0.6,
-        "general": 0.6
-      },
-      "supports_tools": true,
-      "supports_structured_output": true
-    },
-    {
-      "provider": "google",
-      "model_id": "gemini-2.0-flash-free",
-      "display_name": "Gemini 2.0 Flash (free)",
-      "tier": "free",
-      "cost_per_1k_input": 0.0,
-      "cost_per_1k_output": 0.0,
-      "max_context_window": 1048576,
-      "max_output_tokens": 8192,
-      "capabilities": [
-        "vision"
-      ],
-      "supports_streaming": true,
-      "avg_latency_ms": 450,
-      "rate_limit_rpm": 15,
-      "allowed_sensitivity_levels": [
-        "public",
-        "internal"
-      ],
-      "quality_ratings": {
-        "simple_qa": 0.8,
-        "conversation": 0.82,
-        "translation": 0.8,
-        "classification": 0.8,
-        "extraction": 0.78,
-        "summarization": 0.78,
-        "code_generation": 0.72,
-        "code_review": 0.68,
-        "creative_writing": 0.7,
-        "analysis": 0.72,
-        "reasoning": 0.68,
-        "function_calling": 0.7,
-        "vision": 0.8,
-        "long_document": 0.78,
-        "unknown": 0.72,
-        "general": 0.72
-      },
-      "supports_tools": true,
-      "supports_structured_output": true
-    },
-    {
-      "provider": "groq",
-      "model_id": "llama-3.3-70b",
-      "display_name": "Llama 3.3 70B (Groq free)",
-      "tier": "free",
-      "cost_per_1k_input": 0.0,
-      "cost_per_1k_output": 0.0,
-      "max_context_window": 128000,
-      "max_output_tokens": 8192,
-      "capabilities": [],
-      "supports_streaming": true,
-      "avg_latency_ms": 250,
-      "rate_limit_rpm": 30,
-      "allowed_sensitivity_levels": [
-        "public",
-        "internal"
-      ],
-      "quality_ratings": {
-        "simple_qa": 0.86,
-        "conversation": 0.82,
-        "translation": 0.8,
-        "classification": 0.84,
-        "extraction": 0.8,
-        "summarization": 0.8,
-        "code_generation": 0.84,
-        "code_review": 0.72,
-        "creative_writing": 0.74,
-        "analysis": 0.76,
-        "reasoning": 0.62,
-        "function_calling": 0.78,
-        "vision": 0.0,
-        "long_document": 0.74,
-        "unknown": 0.76,
-        "general": 0.78
-      },
-      "supports_tools": true,
-      "supports_structured_output": true
-    },
     {
       "provider": "groq",
       "model_id": "llama-4-scout",
@@ -235,6 +117,44 @@
         "long_document": 0.7,
         "unknown": 0.72,
         "general": 0.72
+      },
+      "supports_tools": true,
+      "supports_structured_output": true
+    },
+    {
+      "provider": "groq",
+      "model_id": "gpt-oss-20b",
+      "display_name": "GPT-OSS 20B (Groq free)",
+      "tier": "free",
+      "cost_per_1k_input": 0.0,
+      "cost_per_1k_output": 0.0,
+      "max_context_window": 131072,
+      "max_output_tokens": 32768,
+      "capabilities": [],
+      "supports_streaming": true,
+      "avg_latency_ms": 300,
+      "rate_limit_rpm": 30,
+      "allowed_sensitivity_levels": [
+        "public",
+        "internal"
+      ],
+      "quality_ratings": {
+        "simple_qa": 0.82,
+        "conversation": 0.78,
+        "translation": 0.76,
+        "classification": 0.81,
+        "extraction": 0.78,
+        "summarization": 0.76,
+        "code_generation": 0.84,
+        "code_review": 0.76,
+        "creative_writing": 0.68,
+        "analysis": 0.78,
+        "reasoning": 0.78,
+        "function_calling": 0.78,
+        "vision": 0.0,
+        "long_document": 0.72,
+        "unknown": 0.76,
+        "general": 0.77
       },
       "supports_tools": true,
       "supports_structured_output": true
@@ -422,47 +342,6 @@
       "supports_structured_output": true
     },
     {
-      "provider": "google",
-      "model_id": "gemini-2.0-flash",
-      "display_name": "Gemini 2.0 Flash (paid)",
-      "tier": "cheap",
-      "cost_per_1k_input": 0.0001,
-      "cost_per_1k_output": 0.0004,
-      "max_context_window": 1048576,
-      "max_output_tokens": 8192,
-      "capabilities": [
-        "vision"
-      ],
-      "supports_streaming": true,
-      "avg_latency_ms": 500,
-      "rate_limit_rpm": 2000,
-      "allowed_sensitivity_levels": [
-        "public",
-        "internal",
-        "confidential"
-      ],
-      "quality_ratings": {
-        "simple_qa": 0.82,
-        "conversation": 0.84,
-        "translation": 0.82,
-        "classification": 0.82,
-        "extraction": 0.8,
-        "summarization": 0.8,
-        "code_generation": 0.75,
-        "code_review": 0.7,
-        "creative_writing": 0.74,
-        "analysis": 0.78,
-        "reasoning": 0.72,
-        "function_calling": 0.76,
-        "vision": 0.82,
-        "long_document": 0.82,
-        "unknown": 0.76,
-        "general": 0.78
-      },
-      "supports_tools": true,
-      "supports_structured_output": true
-    },
-    {
       "provider": "anthropic",
       "model_id": "claude-sonnet-4-6",
       "display_name": "Claude Sonnet 4.6",
@@ -501,53 +380,6 @@
         "long_document": 0.86,
         "unknown": 0.86,
         "general": 0.88
-      },
-      "supports_tools": true,
-      "supports_structured_output": true,
-      "cache_read_cost_per_1m": 0.3,
-      "cache_write_cost_per_1m": 3.75,
-      "cache_min_tokens": 1024,
-      "cache_ttl_seconds": 300
-    },
-    {
-      "provider": "anthropic",
-      "model_id": "claude-sonnet-4-20250514",
-      "display_name": "Claude Sonnet 4",
-      "tier": "mid",
-      "cost_per_1k_input": 0.003,
-      "cost_per_1k_output": 0.015,
-      "max_context_window": 200000,
-      "max_output_tokens": 8192,
-      "capabilities": [
-        "vision",
-        "function_calling"
-      ],
-      "supports_streaming": true,
-      "avg_latency_ms": 2000,
-      "rate_limit_rpm": 500,
-      "allowed_sensitivity_levels": [
-        "public",
-        "internal",
-        "confidential",
-        "restricted"
-      ],
-      "quality_ratings": {
-        "simple_qa": 0.85,
-        "conversation": 0.87,
-        "translation": 0.84,
-        "classification": 0.86,
-        "extraction": 0.84,
-        "summarization": 0.84,
-        "code_generation": 0.9,
-        "code_review": 0.86,
-        "creative_writing": 0.86,
-        "analysis": 0.84,
-        "reasoning": 0.78,
-        "function_calling": 0.84,
-        "vision": 0.8,
-        "long_document": 0.82,
-        "unknown": 0.82,
-        "general": 0.84
       },
       "supports_tools": true,
       "supports_structured_output": true,
@@ -782,53 +614,6 @@
       "cache_ttl_seconds": 300
     },
     {
-      "provider": "anthropic",
-      "model_id": "claude-opus-4-20250514",
-      "display_name": "Claude Opus 4",
-      "tier": "premium",
-      "cost_per_1k_input": 0.015,
-      "cost_per_1k_output": 0.075,
-      "max_context_window": 200000,
-      "max_output_tokens": 8192,
-      "capabilities": [
-        "vision",
-        "function_calling"
-      ],
-      "supports_streaming": true,
-      "avg_latency_ms": 4000,
-      "rate_limit_rpm": 200,
-      "allowed_sensitivity_levels": [
-        "public",
-        "internal",
-        "confidential",
-        "restricted"
-      ],
-      "quality_ratings": {
-        "simple_qa": 0.9,
-        "conversation": 0.91,
-        "translation": 0.88,
-        "classification": 0.9,
-        "extraction": 0.9,
-        "summarization": 0.91,
-        "code_generation": 0.92,
-        "code_review": 0.9,
-        "creative_writing": 0.92,
-        "analysis": 0.9,
-        "reasoning": 0.91,
-        "function_calling": 0.88,
-        "vision": 0.86,
-        "long_document": 0.88,
-        "unknown": 0.88,
-        "general": 0.9
-      },
-      "supports_tools": true,
-      "supports_structured_output": true,
-      "cache_read_cost_per_1m": 1.5,
-      "cache_write_cost_per_1m": 18.75,
-      "cache_min_tokens": 1024,
-      "cache_ttl_seconds": 300
-    },
-    {
       "provider": "openai",
       "model_id": "gpt-5.5",
       "display_name": "GPT-5.5",
@@ -966,48 +751,6 @@
       "supports_structured_output": true
     },
     {
-      "provider": "google",
-      "model_id": "gemini-2.5-pro-thinking",
-      "display_name": "Gemini 2.5 Pro (thinking)",
-      "tier": "premium",
-      "cost_per_1k_input": 0.0035,
-      "cost_per_1k_output": 0.015,
-      "max_context_window": 1048576,
-      "max_output_tokens": 16384,
-      "capabilities": [
-        "vision",
-        "function_calling"
-      ],
-      "supports_streaming": true,
-      "avg_latency_ms": 6000,
-      "rate_limit_rpm": 100,
-      "allowed_sensitivity_levels": [
-        "public",
-        "internal",
-        "confidential"
-      ],
-      "quality_ratings": {
-        "simple_qa": 0.9,
-        "conversation": 0.88,
-        "translation": 0.88,
-        "classification": 0.9,
-        "extraction": 0.88,
-        "summarization": 0.88,
-        "code_generation": 0.88,
-        "code_review": 0.84,
-        "creative_writing": 0.86,
-        "analysis": 0.92,
-        "reasoning": 0.92,
-        "function_calling": 0.86,
-        "vision": 0.86,
-        "long_document": 0.92,
-        "unknown": 0.88,
-        "general": 0.9
-      },
-      "supports_tools": true,
-      "supports_structured_output": true
-    },
-    {
       "provider": "openai",
       "model_id": "o3",
       "display_name": "o3",
@@ -1098,53 +841,6 @@
       "supports_structured_output": true,
       "cache_read_cost_per_1m": 0.11,
       "cache_write_cost_per_1m": 1.375,
-      "cache_min_tokens": 1024,
-      "cache_ttl_seconds": 300
-    },
-    {
-      "provider": "anthropic",
-      "model_id": "claude-opus-4-20250514-extended",
-      "display_name": "Claude Opus 4 (extended thinking)",
-      "tier": "premium",
-      "cost_per_1k_input": 0.015,
-      "cost_per_1k_output": 0.075,
-      "max_context_window": 200000,
-      "max_output_tokens": 16000,
-      "capabilities": [
-        "vision",
-        "function_calling"
-      ],
-      "supports_streaming": true,
-      "avg_latency_ms": 20000,
-      "rate_limit_rpm": 50,
-      "allowed_sensitivity_levels": [
-        "public",
-        "internal",
-        "confidential",
-        "restricted"
-      ],
-      "quality_ratings": {
-        "simple_qa": 0.9,
-        "conversation": 0.91,
-        "translation": 0.88,
-        "classification": 0.9,
-        "extraction": 0.9,
-        "summarization": 0.92,
-        "code_generation": 0.93,
-        "code_review": 0.92,
-        "creative_writing": 0.92,
-        "analysis": 0.92,
-        "reasoning": 0.94,
-        "function_calling": 0.88,
-        "vision": 0.86,
-        "long_document": 0.9,
-        "unknown": 0.9,
-        "general": 0.92
-      },
-      "supports_tools": true,
-      "supports_structured_output": true,
-      "cache_read_cost_per_1m": 1.5,
-      "cache_write_cost_per_1m": 18.75,
       "cache_min_tokens": 1024,
       "cache_ttl_seconds": 300
     },
@@ -1291,44 +987,6 @@
     },
     {
       "provider": "groq",
-      "model_id": "llama-3.1-8b-instant",
-      "display_name": "Llama 3.1 8B Instant (Groq)",
-      "tier": "cheap",
-      "cost_per_1k_input": 0.00005,
-      "cost_per_1k_output": 0.00008,
-      "max_context_window": 128000,
-      "max_output_tokens": 8192,
-      "capabilities": [],
-      "supports_streaming": true,
-      "avg_latency_ms": 150,
-      "rate_limit_rpm": 1000,
-      "allowed_sensitivity_levels": [
-        "public",
-        "internal"
-      ],
-      "quality_ratings": {
-        "simple_qa": 0.74,
-        "conversation": 0.72,
-        "translation": 0.68,
-        "classification": 0.72,
-        "extraction": 0.66,
-        "summarization": 0.68,
-        "code_generation": 0.62,
-        "code_review": 0.55,
-        "creative_writing": 0.62,
-        "analysis": 0.6,
-        "reasoning": 0.48,
-        "function_calling": 0.62,
-        "vision": 0.0,
-        "long_document": 0.58,
-        "unknown": 0.62,
-        "general": 0.64
-      },
-      "supports_tools": true,
-      "supports_structured_output": true
-    },
-    {
-      "provider": "groq",
       "model_id": "gpt-oss-120b",
       "display_name": "GPT-OSS 120B (Groq)",
       "tier": "mid",
@@ -1354,13 +1012,13 @@
         "code_generation": 0.9,
         "code_review": 0.82,
         "creative_writing": 0.74,
-        "analysis": 0.85,
-        "reasoning": 0.86,
+        "analysis": 0.82,
+        "reasoning": 0.82,
         "function_calling": 0.84,
         "vision": 0.0,
         "long_document": 0.78,
-        "unknown": 0.82,
-        "general": 0.84
+        "unknown": 0.79,
+        "general": 0.81
       },
       "supports_tools": true,
       "supports_structured_output": true

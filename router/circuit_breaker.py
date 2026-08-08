@@ -147,3 +147,13 @@ class CircuitBreaker:
         with self._lock:
             entry = self._providers.get(provider)
             return entry["failures"] if entry else 0
+
+    def reset(self) -> None:
+        """Clear all per-provider state, closing every circuit.
+
+        For test isolation: this breaker is process-global (shared across
+        every route() call), so simulated failures in one test otherwise
+        leak into the next as a tripped provider circuit.
+        """
+        with self._lock:
+            self._providers.clear()
