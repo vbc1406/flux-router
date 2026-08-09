@@ -105,6 +105,12 @@ async def run_eval(config: RunConfig) -> RunOutput:
             raw_prompt=sample.prompt,
             user_id="flux-eval",
             required_capabilities=sample.metadata.get("required_capabilities", []),
+            # Item 6: agentic-dataset samples carry an explicit step_type
+            # (plan/tool_select/...) so routing for those cases is
+            # step-type-floor-aware (config.STEP_TYPE_FLOORS), same as a real
+            # agent loop passing step_type= — not just task-type-classified
+            # like every other dataset here.
+            step_type=sample.metadata.get("step_type"),
             # Disable A/B exploration so the flux strategy is deterministic and
             # the published tradeoff numbers reproduce across runs.
             exploration_rate=0.0,

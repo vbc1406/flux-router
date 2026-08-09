@@ -35,7 +35,7 @@ class LiveCompletionError(Exception):
 # Fallback quality by tier when a model has no rating for the task type.
 _TIER_DEFAULT_QUALITY = {"free": 0.55, "cheap": 0.70, "mid": 0.82, "premium": 0.92}
 
-_OBJECTIVE_GRADERS = {"gsm8k", "mmlu", "humaneval"}
+_OBJECTIVE_GRADERS = {"gsm8k", "mmlu", "humaneval", "agentic_tool_select"}
 
 
 def _sim_quality(model: ModelOption, task_type: str) -> float:
@@ -96,6 +96,15 @@ def _simulated_text(sample: EvalSample, correct: bool, rng: random.Random) -> st
         else:
             body = "    raise NotImplementedError\n"
         return header + body
+    if sample.grader == "agentic_tool_select":
+        expected = sample.metadata.get("expected_tool", "")
+        offered = [
+            t.get("function", {}).get("name")
+            for t in sample.metadata.get("tools", [])
+            if t.get("function", {}).get("name")
+        ]
+        wrong_candidates = [n for n in offered if n != expected]
+        return expected if correct else rng.choice(wrong_candidates or [expected])
     # open-ended — generic plausible prose; the mock judge uses sim_quality.
     return (
         f"Here is a thoughtful response to the request:\n\n"
@@ -176,9 +185,16 @@ async def _live_completion(
     )
     t0 = time.perf_counter()
     try:
-        text = await call_provider(model, request, key)
+        # Bugfix: call_provider() returns a ProviderResult, not a bare str —
+        # this used to store the whole ProviderResult object as `text`,
+        # which every downstream grader (string ops on completion.text) and
+        # estimate_tokens(text) would have blown up on the moment this path
+        # was actually exercised with real keys. Untested before now (no
+        # test covered _live_completion at all — see test_evals.py).
+        result = await call_provider(model, request, key)
     except ProviderCallError as exc:
         raise LiveCompletionError(f"provider call failed for {model.model_id}: {exc}") from exc
+    text = result.text
     latency_ms = int((time.perf_counter() - t0) * 1000)
 
     input_tokens = estimate_tokens(sample.prompt)

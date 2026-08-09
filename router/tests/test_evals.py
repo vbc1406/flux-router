@@ -80,6 +80,29 @@ class TestDatasets:
         samples = load_datasets(list(DATASETS), n=50)
         assert len(samples) == sum(len(load_dataset(n, n=50)) for n in DATASETS)
 
+    def test_agentic_covers_all_five_step_types(self):
+        samples = load_dataset("agentic", n=50)
+        step_types = {s.metadata["step_type"] for s in samples}
+        assert step_types == {
+            "plan",
+            "tool_select",
+            "tool_result_summarize",
+            "reflect",
+            "final_answer",
+        }
+
+    def test_agentic_tool_select_is_objectively_graded(self):
+        samples = load_dataset("agentic", n=50)
+        tool_select = next(s for s in samples if s.metadata["step_type"] == "tool_select")
+        assert tool_select.grader == "agentic_tool_select"
+        assert tool_select.reference == tool_select.metadata["expected_tool"]
+
+    def test_agentic_other_step_types_are_judge_graded(self):
+        samples = load_dataset("agentic", n=50)
+        for s in samples:
+            if s.metadata["step_type"] != "tool_select":
+                assert s.grader == "llm_judge"
+
 
 # ── Objective graders ──────────────────────────────────────────────────────
 
@@ -110,6 +133,32 @@ class TestObjectiveGraders:
         completion = _completion(s.metadata["prompt_header"] + s.reference, simulated=False)
         with pytest.raises(RuntimeError, match="no security sandbox"):
             _run(grade(s, completion, allow_code_exec=True))
+
+    def test_agentic_tool_select_correct(self):
+        samples = load_dataset("agentic", n=50)
+        s = next(x for x in samples if x.metadata["step_type"] == "tool_select")
+        q, ok = _run(grade(s, _completion(s.metadata["expected_tool"])))
+        assert (q, ok) == (1.0, True)
+
+    def test_agentic_tool_select_wrong_tool(self):
+        samples = load_dataset("agentic", n=50)
+        s = next(x for x in samples if x.metadata["step_type"] == "tool_select")
+        wrong = next(
+            t["function"]["name"]
+            for t in s.metadata["tools"]
+            if t["function"]["name"] != s.metadata["expected_tool"]
+        )
+        q, ok = _run(grade(s, _completion(wrong)))
+        assert (q, ok) == (0.0, False)
+
+    def test_agentic_tool_select_ignores_prose_around_the_name(self):
+        """A real model rarely answers with the bare identifier alone —
+        this must still match through natural-language wrapping."""
+        samples = load_dataset("agentic", n=50)
+        s = next(x for x in samples if x.metadata["step_type"] == "tool_select")
+        text = f"I would call the `{s.metadata['expected_tool']}` function."
+        q, ok = _run(grade(s, _completion(text)))
+        assert (q, ok) == (1.0, True)
 
     def test_removed_code_exec_cli_flag_fails_clearly(self):
         args = eval_cli._parse_args(["--allow-code-exec"])
@@ -292,21 +341,72 @@ class TestPerQuestion:
             assert set(q["strategies"]) == set(_PQ_STRATEGIES)
             assert q["question"] and q["question_type"]
 
-    def test_rollup_quality_is_mean_of_rated_quality(self):
+    def test_rollup_quality_is_mean_of_graded_quality(self):
+        """Item 6 bugfix: the per-question rollup used to report the mean of
+        each model's static catalog quality_rating here, even in --live mode
+        (where run_eval() genuinely grades real completions). It now reports
+        the mean of the actual graded GradedResult.quality field — the same
+        field the aggregate report already uses — so mock vs live is a
+        difference in how quality was produced, not which field is read."""
         out = _pq_run()
         payload = per_question_payload(out)
+        assert payload["mode"] == "simulated"  # _pq_run() runs in mock mode
         # Recompute one (question_type, strategy) cell straight from the rows.
         qtype = next(iter(payload["by_question_type"]))
         strat = _PQ_STRATEGIES[0]
-        rated = [
-            r.quality_rating
-            for r in out.results
-            if r.question_type == qtype and r.strategy == strat
+        graded = [
+            r.quality for r in out.results if r.question_type == qtype and r.strategy == strat
         ]
-        expected = round(sum(rated) / len(rated), 4)
+        expected = round(sum(graded) / len(graded), 4)
         assert payload["by_question_type"][qtype][strat]["quality"] == expected
 
     def test_per_question_payload_is_reproducible(self):
         a = per_question_payload(_pq_run())
         b = per_question_payload(_pq_run())
         assert a == b
+
+    def test_mode_label_reflects_run_config(self):
+        """RunOutput.config.mode drives the "mode" field, not a guess from
+        the results themselves — mock -> "simulated", live -> "measured"."""
+        out = _pq_run()
+        assert out.config.mode == "mock"
+        payload = per_question_payload(out)
+        assert payload["mode"] == "simulated"
+
+        out.config.mode = "live"  # simulate what a --live run's config would carry
+        live_payload = per_question_payload(out)
+        assert live_payload["mode"] == "measured"
+
+
+# ── Live-completion plumbing (Item 6 bugfix, no network) ──────────────────────
+
+
+class TestLiveCompletionBugfix:
+    def test_live_completion_stores_text_not_provider_result(self, monkeypatch):
+        """Regression test: _live_completion used to assign the whole
+        ProviderResult returned by call_provider() directly to `text`
+        instead of `.text` — every downstream consumer expecting a string
+        would have broken the moment this path ran with real keys. No test
+        exercised it before (mode="live" needs real keys), so this mocks
+        call_provider instead of hitting a real API."""
+        from router.evals.completions import _live_completion
+        from router.provider_caller import ProviderResult
+
+        async def fake_call_provider(model, request, api_key):
+            return ProviderResult(
+                text="a real answer",
+                input_tokens=5,
+                output_tokens=3,
+                usage_source="provider",
+            )
+
+        # _live_completion does `from ..provider_caller import call_provider`
+        # locally at call time, so the patch target is the source module.
+        monkeypatch.setattr("router.provider_caller.call_provider", fake_call_provider)
+        sample = load_dataset("gsm8k", n=1)[0]
+        model = ModelRegistry().most_expensive_model()
+        completion = _run(
+            _live_completion(model, sample, {model.provider: "fake-key"}, max_tokens=64)
+        )
+        assert completion.text == "a real answer"
+        assert isinstance(completion.text, str)

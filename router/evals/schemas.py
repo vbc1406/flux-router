@@ -11,11 +11,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 # Grader kinds. Each EvalSample names exactly one.
-#   gsm8k     — extract final number, exact match against reference
-#   mmlu      — parse chosen letter A–D, match against reference
-#   humaneval — execute completion against unit tests (pass@1)
-#   llm_judge — Claude grades the answer 1–10 against a rubric (open-ended)
-GRADERS = ("gsm8k", "mmlu", "humaneval", "llm_judge")
+#   gsm8k             — extract final number, exact match against reference
+#   mmlu              — parse chosen letter A–D, match against reference
+#   humaneval         — execute completion against unit tests (pass@1)
+#   llm_judge         — Claude grades the answer 1–10 against a rubric (open-ended)
+#   agentic_tool_select — objective: does the completion name the one correct
+#                         tool (sample.metadata["expected_tool"])? See the
+#                         "agentic" dataset — this is the one agent-step type
+#                         (tool_select) with a verifiable right answer; the
+#                         other four (plan/tool_result_summarize/reflect/
+#                         final_answer) are inherently open-ended and use
+#                         llm_judge like mtbench.
+GRADERS = ("gsm8k", "mmlu", "humaneval", "llm_judge", "agentic_tool_select")
 
 # Strategy names understood by strategies.py.
 #   flux/premium/cheapest/mid  — the routing engine and the synthetic baselines.

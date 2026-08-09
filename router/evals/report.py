@@ -210,9 +210,22 @@ def _by_sample(results: list[GradedResult]) -> tuple[list[str], dict[str, dict[s
 
 
 def per_question_payload(out: RunOutput) -> dict:
-    """Machine-readable per-question rows + a by-question-type rollup."""
+    """Machine-readable per-question rows + a by-question-type rollup.
+
+    Bugfix (Item 6): this used to report each strategy's model's static
+    catalog quality_rating here — a real number, but never a graded answer,
+    even when the run itself was --live (which DOES invoke real routed
+    models and grade real output; see runner.py::run_eval). That let a
+    --per-question --live run silently mix a genuinely measured aggregate
+    table with a per-question drill-down that was still catalog-rating-only,
+    with no signal in the data to tell them apart. Now uses GradedResult.quality
+    (the actual graded value in both modes — simulated-but-graded in mock,
+    measured in live) and stamps an explicit "mode" field so a consumer of
+    the JSON can't accidentally treat one as the other.
+    """
     strategies = _ordered_strategies(out.results)
     order, rows = _by_sample(out.results)
+    mode = "measured" if out.config.mode == "live" else "simulated"
 
     questions = []
     for sid in order:
@@ -227,7 +240,7 @@ def per_question_payload(out: RunOutput) -> dict:
                 "strategies": {
                     s: {
                         "model_id": per_strat[s].model_id,
-                        "quality": per_strat[s].quality_rating,
+                        "quality": per_strat[s].quality,
                         "cost": per_strat[s].cost,
                     }
                     for s in strategies
@@ -245,25 +258,36 @@ def per_question_payload(out: RunOutput) -> dict:
         qtype: {
             s: {
                 "n": len(rs),
-                "quality": round(mean(x.quality_rating for x in rs), 4),
+                "quality": round(mean(x.quality for x in rs), 4),
                 "cost": round(sum(x.cost for x in rs), 6),
             }
             for s, rs in by_strat.items()
         }
         for qtype, by_strat in by_type_groups.items()
     }
-    return {"strategies": strategies, "questions": questions, "by_question_type": by_type}
+    return {
+        "mode": mode,
+        "strategies": strategies,
+        "questions": questions,
+        "by_question_type": by_type,
+    }
 
 
 def _flux_vs_baselines(out: RunOutput) -> dict[str, dict]:
-    """Per-strategy mean rated quality + total cost, with flux's deltas vs each."""
+    """Per-strategy mean quality + total cost, with flux's deltas vs each.
+
+    Bugfix (Item 6): same class of bug as per_question_payload — this used
+    to average each strategy's static catalog quality_rating rather than the
+    actual graded GradedResult.quality, so the per-question headline panel
+    ("flux: mean rated quality ...") never reflected --live grading either.
+    """
     strategies = _ordered_strategies(out.results)
     by_strat: dict[str, list[GradedResult]] = defaultdict(list)
     for r in out.results:
         by_strat[r.strategy].append(r)
     summary = {
         s: {
-            "mean_quality": round(mean(x.quality_rating for x in rs), 4),
+            "mean_quality": round(mean(x.quality for x in rs), 4),
             "total_cost": round(sum(x.cost for x in rs), 6),
         }
         for s, rs in by_strat.items()
@@ -295,8 +319,15 @@ def _short_model(model_id: str) -> str:
 def print_per_question(out: RunOutput) -> None:
     strategies = _ordered_strategies(out.results)
     order, rows = _by_sample(out.results)
+    mode_label = (
+        "[yellow]SIMULATED — quality is a graded mock completion, not a live "
+        "answer (run --live for real numbers)[/yellow]"
+        if out.config.mode != "live"
+        else "[green]MEASURED — live-graded real completions[/green]"
+    )
 
     console.rule("[bold cyan]Per-Question: flux vs provider defaults[/bold cyan]")
+    console.print(mode_label)
     tbl = Table(box=box.SIMPLE, show_lines=True)
     tbl.add_column("Question", style="bold", max_width=42, overflow="fold")
     tbl.add_column("Type")
@@ -316,14 +347,14 @@ def print_per_question(out: RunOutput) -> None:
                 cells.append("—")
                 continue
             colour = "green" if s == "flux" else ""
-            body = f"{_short_model(r.model_id)}\nq={r.quality_rating:.2f} ${r.cost:.5f}"
+            body = f"{_short_model(r.model_id)}\nq={r.quality:.2f} ${r.cost:.5f}"
             cells.append(f"[{colour}]{body}[/]" if colour else body)
         tbl.add_row(*cells)
     console.print(tbl)
 
     # Mean quality + total cost per question type.
     console.print()
-    console.rule("[bold cyan]Mean rated quality / total cost by question type[/bold cyan]")
+    console.rule("[bold cyan]Mean quality / total cost by question type[/bold cyan]")
     payload = per_question_payload(out)
     rollup = Table(box=box.SIMPLE)
     rollup.add_column("Question Type", style="bold")
@@ -342,7 +373,7 @@ def print_per_question(out: RunOutput) -> None:
     flux = summary.get("flux")
     if flux:
         lines = [
-            f"[bold]flux[/bold]: mean rated quality {flux['mean_quality']:.3f} "
+            f"[bold]flux[/bold]: mean quality {flux['mean_quality']:.3f} "
             f"at total cost ${flux['total_cost']:.5f}",
         ]
         for s in strategies:
@@ -362,7 +393,13 @@ def print_per_question(out: RunOutput) -> None:
 def per_question_to_markdown(out: RunOutput) -> str:
     payload = per_question_payload(out)
     strategies = payload["strategies"]
-    lines = ["## Per-question: flux vs provider defaults\n"]
+    mode_note = (
+        "> **MEASURED** — live-graded real completions.\n"
+        if payload["mode"] == "measured"
+        else "> ⚠️ **SIMULATED** — quality is a graded mock completion, not a "
+        "live answer. Run `--live` for real numbers.\n"
+    )
+    lines = ["## Per-question: flux vs provider defaults\n", mode_note]
     header = "| Question | Type | Cplx | " + " | ".join(strategies) + " |"
     lines.append(header)
     lines.append("|" + "---|" * (3 + len(strategies)))
@@ -376,7 +413,7 @@ def per_question_to_markdown(out: RunOutput) -> str:
         for s in strategies:
             r = per_strat.get(s)
             cells.append(
-                f"{_short_model(r.model_id)} q={r.quality_rating:.2f} ${r.cost:.5f}" if r else "—"
+                f"{_short_model(r.model_id)} q={r.quality:.2f} ${r.cost:.5f}" if r else "—"
             )
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines) + "\n"
