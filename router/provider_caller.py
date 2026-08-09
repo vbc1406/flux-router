@@ -48,12 +48,22 @@ class ProviderResult:
     usage, or reported something we don't trust (see _safe_usage_int).
     usage_source is "provider" when both are present, "estimated" otherwise,
     so callers never have to re-derive which case they're in.
+
+    tool_calls, when present, is OpenAI-shaped regardless of which provider
+    produced the response: [{"id": ..., "type": "function", "function":
+    {"name": ..., "arguments": "<json string>"}}, ...] — Anthropic's
+    tool_use blocks and Google's functionCall parts are translated into this
+    shape at parse time so every caller (Flux SDK, the HTTP proxy) handles
+    one format. finish_reason is normalized to OpenAI's vocabulary
+    ("stop" | "tool_calls" | "length" | "content_filter").
     """
 
     text: str
     input_tokens: int | None
     output_tokens: int | None
     usage_source: str  # "provider" | "estimated"
+    tool_calls: list[dict] | None = None
+    finish_reason: str = "stop"
 
 
 def _safe_usage_int(value: object) -> int | None:
@@ -147,15 +157,167 @@ def _response_shape_keys(data: object) -> list[str]:
 
 
 # How we build the messages list from a RoutingRequest
-def _build_messages(request: RoutingRequest) -> list[dict[str, str]]:
-    """Convert RoutingRequest fields into a universal chat messages list."""
-    messages: list[dict[str, str]] = []
+def _build_messages(request: RoutingRequest) -> list[dict[str, Any]]:
+    """Convert RoutingRequest fields into a universal (OpenAI-shaped) chat
+    messages list. Preserves `tool_calls` (on assistant turns) and
+    `tool_call_id`/`name` (on tool-role turns) so multi-turn tool
+    conversations survive the round trip — each provider-specific caller
+    re-translates this universal shape into its own wire format."""
+    messages: list[dict[str, Any]] = []
     for turn in request.message_history:
         role = turn.get("role", "user")
-        content = turn.get("content", "")
-        messages.append({"role": role, "content": content})
+        msg: dict[str, Any] = {"role": role, "content": turn.get("content", "")}
+        if turn.get("tool_calls"):
+            msg["tool_calls"] = turn["tool_calls"]
+        if turn.get("tool_call_id"):
+            msg["tool_call_id"] = turn["tool_call_id"]
+        if turn.get("name"):
+            msg["name"] = turn["name"]
+        messages.append(msg)
     messages.append({"role": "user", "content": request.raw_prompt})
     return messages
+
+
+# ── Tool-calling / response_format translation (Item 1) ──────────────────────
+#
+# request.tools/tool_choice/response_format are always OpenAI-shaped (that's
+# what the HTTP proxy and the Python SDK both accept). Each non-OpenAI-compat
+# provider gets a pair of functions here: one to translate the OUTGOING
+# request, one to translate the INCOMING response's tool-call/content shape
+# back into the OpenAI shape ProviderResult carries. OpenAI/Groq/Mistral need
+# no outgoing translation (tools/tool_choice/response_format pass through
+# verbatim) since they already speak this format.
+
+
+def _openai_tools_to_anthropic(tools: list[dict]) -> list[dict[str, Any]]:
+    out = []
+    for t in tools:
+        fn = t.get("function", t)
+        out.append(
+            {
+                "name": fn.get("name", ""),
+                "description": fn.get("description", ""),
+                "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},
+            }
+        )
+    return out
+
+
+def _openai_tool_choice_to_anthropic(tool_choice: dict | str | None) -> dict[str, Any] | None:
+    if tool_choice is None:
+        return None
+    if tool_choice == "auto":
+        return {"type": "auto"}
+    if tool_choice == "none":
+        return {"type": "none"}
+    if tool_choice == "required":
+        return {"type": "any"}
+    if isinstance(tool_choice, dict):
+        fn = tool_choice.get("function", {})
+        name = fn.get("name")
+        if tool_choice.get("type") == "function" and name:
+            return {"type": "tool", "name": name}
+    raise ProviderCallError(f"Unsupported tool_choice value for anthropic: {tool_choice!r}")
+
+
+def _parse_anthropic_content(content: list[dict]) -> tuple[str, list[dict] | None]:
+    text_parts: list[str] = []
+    tool_calls: list[dict] = []
+    for block in content:
+        btype = block.get("type")
+        # A real Anthropic response always sets "type", but tolerate a block
+        # that just has "text" and no/other type — matches the pre-Item-1
+        # behavior of reading content[0]["text"] unconditionally.
+        if btype == "tool_use":
+            tool_calls.append(
+                {
+                    "id": block.get("id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": block.get("name", ""),
+                        "arguments": json.dumps(block.get("input", {})),
+                    },
+                }
+            )
+        elif "text" in block:
+            text_parts.append(block.get("text", ""))
+    return "".join(text_parts), (tool_calls or None)
+
+
+def _openai_tools_to_google(tools: list[dict]) -> list[dict[str, Any]]:
+    decls = []
+    for t in tools:
+        fn = t.get("function", t)
+        decls.append(
+            {
+                "name": fn.get("name", ""),
+                "description": fn.get("description", ""),
+                "parameters": fn.get("parameters") or {"type": "object", "properties": {}},
+            }
+        )
+    return [{"functionDeclarations": decls}]
+
+
+def _openai_tool_choice_to_google(tool_choice: dict | str | None) -> dict[str, Any] | None:
+    if tool_choice is None:
+        return None
+    if tool_choice == "auto":
+        return {"functionCallingConfig": {"mode": "AUTO"}}
+    if tool_choice == "none":
+        return {"functionCallingConfig": {"mode": "NONE"}}
+    if tool_choice == "required":
+        return {"functionCallingConfig": {"mode": "ANY"}}
+    if isinstance(tool_choice, dict):
+        fn = tool_choice.get("function", {})
+        name = fn.get("name")
+        if tool_choice.get("type") == "function" and name:
+            return {"functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": [name]}}
+    raise ProviderCallError(f"Unsupported tool_choice value for google: {tool_choice!r}")
+
+
+def _google_response_format_config(response_format: dict | None) -> dict[str, Any]:
+    if not response_format:
+        return {}
+    rtype = response_format.get("type")
+    if rtype == "json_object":
+        return {"response_mime_type": "application/json"}
+    if rtype == "json_schema":
+        cfg: dict[str, Any] = {"response_mime_type": "application/json"}
+        schema = (response_format.get("json_schema") or {}).get("schema")
+        if schema:
+            cfg["response_schema"] = schema
+        return cfg
+    raise ProviderCallError(f"Unsupported response_format type for google: {rtype!r}")
+
+
+def _parse_google_parts(parts: list[dict]) -> tuple[str, list[dict] | None]:
+    text_parts: list[str] = []
+    tool_calls: list[dict] = []
+    for i, part in enumerate(parts):
+        if "text" in part:
+            text_parts.append(part["text"])
+        elif "functionCall" in part:
+            fc = part["functionCall"]
+            tool_calls.append(
+                {
+                    "id": f"call_{i}",
+                    "type": "function",
+                    "function": {
+                        "name": fc.get("name", ""),
+                        "arguments": json.dumps(fc.get("args", {})),
+                    },
+                }
+            )
+    return "".join(text_parts), (tool_calls or None)
+
+
+_GOOGLE_FINISH_REASONS = {
+    "STOP": "stop",
+    "MAX_TOKENS": "length",
+    "SAFETY": "content_filter",
+    "RECITATION": "content_filter",
+    "PROHIBITED_CONTENT": "content_filter",
+}
 
 
 # ── Custom exception ─────────────────────────────────────────────────────────
@@ -240,9 +402,20 @@ def _call_anthropic_sync(
     request: RoutingRequest,
     api_key: str,
 ) -> ProviderResult:
+    if request.response_format:
+        # http_status=400: a caller error (unsupported provider/feature
+        # combination), not an upstream failure — flux.py._call_model maps
+        # this specific status to UnsupportedFeatureError so server.py can
+        # return 400 instead of the 502 used for real provider outages.
+        raise ProviderCallError(
+            "Anthropic has no response_format equivalent; route this request "
+            "to a different provider or drop response_format.",
+            http_status=400,
+        )
+
     messages = _build_messages(request)
     body: dict[str, Any] = {
-        "model": model.model_id,
+        "model": model.provider_model_id,
         "max_tokens": min(request.max_tokens_requested or 1024, model.max_output_tokens),
         "messages": messages,
     }
@@ -250,6 +423,11 @@ def _call_anthropic_sync(
         body["system"] = request.system_prompt
     if request.temperature is not None:
         body["temperature"] = request.temperature
+    if request.tools:
+        body["tools"] = _openai_tools_to_anthropic(request.tools)
+        tool_choice = _openai_tool_choice_to_anthropic(request.tool_choice)
+        if tool_choice is not None:
+            body["tool_choice"] = tool_choice
 
     headers = {
         "x-api-key": api_key,
@@ -259,12 +437,19 @@ def _call_anthropic_sync(
     data = _post_json(
         "https://api.anthropic.com/v1/messages", headers, body, provider_name="anthropic"
     )
-    try:
-        text = data["content"][0]["text"]
-    except (KeyError, IndexError) as exc:
+    content = data.get("content")
+    if not isinstance(content, list) or not content:
         raise ProviderCallError(
             f"Unexpected Anthropic response shape (keys={_response_shape_keys(data)})"
-        ) from exc
+        )
+    text, tool_calls = _parse_anthropic_content(content)
+    stop_reason = data.get("stop_reason")
+    if tool_calls:
+        finish_reason = "tool_calls"
+    elif stop_reason == "max_tokens":
+        finish_reason = "length"
+    else:
+        finish_reason = "stop"
     input_tokens, output_tokens = _extract_usage(
         data, "anthropic", "input_tokens", "output_tokens", container_key="usage"
     )
@@ -273,6 +458,8 @@ def _call_anthropic_sync(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         usage_source="provider" if input_tokens is not None else "estimated",
+        tool_calls=tool_calls,
+        finish_reason=finish_reason,
     )
 
 
@@ -302,7 +489,7 @@ def _call_openai_compat_sync(
         messages.insert(0, {"role": "system", "content": request.system_prompt})
 
     body: dict[str, Any] = {
-        "model": model.model_id,
+        "model": model.provider_model_id,
         "messages": messages,
     }
     token_limit = min(request.max_tokens_requested or 1024, model.max_output_tokens)
@@ -312,6 +499,16 @@ def _call_openai_compat_sync(
         body["max_tokens"] = token_limit
     if request.temperature is not None:
         body["temperature"] = request.temperature
+    # Already OpenAI-shaped — passed through verbatim. An unsupported value
+    # for this specific provider (e.g. a tool_choice enum Mistral doesn't
+    # recognize) surfaces as a real HTTP error from the provider via
+    # _post_json, not a silent drop.
+    if request.tools:
+        body["tools"] = request.tools
+        if request.tool_choice is not None:
+            body["tool_choice"] = request.tool_choice
+    if request.response_format is not None:
+        body["response_format"] = request.response_format
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -319,11 +516,15 @@ def _call_openai_compat_sync(
     }
     data = _post_json(f"{base_url}/chat/completions", headers, body, provider_name=provider_name)
     try:
-        text = data["choices"][0]["message"]["content"]
+        choice = data["choices"][0]
+        message = choice["message"]
     except (KeyError, IndexError) as exc:
         raise ProviderCallError(
             f"Unexpected OpenAI-compat response shape (keys={_response_shape_keys(data)})"
         ) from exc
+    text = message.get("content") or ""
+    tool_calls = message.get("tool_calls") or None
+    finish_reason = choice.get("finish_reason") or "stop"
     # OpenAI, Groq, and Mistral all report usage as {"usage": {"prompt_tokens":
     # ..., "completion_tokens": ...}} on non-streaming responses.
     input_tokens, output_tokens = _extract_usage(
@@ -334,6 +535,8 @@ def _call_openai_compat_sync(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         usage_source="provider" if input_tokens is not None else "estimated",
+        tool_calls=tool_calls,
+        finish_reason=finish_reason,
     )
 
 
@@ -358,21 +561,35 @@ def _call_google_sync(
     # Without an explicit cap, Google generates up to the model's own default
     # (which can far exceed what routing/budget estimated this request would
     # cost) — every other provider caller sets an equivalent limit.
-    body["generationConfig"] = {
+    generation_config: dict[str, Any] = {
         "maxOutputTokens": min(request.max_tokens_requested or 1024, model.max_output_tokens)
     }
+    generation_config.update(_google_response_format_config(request.response_format))
+    body["generationConfig"] = generation_config
+    if request.tools:
+        body["tools"] = _openai_tools_to_google(request.tools)
+        tool_config = _openai_tool_choice_to_google(request.tool_choice)
+        if tool_config is not None:
+            body["toolConfig"] = tool_config
 
-    model_id = model.model_id.replace("-thinking", "")  # strip suffix for API
+    model_id = (model.provider_model_id or model.model_id).replace(
+        "-thinking", ""
+    )  # strip suffix for API
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent"
     # Pass key as a header to avoid it appearing in server access logs.
     headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
     data = _post_json(url, headers, body, provider_name="google")
     try:
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        parts = data["candidates"][0]["content"]["parts"]
     except (KeyError, IndexError) as exc:
         raise ProviderCallError(
             f"Unexpected Google response shape (keys={_response_shape_keys(data)})"
         ) from exc
+    text, tool_calls = _parse_google_parts(parts)
+    raw_finish = data["candidates"][0].get("finishReason")
+    finish_reason = (
+        "tool_calls" if tool_calls else _GOOGLE_FINISH_REASONS.get(raw_finish, "stop")
+    )
     input_tokens, output_tokens = _extract_usage(
         data, "google", "promptTokenCount", "candidatesTokenCount", container_key="usageMetadata"
     )
@@ -381,6 +598,8 @@ def _call_google_sync(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         usage_source="provider" if input_tokens is not None else "estimated",
+        tool_calls=tool_calls,
+        finish_reason=finish_reason,
     )
 
 
@@ -416,7 +635,11 @@ def _open_openai_compat_stream(
     if request.system_prompt:
         messages.insert(0, {"role": "system", "content": request.system_prompt})
 
-    body: dict[str, Any] = {"model": model.model_id, "messages": messages, "stream": True}
+    body: dict[str, Any] = {
+        "model": model.provider_model_id,
+        "messages": messages,
+        "stream": True,
+    }
     token_limit = min(request.max_tokens_requested or 1024, model.max_output_tokens)
     if _uses_max_completion_tokens(provider_name, model.model_id):
         body["max_completion_tokens"] = token_limit
@@ -424,6 +647,14 @@ def _open_openai_compat_stream(
         body["max_tokens"] = token_limit
     if request.temperature is not None:
         body["temperature"] = request.temperature
+    # tool_calls deltas ride through stream_openai_compat_lines verbatim once
+    # the upstream body asks for tools — no chunk reshaping needed here.
+    if request.tools:
+        body["tools"] = request.tools
+        if request.tool_choice is not None:
+            body["tool_choice"] = request.tool_choice
+    if request.response_format is not None:
+        body["response_format"] = request.response_format
     # OpenAI-only: asks the stream to emit one extra chunk right before
     # [DONE] carrying a `usage` object (see OpenAI's stream_options docs).
     # Not enabled for Groq/Mistral — their OpenAI-compat surface hasn't been

@@ -138,6 +138,10 @@ class FluxResponse:
                           DispatchUsage. None only if somehow no dispatch
                           recording occurred (should not happen on any
                           successful response).
+        tool_calls      — OpenAI-shaped tool calls the model made, or None.
+                          See provider_caller.ProviderResult for the shape.
+        finish_reason   — Normalized finish reason ("stop" | "tool_calls" |
+                          "length" | "content_filter").
     """
 
     text: str
@@ -146,6 +150,8 @@ class FluxResponse:
     fallback_used: bool = False
     fallback_reason: str | None = None
     usage: DispatchUsage | None = None
+    tool_calls: list[dict] | None = None
+    finish_reason: str = "stop"
 
 
 class Flux:
@@ -263,8 +269,8 @@ class Flux:
 
         request = self._build_request(prompt, **request_kwargs)
         decision = await self._engine.route(request)
-        text, model, fallback_used, fallback_reason, usage = await self._dispatch_with_fallback(
-            decision, request, max_retries
+        text, model, fallback_used, fallback_reason, usage, tool_calls, finish_reason = (
+            await self._dispatch_with_fallback(decision, request, max_retries)
         )
         return FluxResponse(
             text=text,
@@ -273,6 +279,8 @@ class Flux:
             fallback_used=fallback_used,
             fallback_reason=fallback_reason,
             usage=usage,
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
         )
 
     async def _dispatch_with_fallback(
@@ -280,7 +288,7 @@ class Flux:
         decision: RoutingDecision,
         request: RoutingRequest,
         max_retries: int = 2,
-    ) -> tuple[str, ModelOption, bool, str | None, DispatchUsage]:
+    ) -> tuple[str, ModelOption, bool, str | None, DispatchUsage, list[dict] | None, str]:
         """
         Call ``decision.chosen_model`` and, on a typed transient failure, walk
         the appropriate fallback chain up to ``max_retries`` further attempts.
@@ -289,7 +297,8 @@ class Flux:
         identical retry, budget-recording, run-budget, and attribution
         behavior — see module docstring.
 
-        Returns (text, model_used, fallback_used, fallback_reason, usage).
+        Returns (text, model_used, fallback_used, fallback_reason, usage,
+        tool_calls, finish_reason).
 
         Raises:
             AuthenticationError — immediately, never retried.
@@ -317,7 +326,7 @@ class Flux:
         decision: RoutingDecision,
         request: RoutingRequest,
         max_retries: int = 2,
-    ) -> tuple[str, ModelOption, bool, str | None, DispatchUsage]:
+    ) -> tuple[str, ModelOption, bool, str | None, DispatchUsage, list[dict] | None, str]:
         models_to_try: list[ModelOption] = []
         if decision.chosen_model:
             models_to_try.append(decision.chosen_model)
@@ -457,7 +466,26 @@ class Flux:
                     input_tokens=result.input_tokens,
                     output_tokens=result.output_tokens,
                 )
-                return text, model, attempts > 0, last_error, usage
+                return (
+                    text,
+                    model,
+                    attempts > 0,
+                    last_error,
+                    usage,
+                    result.tool_calls,
+                    result.finish_reason,
+                )
+
+            except err.UnsupportedFeatureError:
+                self._engine._budget.release_reservation(reservation_id)
+                # The request/provider combo is unsupported (e.g.
+                # response_format routed to Anthropic) — deterministic, not a
+                # transient failure, so it's raised immediately instead of
+                # falling through to the generic `except err.FluxAPIError`
+                # below, which would swallow it into a last_error="unknown"
+                # retry loop and lose the type server.py needs to return 400
+                # instead of 502.
+                raise
 
             except err.AuthenticationError:
                 self._engine._budget.release_reservation(reservation_id)
@@ -835,6 +863,8 @@ class Flux:
                 raise err.AuthenticationError(str(exc)) from exc
             if status == 429:
                 raise err.RateLimitError(str(exc)) from exc
+            if status == 400:
+                raise err.UnsupportedFeatureError(str(exc)) from exc
             if status in (500, 502, 503):
                 raise err.ProviderDownError(str(exc)) from exc
             if "timeout" in msg:

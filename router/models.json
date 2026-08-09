@@ -124,6 +124,7 @@
     {
       "provider": "groq",
       "model_id": "gpt-oss-20b",
+      "provider_model_id": "openai/gpt-oss-20b",
       "display_name": "GPT-OSS 20B (Groq free)",
       "tier": "free",
       "cost_per_1k_input": 0.0,
@@ -988,6 +989,7 @@
     {
       "provider": "groq",
       "model_id": "gpt-oss-120b",
+      "provider_model_id": "openai/gpt-oss-120b",
       "display_name": "GPT-OSS 120B (Groq)",
       "tier": "mid",
       "cost_per_1k_input": 0.00015,
@@ -1026,6 +1028,7 @@
     {
       "provider": "groq",
       "model_id": "qwen-3.6-27b",
+      "provider_model_id": "qwen/qwen3.6-27b",
       "display_name": "Qwen 3.6 27B (Groq)",
       "tier": "cheap",
       "cost_per_1k_input": 0.0006,

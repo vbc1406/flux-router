@@ -360,3 +360,104 @@ class TestPlanStepInference:
         assert clf.analyze(
             _req("Give your final answer.", run_id="r")
         ).step_type == "final_answer"
+
+
+# ── Item 3: X-Flux-Step-Type HTTP header ──────────────────────────────────────
+
+import pytest  # noqa: E402
+
+pytest.importorskip("fastapi")
+
+from unittest.mock import AsyncMock  # noqa: E402
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+import router.server as server  # noqa: E402
+from router.provider_caller import ProviderResult  # noqa: E402
+
+
+@pytest.fixture
+def _mock_call_model(monkeypatch):
+    mock = AsyncMock(
+        return_value=ProviderResult(
+            text="ok", input_tokens=None, output_tokens=None, usage_source="estimated"
+        )
+    )
+    monkeypatch.setattr(server._flux, "_call_model", mock)
+    return mock
+
+
+@pytest.fixture
+def client():
+    return TestClient(server.app, client=("127.0.0.1", 50000), base_url="http://127.0.0.1:8000")
+
+
+class TestStepTypeHeader:
+    def test_header_sets_explicit_step_type(self, client, monkeypatch, _mock_call_model):
+        captured = {}
+        real_route = server._flux.route
+
+        async def spy_route(request, verbose=False):
+            captured["step_type"] = request.step_type
+            return await real_route(request, verbose=verbose)
+
+        monkeypatch.setattr(server._flux, "route", spy_route)
+        resp = client.post(
+            "/v1/chat/completions",
+            json={"model": "flux-auto", "messages": [{"role": "user", "content": "hi"}]},
+            headers={"X-Flux-Step-Type": "final_answer"},
+        )
+        assert resp.status_code == 200
+        assert captured["step_type"] == "final_answer"
+
+    def test_header_absent_preserves_inference(self, client, monkeypatch, _mock_call_model):
+        captured = {}
+        real_route = server._flux.route
+
+        async def spy_route(request, verbose=False):
+            captured["step_type"] = request.step_type
+            return await real_route(request, verbose=verbose)
+
+        monkeypatch.setattr(server._flux, "route", spy_route)
+        resp = client.post(
+            "/v1/chat/completions",
+            json={"model": "flux-auto", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        assert resp.status_code == 200
+        # No header sent -> RoutingRequest.step_type stays None going into the
+        # classifier, which then infers it (see classifier.py); the raw
+        # request field itself must be exactly None, not e.g. "unknown".
+        assert captured["step_type"] is None
+
+    def test_invalid_header_value_returns_400(self, client):
+        resp = client.post(
+            "/v1/chat/completions",
+            json={"model": "flux-auto", "messages": [{"role": "user", "content": "hi"}]},
+            headers={"X-Flux-Step-Type": "not_a_real_step_type"},
+        )
+        assert resp.status_code == 400
+
+    def test_header_overrides_what_would_otherwise_infer_differently(
+        self, client, monkeypatch, _mock_call_model
+    ):
+        """A prompt with tools=[...] would normally infer tool_select — an
+        explicit header for a different valid value must win."""
+        captured = {}
+        real_route = server._flux.route
+
+        async def spy_route(request, verbose=False):
+            captured["step_type"] = request.step_type
+            return await real_route(request, verbose=verbose)
+
+        monkeypatch.setattr(server._flux, "route", spy_route)
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "flux-auto",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [{"type": "function", "function": {"name": "f"}}],
+            },
+            headers={"X-Flux-Step-Type": "reflect"},
+        )
+        assert resp.status_code == 200
+        assert captured["step_type"] == "reflect"
