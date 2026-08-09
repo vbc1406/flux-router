@@ -55,6 +55,34 @@ the unauthenticated dashboard and stats endpoints will answer to — see
 [Who can see it](#who-can-see-it) below. You need it only for a same-host
 reverse proxy running without a token.
 
+### Auth: single-token vs. multi-tenant
+
+Two env vars gate the proxy and dashboard; pick one depending on how many
+callers share this deployment:
+
+| | `FLUX_SERVER_TOKEN` | `FLUX_SERVER_TOKENS` |
+|---|---|---|
+| Shape | one bearer token | JSON map of `{token: tenant_id}` or `{token: {"tenant_id":..., "plan":...}}` |
+| Use case | single caller / single operator | **multi-tenant** — each caller gets its own token, bound tenant, and (optionally) budget plan |
+| `tenant_id` / `plan` source | client-declared (`X-Flux-Tenant-Id` header, unverified) | server-bound to the token — a caller **cannot** self-declare either, so per-tenant daily caps and `/v1/stats/tenants` rows can't be spoofed |
+
+**If you're serving more than one tenant, use `FLUX_SERVER_TOKENS`, not
+`FLUX_SERVER_TOKEN`.** The single-token mode has no way to stop one caller
+from setting `user`/`X-Flux-Tenant-Id` to someone else's identity and reading
+their spend or borrowing their budget plan — it's meant for exactly one
+trusted caller (you, or one backend service). Example:
+
+```bash
+export FLUX_SERVER_TOKENS='{"tok-acme":{"tenant_id":"acme","plan":"business_plan"},"tok-beta":"beta"}'
+flux serve --host 0.0.0.0
+```
+
+Setting both is redundant (either one is enough); setting neither restricts
+the server to loopback (see [Who can see it](#who-can-see-it)). See
+`router/config.py`'s `ServerTokenBinding`/`_parse_server_tokens` for the exact
+parsing rules and `TENANT_DAILY_CAP_USD` for the per-tenant cap this identity
+feeds.
+
 ### Persistence
 
 The server is persistent by default and the library is not — that difference is
