@@ -90,6 +90,15 @@ jobs:
       - name: Run the keyless demo
         run: python -m router.demo
 
+      # Regression guard: evals/fixtures/*.json previously shipped only in
+      # the editable/dev checkout, not the built wheel/sdist — `python -m
+      # router.evals` (mock mode, no extra needed) crashed with
+      # FileNotFoundError on any real install. Nothing else in this workflow
+      # installs the actual package and runs it, so this is the only job
+      # that would have caught it.
+      - name: Run the eval harness mock smoke against the installed package
+        run: python -m router.evals --n 3
+
   # Validate the container image and docker-compose.yml. A GitHub runner is the
   # clean VM this would otherwise need: the image is built from scratch, booted,
   # and checked for the three things that make the self-hosted story work — the

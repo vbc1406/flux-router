@@ -86,7 +86,15 @@ exclude = ["testing*", "tests*", "router.tests*"]
 # The dashboard is plain HTML/CSS/JS with no build step, so the sources ship
 # as-is and `pip install flux-router[server]` is the whole install — no Node,
 # no bundler, nothing fetched at runtime.
-router = ["models.json", "dashboard/*"]
+#
+# evals/fixtures/*.json: bugfix — these were never listed here, so `python
+# -m router.evals` (mock mode, the DEFAULT — no --live, no extra needed)
+# crashed with FileNotFoundError on any installed wheel/sdist, for every
+# dataset, not just one. Only ever worked from an editable/dev checkout,
+# which is what every test and CI job that exercises it uses — nothing
+# caught this until a build+install verification pass actually ran it
+# against a real built wheel.
+router = ["models.json", "dashboard/*", "evals/fixtures/*.json"]
 
 [tool.setuptools.exclude-package-data]
 router = ["tests/*", "tests/**/*"]
