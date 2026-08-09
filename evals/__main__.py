@@ -45,9 +45,13 @@ def _parse_args() -> argparse.Namespace:
         help=f"routing_priority values to compare (default: {ROUTING_PRIORITIES})",
     )
     parser.add_argument("--judge-model", default=DEFAULT_JUDGE_MODEL)
-    parser.add_argument("--out", default=None, help="results CSV path (default: evals/results/<timestamp>.csv)")
     parser.add_argument(
-        "--summary-out", default=None, help="summary CSV path (default: evals/results/<timestamp>_summary.csv)"
+        "--out", default=None, help="results CSV path (default: evals/results/<timestamp>.csv)"
+    )
+    parser.add_argument(
+        "--summary-out",
+        default=None,
+        help="summary CSV path (default: evals/results/<timestamp>_summary.csv)",
     )
     return parser.parse_args()
 
@@ -58,7 +62,9 @@ def main() -> None:
     structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.INFO))
     args = _parse_args()
     results = asyncio.run(
-        run_golden_set(mode=args.mode, routing_priorities=args.priorities, judge_model_id=args.judge_model)
+        run_golden_set(
+            mode=args.mode, routing_priorities=args.priorities, judge_model_id=args.judge_model
+        )
     )
 
     if not results:
@@ -71,7 +77,10 @@ def main() -> None:
     print(f"\nRan {len(results)} (task x routing_priority) pairs in '{args.mode}' mode.\n")
     print("Comparison:")
     print(format_summary_table(summaries))
-    print("\nRegressions (routing_priority scored meaningfully lower than quality_max on the same task):")
+    print(
+        "\nRegressions (routing_priority scored meaningfully lower than quality_max "
+        "on the same task):"
+    )
     print(format_regressions(regressions))
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

@@ -119,6 +119,21 @@ class TestSqliteUsageStore:
         monkeypatch.setattr(store, "_queue", attribution_module.queue.Queue(maxsize=1))
         store._queue.put_nowait(UsageRecord("t", "r", "x", "y", "m0", 0.01, 0.0))
         store.record(UsageRecord("t", "r", "x", "y", "m1", 0.01, 1.0))  # must not raise
+        assert store.dropped_records == 1
+
+    def test_writer_batches_available_records_into_one_transaction(self):
+        store = SqliteUsageStore(":memory:")
+        statements: list[str] = []
+        store._conn.set_trace_callback(statements.append)
+        store._lock.acquire()
+        try:
+            for i in range(5):
+                store.record(UsageRecord("t", "r", "x", "y", f"m{i}", 0.01, float(i)))
+        finally:
+            store._lock.release()
+
+        assert store.count() == 5
+        assert sum(statement == "BEGIN " for statement in statements) <= 2
 
     def test_no_prompt_or_response_fields_exist(self):
         """UsageRecord has no field that could ever hold prompt/response text.
@@ -240,6 +255,7 @@ class TestCostAttribution:
         body = attribution.render_prometheus()
         assert 'flux_cost_usd_total{tenant_id="acme",model_id="gpt-5"} 0.050000' in body
         assert 'flux_run_steps{tenant_id="acme"} 1' in body
+        assert "flux_attribution_records_dropped_total 0" in body
 
     def test_budget_exceeded_counter(self):
         attribution = CostAttribution(store=SqliteUsageStore(":memory:"))

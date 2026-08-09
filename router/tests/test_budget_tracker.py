@@ -15,7 +15,28 @@ How to run:
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 from router.budget_tracker import BudgetTracker, DailyBudgetTracker
+
+
+class TestBudgetReservations:
+    def test_concurrent_reservations_cannot_overspend(self, monkeypatch):
+        import router.budget_tracker as bt
+
+        monkeypatch.setitem(bt.BUDGET_LIMITS, "test_plan", {"daily": 1.0, "monthly": 1.0})
+        tracker = BudgetTracker()
+        with ThreadPoolExecutor(max_workers=20) as pool:
+            reservations = list(
+                pool.map(lambda _: tracker.reserve_spend("user", 0.1, "test_plan"), range(20))
+            )
+        accepted = [reservation for reservation in reservations if reservation is not None]
+        assert len(accepted) == 10
+
+        tracker.reconcile_spend(accepted[0], 0.08, "model", "request")
+        assert tracker.get_daily_spend("user") == 0.08
+        assert tracker.release_reservation(accepted[1]) is True
+        assert tracker.reserve_spend("user", 0.1, "test_plan") is not None
 
 
 class TestBudgetTrackerReadDoesNotGrowLedger:

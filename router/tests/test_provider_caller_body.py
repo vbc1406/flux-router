@@ -8,6 +8,8 @@ to expect `max_tokens`.
 
 from __future__ import annotations
 
+import io
+
 import pytest
 
 from router import provider_caller
@@ -106,3 +108,20 @@ def test_mistral_uses_max_tokens(captured):
     body = captured["body"]
     assert body["max_tokens"] == 256
     assert "max_completion_tokens" not in body
+
+
+@pytest.mark.parametrize("payload", [b"\xff\xfe", b"not-json", b"[]"])
+def test_post_json_normalizes_malformed_success_responses(monkeypatch, payload):
+    monkeypatch.setattr(
+        provider_caller.urllib.request,
+        "urlopen",
+        lambda *a, **k: io.BytesIO(payload),
+    )
+
+    with pytest.raises(provider_caller.ProviderCallError, match="response"):
+        provider_caller._post_json(
+            "https://provider.test/v1/chat/completions",
+            {"Authorization": "Bearer test"},
+            {"model": "test"},
+            "test-provider",
+        )

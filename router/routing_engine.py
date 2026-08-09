@@ -129,8 +129,9 @@ class ConversationStore:
     after CONVERSATION_EXPIRY_SECONDS of inactivity.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, max_entries: int = 100_000) -> None:
         self._store: dict[str, dict] = {}
+        self._max_entries = max_entries
         self._lock = threading.Lock()
 
     def get(self, conversation_id: str) -> dict | None:
@@ -150,6 +151,9 @@ class ConversationStore:
     def update(self, conversation_id: str, model_id: str) -> None:
         """Record that model_id was used for this conversation turn."""
         with self._lock:
+            if conversation_id not in self._store and len(self._store) >= self._max_entries:
+                oldest = min(self._store, key=lambda key: self._store[key]["last_used"])
+                del self._store[oldest]
             prev = self._store.get(conversation_id, {})
             self._store[conversation_id] = {
                 "last_model": model_id,
@@ -190,6 +194,12 @@ class RoutingEngine:
     adaptive weights, analytics).  The route() method is safe to call
     concurrently — it only mutates copies.
     """
+
+    @staticmethod
+    def _scoped_state_key(request: RoutingRequest, raw_key: str) -> str:
+        """Namespace caller-controlled state by the authenticated routing scope."""
+        scope = request.tenant_id or request.user_id
+        return f"{scope}\x00{raw_key}"
 
     def __init__(
         self,
@@ -312,9 +322,14 @@ class RoutingEngine:
 
         # Fix 1: Look up conversation state BEFORE routing so we know the
         # previous model (reported in decision.last_model) and can apply bias.
-        conv_entry = (
-            self._conversation_store.get(request.conversation_id)
+        conv_key = (
+            self._scoped_state_key(request, request.conversation_id)
             if request.conversation_id
+            else None
+        )
+        conv_entry = (
+            self._conversation_store.get(conv_key)
+            if conv_key
             else None
         )
 
@@ -805,7 +820,10 @@ class RoutingEngine:
         # correlate repeat calls (conversation_id, falling back to run_id)
         # and a system prompt long enough that provider caching would
         # plausibly engage at all.
-        cache_key = request.conversation_id or request.run_id
+        raw_cache_key = request.conversation_id or request.run_id
+        cache_key = (
+            self._scoped_state_key(request, raw_cache_key) if raw_cache_key else None
+        )
         cache_prefix_hash = ""
         cache_prefix_tokens = 0
         prompt_cache_status = "cold"
@@ -935,18 +953,15 @@ class RoutingEngine:
 
         # Task 5: if budget walk-down (Step 12) moved `chosen` off the provider
         # cache-selection picked, the cache status no longer reflects reality —
-        # budget is a harder constraint than cache stickiness. Also record the
-        # (possibly walked-down) final choice as the new cache holder.
-        if cache_prefix_hash:
-            if warm_provider is not None and chosen.provider != warm_provider:
-                prompt_cache_status = "would_lose_cache"
-            self._prompt_cache.record(
-                cache_key,
-                chosen.provider,
-                cache_prefix_hash,
-                cache_prefix_tokens,
-                (chosen.cache_ttl_seconds or CACHE_DEFAULT_TTL_SECONDS),
-            )
+        # budget is a harder constraint than cache stickiness. A warm prefix is
+        # recorded only after a provider call succeeds (record_prompt_cache_success),
+        # never merely because routing selected a model.
+        if (
+            cache_prefix_hash
+            and warm_provider is not None
+            and chosen.provider != warm_provider
+        ):
+            prompt_cache_status = "would_lose_cache"
 
         # ══ STEP 13: LOG + RETURN ════════════════════════════════════════
         decision = self._finalise(
@@ -1040,7 +1055,8 @@ class RoutingEngine:
             # Fix 1: Persist the chosen model for the next turn of this conversation.
             if request.conversation_id:
                 self._conversation_store.update(
-                    request.conversation_id, decision.chosen_model.model_id
+                    self._scoped_state_key(request, request.conversation_id),
+                    decision.chosen_model.model_id,
                 )
         # Periodically purge expired per-user state to prevent memory growth.
         # Both stores are keyed by client-supplied values (conversation_id and
@@ -1049,6 +1065,24 @@ class RoutingEngine:
         if self._route_count % 500 == 0:
             self._conversation_store.expire_old()
             self._expire_user_free_rpm()
+
+    def record_prompt_cache_success(
+        self, request: RoutingRequest, model: ModelOption
+    ) -> None:
+        """Mark a provider prefix warm only after that provider succeeded."""
+        raw_key = request.conversation_id or request.run_id
+        if not raw_key or not request.system_prompt:
+            return
+        prefix_tokens = self._classifier._count_tokens(request.system_prompt)
+        if prefix_tokens < CACHE_PREFIX_MIN_TOKENS:
+            return
+        self._prompt_cache.record(
+            self._scoped_state_key(request, raw_key),
+            model.provider,
+            hash_prefix(request.system_prompt),
+            prefix_tokens,
+            model.cache_ttl_seconds or CACHE_DEFAULT_TTL_SECONDS,
+        )
 
     async def _proxy_execute(
         self,
@@ -1101,6 +1135,20 @@ class RoutingEngine:
         seen_ids = {primary.model_id}
 
         for attempt, model in enumerate(models_to_try):
+            estimated_attempt_cost = estimate_step_cost(
+                model, decision.chosen_model, decision.estimated_cost
+            )
+            reservation_id = self._budget.reserve_spend(
+                request.user_id, estimated_attempt_cost, request.plan or "free_plan"
+            )
+            if reservation_id is None:
+                log.warning(
+                    "proxy_call_skipped_budget",
+                    cid=request.correlation_id,
+                    model=model.model_id,
+                    attempt=attempt,
+                )
+                continue
             try:
                 result = await call_provider(
                     model, request, request.provider_api_key.get_secret_value()
@@ -1134,13 +1182,12 @@ class RoutingEngine:
                 # Record actual spend so budget caps hold for proxy-mode calls.
                 # Without this, proxy traffic spends untracked money and
                 # would_exceed_budget always passes. Mirrors Flux.complete().
-                self._budget.record_spend(
-                    user_id=request.user_id,
-                    amount=billed_cost,
+                self._budget.reconcile_spend(
+                    reservation_id,
+                    billed_cost,
                     model_id=model.model_id,
                     correlation_id=request.correlation_id,
                     task_type="unknown",
-                    plan=request.plan or "free_plan",
                 )
                 if request.max_daily_cost is not None:
                     self._daily_budget.record_spend(
@@ -1180,6 +1227,7 @@ class RoutingEngine:
                 return decision
 
             except ProviderCallError as exc:
+                self._budget.release_reservation(reservation_id)
                 status = exc.status_code
                 log.warning(
                     "proxy_call_failed",
@@ -1214,6 +1262,7 @@ class RoutingEngine:
 
             except asyncio.CancelledError:
                 # Cancellation must propagate so the event loop can shut down cleanly.
+                self._budget.release_reservation(reservation_id)
                 raise
             except Exception as exc:
                 # Last-resort catch: anything not already a ProviderCallError is a
@@ -1225,6 +1274,7 @@ class RoutingEngine:
                     model=model.model_id,
                     error=str(exc),
                 )
+                self._budget.release_reservation(reservation_id)
                 break
 
         decision.proxy_response = (

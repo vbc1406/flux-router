@@ -6,8 +6,8 @@ judge and returns ``(quality, correct)``:
   quality — 0.0–1.0, or None if the item could not be graded (skipped).
   correct — bool for objective graders, None for the judge.
 
-HumanEval code execution runs only when the code is trusted: the completion is
-simulated (mock mode) OR the user passed --allow-code-exec.
+HumanEval is left ungraded because Flux does not provide a security sandbox for
+model-generated code.
 """
 
 from __future__ import annotations
@@ -32,9 +32,7 @@ async def grade(
     if g == "mmlu":
         return objective.grade_mmlu(sample, completion)
     if g == "humaneval":
-        return objective.grade_humaneval(
-            sample, completion, allow_exec=allow_code_exec or completion.simulated
-        )
+        return objective.grade_humaneval(sample, completion, allow_exec=allow_code_exec)
     if g == "llm_judge":
         return await grade_llm_judge(sample, completion, judge=judge)
     raise ValueError(f"Unknown grader '{g}'")

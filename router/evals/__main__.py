@@ -4,7 +4,7 @@ CLI entry point — python -m router.evals
 Examples:
     python -m router.evals                         # mock, offline, CI-safe
     python -m router.evals --datasets gsm8k,mmlu --n 100
-    python -m router.evals --live --n 30 --allow-code-exec
+    python -m router.evals --live --n 30
     python -m router.evals --live --judge-model claude-opus-4-7 --md EVALS_RESULT.md
 """
 
@@ -52,7 +52,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--judge-model", default="claude-opus-4-7",
                    help="model id used as the LLM judge for open-ended samples (live only)")
     p.add_argument("--allow-code-exec", action="store_true",
-                   help="permit executing live model-generated code for HumanEval (off by default)")
+                   help=argparse.SUPPRESS)
     p.add_argument("--per-question", action="store_true",
                    help="also print the per-question drill-down (flux vs each provider default)")
     p.add_argument("--seed", default="flux-eval", help="seed for deterministic mock completions")
@@ -63,6 +63,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def _validate(args: argparse.Namespace) -> None:
+    if args.allow_code_exec:
+        sys.exit(
+            "--allow-code-exec is no longer supported: Flux has no security sandbox for "
+            "model-generated code. Use a purpose-built isolated runner."
+        )
     bad_ds = [d for d in args.datasets if d not in DATASETS]
     if bad_ds:
         sys.exit(f"Unknown dataset(s): {', '.join(bad_ds)}. Known: {', '.join(DATASETS)}")

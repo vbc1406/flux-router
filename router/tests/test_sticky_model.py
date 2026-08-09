@@ -194,7 +194,7 @@ class TestStickyModel:
         conv_id = "conv_store_check"
         d = rr(self.engine.route(_req(_MID_PROMPT, conv_id=conv_id)))
         assert d.chosen_model is not None
-        entry = self.engine._conversation_store.get(conv_id)
+        entry = self.engine._conversation_store.get(f"u_sticky\x00{conv_id}")
         assert entry is not None
         assert entry["last_model"] == d.chosen_model.model_id
         assert entry["message_count"] == 1
@@ -227,8 +227,9 @@ class TestStickyModel:
         # Expire the conversation manually.
         with self.engine._conversation_store._lock:
             store = self.engine._conversation_store._store
-            if conv_id in store:
-                store[conv_id]["last_used"] = time.monotonic() - 99999
+            scoped_id = f"u_sticky\x00{conv_id}"
+            if scoped_id in store:
+                store[scoped_id]["last_used"] = time.monotonic() - 99999
 
         d2 = rr(self.engine.route(_req(_MID_PROMPT, conv_id=conv_id)))
         assert d2.last_model is None  # expired entry → no previous model
@@ -248,7 +249,7 @@ class TestStickyModel:
         for _ in range(CONVERSATION_DEPTH_THRESHOLD):
             rr(self.engine.route(_req(prompt, conv_id=conv_id)))
 
-        entry = self.engine._conversation_store.get(conv_id)
+        entry = self.engine._conversation_store.get(f"u_sticky\x00{conv_id}")
         assert entry is not None
         assert entry["message_count"] >= CONVERSATION_DEPTH_THRESHOLD
 
@@ -280,8 +281,9 @@ class TestStickyModel:
         first_id = d1.chosen_model.model_id
 
         # Mark the model as failed.
-        self.engine._conversation_store.record_failure(conv_id)
-        entry = self.engine._conversation_store.get(conv_id)
+        scoped_id = f"u_sticky\x00{conv_id}"
+        self.engine._conversation_store.record_failure(scoped_id)
+        entry = self.engine._conversation_store.get(scoped_id)
         assert entry["last_failed"] is True
 
         # Route again — no bias applied; the model MAY still be chosen by merit.

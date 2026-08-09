@@ -95,7 +95,9 @@ def find_regressions(
 
 
 def format_summary_table(summaries: list[PrioritySummary]) -> str:
-    header = f"{'routing mode':<16} {'total cost':>12} {'avg quality':>12} {'cost / quality pt':>18}"
+    header = (
+        f"{'routing mode':<16} {'total cost':>12} {'avg quality':>12} {'cost / quality pt':>18}"
+    )
     lines = [header, "-" * len(header)]
     for s in sorted(summaries, key=lambda x: x.routing_priority):
         lines.append(
@@ -109,8 +111,13 @@ def format_summary_table(summaries: list[PrioritySummary]) -> str:
 
 def format_regressions(regressions: list[Regression]) -> str:
     if not regressions:
-        return "No regressions >= threshold — cascade/cost-optimized matched quality_max everywhere."
-    header = f"{'task':<10} {'step_type':<22} {'mode':<14} {'mode score':>10} {'quality_max':>12} {'delta':>7}"
+        return (
+            "No regressions >= threshold — cascade/cost-optimized matched quality_max everywhere."
+        )
+    header = (
+        f"{'task':<10} {'step_type':<22} {'mode':<14} {'mode score':>10} "
+        f"{'quality_max':>12} {'delta':>7}"
+    )
     lines = [header, "-" * len(header)]
     for r in regressions:
         lines.append(
@@ -142,7 +149,13 @@ def write_results_csv(results: list[TaskResult], path: str) -> None:
 
 
 def write_summary_csv(summaries: list[PrioritySummary], path: str) -> None:
-    fieldnames = ["routing_priority", "n_tasks", "total_cost_usd", "avg_quality_score", "cost_per_quality_point"]
+    fieldnames = [
+        "routing_priority",
+        "n_tasks",
+        "total_cost_usd",
+        "avg_quality_score",
+        "cost_per_quality_point",
+    ]
     with open(path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()

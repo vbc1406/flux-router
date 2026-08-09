@@ -15,6 +15,7 @@ Things NOT to change without discussion:
   - TIER_ORDER (canonical ordering used by fallback chain and routing engine)
 """
 
+import ipaddress
 import json
 import os
 from dataclasses import dataclass
@@ -599,6 +600,12 @@ ADAPTIVE_CUSTOMER_LOG_MAX: int = 500
 #   lower if startup time or memory usage is a concern.
 ANALYTICS_MAX_STARTUP_ENTRIES: int = 50_000
 
+# Maximum routing decisions retained by the live in-process query API. The
+# durable JSONL audit log remains append-only; only the oldest in-memory entry
+# is evicted. Keeping this separate from the startup replay cap makes the
+# steady-state memory bound explicit and independently tunable.
+ANALYTICS_MAX_ENTRIES: int = 50_000
+
 # ══════════════════════════════════════════════════════════════════════════════
 # BUDGET LEDGER CAP
 # ══════════════════════════════════════════════════════════════════════════════
@@ -684,6 +691,38 @@ SERVER_ALLOWED_HOSTS: frozenset[str] = frozenset(
 # would lock every caller out.
 SERVER_REQUIRE_AUTH: bool = bool(
     os.environ.get("FLUX_SERVER_TOKEN") or os.environ.get("FLUX_SERVER_TOKENS")
+)
+
+SERVER_ALLOW_UNAUTHENTICATED_REMOTE: bool = os.environ.get(
+    "FLUX_ALLOW_UNAUTHENTICATED_REMOTE", ""
+).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def validate_server_binding(
+    host: str,
+    require_auth: bool,
+    *,
+    allow_unauthenticated_remote: bool = False,
+) -> None:
+    """Fail closed when an unauthenticated HTTP server would be remotely reachable."""
+    normalized = host.strip().removeprefix("[").removesuffix("]")
+    try:
+        loopback = normalized.lower() == "localhost" or ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        loopback = False
+    if not require_auth and not loopback and not allow_unauthenticated_remote:
+        raise RuntimeError(
+            f"Refusing unauthenticated server bind to {host!r}. Set FLUX_SERVER_TOKEN "
+            "(or FLUX_SERVER_TOKENS), bind to a loopback address, or—only when an "
+            "external network boundary provides equivalent protection—set "
+            "FLUX_ALLOW_UNAUTHENTICATED_REMOTE=1."
+        )
+
+
+validate_server_binding(
+    SERVER_HOST,
+    SERVER_REQUIRE_AUTH,
+    allow_unauthenticated_remote=SERVER_ALLOW_UNAUTHENTICATED_REMOTE,
 )
 
 @dataclass(frozen=True)
@@ -1002,6 +1041,10 @@ ATTRIBUTION_USAGE_PAGE_MAX: int = 500
 # thread ever falls meaningfully behind (watch for
 # attribution_write_queue_full log lines).
 ATTRIBUTION_WRITE_QUEUE_MAX_SIZE: int = 10_000
+
+# Maximum records inserted in one SQLite transaction by the background writer.
+# Batching amortizes commit/fsync cost while keeping flush/query semantics intact.
+ATTRIBUTION_WRITE_BATCH_SIZE: int = 100
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CASCADE / ESCALATION (Task 8: router/cascade.py, flux.py)

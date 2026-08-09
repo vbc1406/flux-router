@@ -330,39 +330,38 @@ class Flux:
             if attempts > max_retries:
                 break
 
-            # Re-check budget on each fallback attempt. The original routing
-            # decision passed the budget check, but spend recorded by other
-            # in-flight requests (or by the prior failed attempt's own logging,
-            # if any) may have pushed the user over the cap since then. Using
-            # decision.estimated_cost is a reasonable proxy — fallback models
-            # within a tier have similar costs, and we'd rather err toward
-            # stopping than blow the cap.
-            if attempts > 0:
-                plan = request.plan or "free_plan"
-                if self._engine._budget.would_exceed_budget(
-                    request.user_id, decision.estimated_cost, plan
-                ):
-                    last_error = "budget_exceeded"
+            # Reserve estimated spend atomically immediately before dispatch.
+            # This closes the route-check -> provider-call race where many
+            # concurrent requests could all observe the same remaining budget.
+            estimated_attempt_cost = estimate_step_cost(
+                model, decision.chosen_model, decision.estimated_cost
+            )
+            reservation_id = self._engine._budget.reserve_spend(
+                request.user_id, estimated_attempt_cost, request.plan or "free_plan"
+            )
+            if reservation_id is None:
+                last_error = "budget_exceeded"
+                log.warning(
+                    "flux_dispatch_skipped_budget",
+                    user_id=request.user_id,
+                    model=model.model_id,
+                    attempt=attempts,
+                )
+                attempts += 1
+                continue
+            if attempts > 0 and request.max_daily_cost is not None:
+                cust_id = request.customer_id or request.user_id
+                if self._engine._daily_budget.is_cap_exceeded(cust_id, request.max_daily_cost):
+                    last_error = "daily_cap_exceeded"
                     log.warning(
-                        "flux_fallback_skipped_budget",
-                        user_id=request.user_id,
+                        "flux_fallback_skipped_daily_cap",
+                        customer_id=cust_id,
                         model=model.model_id,
                         attempt=attempts,
                     )
+                    self._engine._budget.release_reservation(reservation_id)
                     attempts += 1
                     continue
-                if request.max_daily_cost is not None:
-                    cust_id = request.customer_id or request.user_id
-                    if self._engine._daily_budget.is_cap_exceeded(cust_id, request.max_daily_cost):
-                        last_error = "daily_cap_exceeded"
-                        log.warning(
-                            "flux_fallback_skipped_daily_cap",
-                            customer_id=cust_id,
-                            model=model.model_id,
-                            attempt=attempts,
-                        )
-                        attempts += 1
-                        continue
 
             try:
                 # Wall-clock time of the provider call itself, excluding
@@ -388,6 +387,7 @@ class Flux:
                 # RoutingEngine._proxy_execute_inner already does for its
                 # (unused-in-production) internal proxy path.
                 self._engine._circuit_breaker.record_success(model.provider)
+                self._engine.record_prompt_cache_success(request, model)
 
                 # Bill from the provider's own reported usage when it gave
                 # us one — actual tokens at the actual model's rates. Only
@@ -408,14 +408,13 @@ class Flux:
                     billed_tokens = max(len(text) // 4, 1)
                     usage_source = "estimated"
 
-                # SS#4: record actual plan-level spend after a successful provider call.
-                self._engine._budget.record_spend(
-                    user_id=request.user_id,
-                    amount=billed_cost,
+                # Atomically replace the estimate reservation with actual spend.
+                self._engine._budget.reconcile_spend(
+                    reservation_id,
+                    billed_cost,
                     model_id=model.model_id,
                     correlation_id=request.correlation_id,
                     task_type="unknown",
-                    plan=request.plan or "free_plan",
                 )
                 if request.max_daily_cost is not None:
                     self._engine._daily_budget.record_spend(
@@ -461,6 +460,7 @@ class Flux:
                 return text, model, attempts > 0, last_error, usage
 
             except err.AuthenticationError:
+                self._engine._budget.release_reservation(reservation_id)
                 # Key is wrong — retrying won't help, but it's still evidence
                 # against this provider for circuit-breaker purposes (matches
                 # _proxy_execute_inner, which doesn't special-case auth
@@ -469,6 +469,7 @@ class Flux:
                 raise
 
             except err.RateLimitError:
+                self._engine._budget.release_reservation(reservation_id)
                 last_error = "rate_limit"
                 for m in decision.fallback_on_rate_limit:
                     if m.model_id not in seen_ids:
@@ -476,6 +477,7 @@ class Flux:
                         seen_ids.add(m.model_id)
 
             except err.TimeoutError:
+                self._engine._budget.release_reservation(reservation_id)
                 last_error = "timeout"
                 for m in decision.fallback_on_timeout:
                     if m.model_id not in seen_ids:
@@ -483,6 +485,7 @@ class Flux:
                         seen_ids.add(m.model_id)
 
             except err.ContentFilterError:
+                self._engine._budget.release_reservation(reservation_id)
                 last_error = "content_filter"
                 for m in decision.fallback_on_content_safety:
                     if m.model_id not in seen_ids:
@@ -490,6 +493,7 @@ class Flux:
                         seen_ids.add(m.model_id)
 
             except err.ProviderDownError:
+                self._engine._budget.release_reservation(reservation_id)
                 last_error = "provider_down"
                 # Use rate-limit chain (same-tier alternatives) for down providers.
                 for m in decision.fallback_on_rate_limit:
@@ -498,7 +502,12 @@ class Flux:
                         seen_ids.add(m.model_id)
 
             except err.FluxAPIError:
+                self._engine._budget.release_reservation(reservation_id)
                 last_error = "unknown"
+
+            except BaseException:
+                self._engine._budget.release_reservation(reservation_id)
+                raise
 
             self._engine._circuit_breaker.record_failure(model.provider)
             log.warning(
@@ -561,6 +570,15 @@ class Flux:
                 tier_ladder.append(m)
                 seen_ids.add(m.model_id)
         tier_ladder = tier_ladder[: CASCADE_MAX_ESCALATIONS + 1]
+        reserved_cascade_cost = sum(
+            estimate_step_cost(model, decision.chosen_model, decision.estimated_cost)
+            for model in tier_ladder
+        )
+        cascade_reservation_id = self._engine._budget.reserve_spend(
+            request.user_id, reserved_cascade_cost, request.plan or "free_plan"
+        )
+        if cascade_reservation_id is None:
+            raise err.FluxAPIError("Budget exceeded before cascade dispatch")
 
         step_breakdown: list[dict] = []
         # Parallel to step_breakdown (same index, same length): the
@@ -586,6 +604,7 @@ class Flux:
             try:
                 provider_result = await self._call_model(model, request)
             except err.AuthenticationError:
+                self._engine._budget.release_reservation(cascade_reservation_id)
                 # See _dispatch_with_fallback_inner's equivalent comment —
                 # still evidence against the provider for circuit-breaker
                 # purposes even though it's never retried.
@@ -620,6 +639,7 @@ class Flux:
                 break
 
         if not got_any_response:
+            self._engine._budget.release_reservation(cascade_reservation_id)
             raise err.FluxAPIError(
                 f"Cascade exhausted all tiers without a usable response: {last_reason}"
             )
@@ -669,13 +689,12 @@ class Flux:
                 per_tier_sources.append("estimated")
         total_actual_cost = sum(per_tier_costs)
         total_tokens = sum(per_tier_tokens)
-        self._engine._budget.record_spend(
-            user_id=request.user_id,
-            amount=total_actual_cost,
+        self._engine._budget.reconcile_spend(
+            cascade_reservation_id,
+            total_actual_cost,
             model_id=last_model.model_id,
             correlation_id=request.correlation_id,
             task_type="unknown",
-            plan=request.plan or "free_plan",
         )
         if request.max_daily_cost is not None:
             self._engine._daily_budget.record_spend(

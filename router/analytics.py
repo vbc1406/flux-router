@@ -35,7 +35,7 @@ import io
 import json
 import os
 import threading
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -43,7 +43,7 @@ from typing import Any
 import structlog
 
 from ._io_utils import safe_resolve
-from .config import ANALYTICS_MAX_STARTUP_ENTRIES, MAX_STATE_FILE_BYTES
+from .config import ANALYTICS_MAX_ENTRIES, ANALYTICS_MAX_STARTUP_ENTRIES, MAX_STATE_FILE_BYTES
 from .schemas import RoutingDecision
 
 log = structlog.get_logger(__name__)
@@ -65,8 +65,10 @@ class RoutingAnalytics:
     ) -> None:
         self._path = safe_resolve(log_path, base_dir) if log_path else None
         self._lock = threading.Lock()
-        self._entries: list[dict[str, Any]] = []
-        self._index: dict[str, int] = {}  # correlation_id → index in _entries (O(1) updates)
+        self._entries: deque[dict[str, Any]] = deque()
+        # Keep direct entry references so evicting the left side of the deque
+        # does not require shifting/rebuilding an integer index.
+        self._index: dict[str, dict[str, Any]] = {}
         if self._path is not None:
             self._load_existing()
 
@@ -122,10 +124,9 @@ class RoutingAnalytics:
         known after the model call completes.  Uses the correlation_id index for O(1) lookup.
         """
         with self._lock:
-            idx = self._index.get(correlation_id)
-            if idx is None:
+            entry = self._index.get(correlation_id)
+            if entry is None:
                 return
-            entry = self._entries[idx]
             if actual_cost is not None:
                 entry["actual_cost"] = actual_cost
             if quality_score is not None:
@@ -217,11 +218,17 @@ class RoutingAnalytics:
 
     def _append(self, entry: dict[str, Any]) -> None:
         with self._lock:
-            idx = len(self._entries)
+            if len(self._entries) >= ANALYTICS_MAX_ENTRIES:
+                evicted = self._entries.popleft()
+                evicted_cid = evicted.get("correlation_id")
+                # A duplicate correlation id may have been logged later; do
+                # not remove the index entry for that newer decision.
+                if evicted_cid and self._index.get(evicted_cid) is evicted:
+                    del self._index[evicted_cid]
             self._entries.append(entry)
             cid = entry.get("correlation_id")
             if cid:
-                self._index[cid] = idx
+                self._index[cid] = entry
         if self._path is None:
             return
         try:
@@ -268,15 +275,15 @@ class RoutingAnalytics:
                     if line:
                         lines.append(line)
             # Avoid OOM on large log files: only keep the most recent entries.
-            if len(lines) > ANALYTICS_MAX_STARTUP_ENTRIES:
-                lines = lines[-ANALYTICS_MAX_STARTUP_ENTRIES:]
+            memory_limit = min(ANALYTICS_MAX_STARTUP_ENTRIES, ANALYTICS_MAX_ENTRIES)
+            if len(lines) > memory_limit:
+                lines = lines[-memory_limit:]
             for line in lines:
                 entry = json.loads(line)
-                idx = len(self._entries)
                 self._entries.append(entry)
                 cid = entry.get("correlation_id")
                 if cid:
-                    self._index[cid] = idx
+                    self._index[cid] = entry
         except (OSError, json.JSONDecodeError) as exc:
             log.warning("analytics_load_failed", error=str(exc))
 

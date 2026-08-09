@@ -140,8 +140,9 @@ class TestCacheAwareRoutingEngine:
         # Force the incumbent regardless of what the first call happened to
         # pick, so the second call's behavior is what's under test.
         prefix_tokens = engine._classifier._count_tokens(_LONG_SYSTEM_PROMPT)
+        scoped_key = engine._scoped_state_key(req1, conv_id)
         engine._prompt_cache.record(
-            conv_id, "cache-provider", hash_prefix(_LONG_SYSTEM_PROMPT), prefix_tokens, 300
+            scoped_key, "cache-provider", hash_prefix(_LONG_SYSTEM_PROMPT), prefix_tokens, 300
         )
 
         req2 = _req(conversation_id=conv_id, system_prompt=_LONG_SYSTEM_PROMPT)
@@ -156,14 +157,17 @@ class TestCacheAwareRoutingEngine:
         engine = _engine([_cache_model(), _cheap_cold_model(cost_per_1k_input=0.0002)])
         conv_id = "conv-switch"
         prefix_tokens = engine._classifier._count_tokens(_LONG_SYSTEM_PROMPT)
-        engine._prompt_cache.record(
-            conv_id, "cache-provider", hash_prefix(_LONG_SYSTEM_PROMPT), prefix_tokens, 300
-        )
-
         req = _req(
             conversation_id=conv_id,
             system_prompt=_LONG_SYSTEM_PROMPT,
             routing_priority="cost-optimized",
+        )
+        engine._prompt_cache.record(
+            engine._scoped_state_key(req, conv_id),
+            "cache-provider",
+            hash_prefix(_LONG_SYSTEM_PROMPT),
+            prefix_tokens,
+            300,
         )
         decision = rr(engine.route(req))
         assert decision.chosen_model.provider == "cold-provider"
@@ -187,10 +191,14 @@ class TestCacheAwareRoutingEngine:
         engine = _engine([_cache_model(), _cheap_cold_model(cost_per_1k_input=0.008)])
         run_id = "run-cache"
         prefix_tokens = engine._classifier._count_tokens(_LONG_SYSTEM_PROMPT)
-        engine._prompt_cache.record(
-            run_id, "cache-provider", hash_prefix(_LONG_SYSTEM_PROMPT), prefix_tokens, 300
-        )
         req = _req(run_id=run_id, system_prompt=_LONG_SYSTEM_PROMPT)
+        engine._prompt_cache.record(
+            engine._scoped_state_key(req, run_id),
+            "cache-provider",
+            hash_prefix(_LONG_SYSTEM_PROMPT),
+            prefix_tokens,
+            300,
+        )
         decision = rr(engine.route(req))
         assert decision.chosen_model.provider == "cache-provider"
         assert decision.prompt_cache_status == "warm"

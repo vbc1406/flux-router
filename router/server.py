@@ -20,6 +20,7 @@ traceback deep in a missing-module chain.
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import ipaddress
 import json
@@ -225,9 +226,10 @@ def _tokens_equal(presented: str, expected: str) -> bool:
 def _check_auth(authorization: str | None) -> ServerTokenBinding | None:
     """Validate the bearer token and return the ServerTokenBinding (tenant_id
     + plan) it's bound to, if any (FLUX_SERVER_TOKENS multi-tenant mode).
-    None means either auth is disabled or the legacy single-shared-token mode
-    is in effect, where the caller's self-declared tenant_id/user/plan fields
-    are trusted as-is — see SECURITY_ARCHITECTURE.md."""
+    None means authentication is disabled. A legacy single shared token is
+    bound to one immutable synthetic tenant so callers cannot forge tenant
+    identities, enumerate another tenant's usage, or rotate budget buckets.
+    """
     if not SERVER_REQUIRE_AUTH:
         return None
     if not authorization or not authorization.startswith("Bearer "):
@@ -259,7 +261,7 @@ def _check_auth(authorization: str | None) -> ServerTokenBinding | None:
     # so this fails closed rather than raising TypeError inside compare_digest.
     if _SERVER_TOKEN is None or not _tokens_equal(token, _SERVER_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid bearer token")
-    return None
+    return ServerTokenBinding(tenant_id="shared-token", plan="pro_plan")
 
 
 async def _read_bounded_body(request: Request) -> bytes:
@@ -530,8 +532,12 @@ async def get_usage(
         tenant_id = binding.tenant_id
     limit = max(1, min(limit, ATTRIBUTION_USAGE_PAGE_MAX))
     offset = max(0, offset)
-    records, total = _flux._engine._attribution.usage(
-        tenant_id=tenant_id, run_id=run_id, limit=limit, offset=offset
+    records, total = await asyncio.to_thread(
+        _flux._engine._attribution.usage,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        limit=limit,
+        offset=offset,
     )
     return {
         "object": "list",
@@ -626,8 +632,10 @@ async def stats_summary(
     tenant_id = _stats_scope(request, authorization)
     return {
         "window": window,
-        **_flux._engine._attribution.stats_summary(
-            since=_stats_since(window), tenant_id=tenant_id
+        **await asyncio.to_thread(
+            _flux._engine._attribution.stats_summary,
+            since=_stats_since(window),
+            tenant_id=tenant_id,
         ),
     }
 
@@ -649,8 +657,11 @@ async def stats_timeseries(
     return {
         "window": window,
         "bucket_seconds": bucket,
-        "data": _flux._engine._attribution.stats_timeseries(
-            since=since, bucket_seconds=bucket, tenant_id=tenant_id
+        "data": await asyncio.to_thread(
+            _flux._engine._attribution.stats_timeseries,
+            since=since,
+            bucket_seconds=bucket,
+            tenant_id=tenant_id,
         ),
     }
 
@@ -663,8 +674,10 @@ async def stats_models(
     tenant_id = _stats_scope(request, authorization)
     return {
         "window": window,
-        "data": _flux._engine._attribution.stats_by_model(
-            since=_stats_since(window), tenant_id=tenant_id
+        "data": await asyncio.to_thread(
+            _flux._engine._attribution.stats_by_model,
+            since=_stats_since(window),
+            tenant_id=tenant_id,
         ),
     }
 
@@ -677,8 +690,10 @@ async def stats_tasks(
     tenant_id = _stats_scope(request, authorization)
     return {
         "window": window,
-        "data": _flux._engine._attribution.stats_by_task_type(
-            since=_stats_since(window), tenant_id=tenant_id
+        "data": await asyncio.to_thread(
+            _flux._engine._attribution.stats_by_task_type,
+            since=_stats_since(window),
+            tenant_id=tenant_id,
         ),
     }
 
@@ -697,8 +712,10 @@ async def stats_tenants(
     tenant_id = _stats_scope(request, authorization)
     return {
         "window": window,
-        "data": _flux._engine._attribution.stats_by_tenant(
-            since=_stats_since(window), tenant_id=tenant_id
+        "data": await asyncio.to_thread(
+            _flux._engine._attribution.stats_by_tenant,
+            since=_stats_since(window),
+            tenant_id=tenant_id,
         ),
     }
 
@@ -897,6 +914,11 @@ async def chat_completions(
             "enforcement will not span multiple steps for this call",
         )
     routing_request, _ = _build_routing_request(body, run_id, tenant_id, plan=bound_plan)
+    if binding is not None:
+        # Budget and rate-limit identity must come from authenticated context,
+        # never the caller-controlled OpenAI `user` field.
+        routing_request.user_id = binding.tenant_id
+        routing_request.customer_id = binding.tenant_id
     stream = bool(body.get("stream", False))
     # Whether the CLIENT'S OWN request asked for the OpenAI stream_options
     # usage chunk — independent of whether WE ask the upstream provider for
@@ -1077,6 +1099,19 @@ async def _stream_completion(
     """
     model = decision.chosen_model
     model_id = model.model_id
+    reservation_id = _flux._engine._budget.reserve_spend(
+        routing_request.user_id,
+        decision.estimated_cost,
+        routing_request.plan or "free_plan",
+    )
+    if reservation_id is None:
+        if routing_request.run_id:
+            _flux._engine._run_budget.release_reservation(
+                routing_request.run_id, tenant_id=routing_request.tenant_id
+            )
+        yield f"data: {json.dumps({'error': 'Budget exceeded'})}\n\n".encode()
+        yield b"data: [DONE]\n\n"
+        return
 
     def _chunk(delta: dict, finish_reason: str | None) -> bytes:
         payload = {
@@ -1096,13 +1131,12 @@ async def _stream_completion(
         output_tokens: int | None = None,
     ) -> None:
         engine = _flux._engine
-        engine._budget.record_spend(
-            user_id=routing_request.user_id,
-            amount=cost_usd,
+        engine._budget.reconcile_spend(
+            reservation_id,
+            cost_usd,
             model_id=model_id,
             correlation_id=routing_request.correlation_id,
             task_type="unknown",
-            plan=routing_request.plan or "free_plan",
         )
         if routing_request.max_daily_cost is not None:
             engine._daily_budget.record_spend(
@@ -1203,6 +1237,8 @@ async def _stream_completion(
             else:
                 _record_estimated()
             recorded = True
+            _flux._engine._circuit_breaker.record_success(model.provider)
+            _flux._engine.record_prompt_cache_success(routing_request, model)
         else:
             result = await _flux._call_model(model, routing_request)
             text = result.text
@@ -1217,9 +1253,13 @@ async def _stream_completion(
             else:
                 _record_usage(decision.estimated_cost, max(len(text) // 4, 1), "estimated")
             recorded = True
+            _flux._engine._circuit_breaker.record_success(model.provider)
+            _flux._engine.record_prompt_cache_success(routing_request, model)
             yield _chunk({"role": "assistant", "content": text}, None)
             yield _chunk({}, "stop")
     except (ProviderCallError, FluxAPIError) as exc:
+        _flux._engine._budget.release_reservation(reservation_id)
+        _flux._engine._circuit_breaker.record_failure(model.provider)
         if not recorded and routing_request.run_id:
             _flux._engine._run_budget.release_reservation(
                 routing_request.run_id, tenant_id=routing_request.tenant_id

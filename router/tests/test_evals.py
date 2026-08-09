@@ -1,15 +1,17 @@
 """
 Tests for the cost-vs-quality eval harness (router/evals).
 
-Everything here runs fully offline: fixtures only, simulated completions, and
-the real graders (HumanEval executes the bundled canonical/broken code in a
-subprocess — no network, no provider keys, no spend).
+Everything here runs fully offline: fixtures only and simulated completions.
+HumanEval remains ungraded because the process provides no code sandbox.
 """
 
 from __future__ import annotations
 
 import asyncio
 
+import pytest
+
+from router.evals import __main__ as eval_cli
 from router.evals.completions import get_completion
 from router.evals.datasets import DATASETS, load_dataset, load_datasets
 from router.evals.graders import grade
@@ -97,14 +99,23 @@ class TestObjectiveGraders:
         assert _run(grade(s, _completion(ref))) == (1.0, True)
         assert _run(grade(s, _completion(wrong))) == (0.0, False)
 
-    def test_humaneval_pass_and_fail_via_subprocess(self):
+    def test_humaneval_simulated_completion_is_not_executed(self):
         s = load_dataset("humaneval", n=1)[0]  # add(a, b)
         header = s.metadata["prompt_header"]
         good = _completion(header + s.reference)  # canonical body
-        bad = _completion(header + "    return 0\n")
-        # simulated=True ⇒ exec is permitted without --allow-code-exec.
-        assert _run(grade(s, good)) == (1.0, True)
-        assert _run(grade(s, bad)) == (0.0, False)
+        assert _run(grade(s, good)) == (None, None)
+
+    def test_humaneval_explicit_exec_request_fails_clearly(self):
+        s = load_dataset("humaneval", n=1)[0]
+        completion = _completion(s.metadata["prompt_header"] + s.reference, simulated=False)
+        with pytest.raises(RuntimeError, match="no security sandbox"):
+            _run(grade(s, completion, allow_code_exec=True))
+
+    def test_removed_code_exec_cli_flag_fails_clearly(self):
+        args = eval_cli._parse_args(["--allow-code-exec"])
+        eval_cli._resolve_strategies(args)
+        with pytest.raises(SystemExit, match="no security sandbox"):
+            eval_cli._validate(args)
 
     def test_humaneval_skipped_when_exec_not_allowed(self):
         s = load_dataset("humaneval", n=1)[0]
@@ -214,7 +225,8 @@ class TestEndToEnd:
         )
         out = _run(run_eval(config))
         assert out.results
-        assert out.n_skipped == 0  # nothing should skip in mock mode
+        # HumanEval is deliberately skipped: this process is not a code sandbox.
+        assert out.n_skipped == len(load_dataset("humaneval", n=50)) * 3
         reports = aggregate(out.results)
         # Premium is the cost ceiling; cheapest is the floor.
         assert reports["premium"].total_cost >= reports["flux"].total_cost
