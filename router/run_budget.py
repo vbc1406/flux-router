@@ -42,7 +42,7 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol, TypeVar
 
 import structlog
 
@@ -61,6 +61,7 @@ from .config import (
 )
 
 log = structlog.get_logger(__name__)
+_T = TypeVar("_T")
 
 
 @dataclass
@@ -123,6 +124,11 @@ class RunStore(Protocol):
     def get(self, run_id: str) -> _RunState | None: ...
     def set(self, run_id: str, state: _RunState) -> None: ...
     def delete(self, run_id: str) -> None: ...
+    def update(
+        self, run_id: str, updater: Callable[[_RunState | None], tuple[_RunState | None, _T]]
+    ) -> _T:
+        """Atomically read, transform, and persist a run state."""
+        ...
     def sweep_expired(self, ttl_seconds: float) -> int:
         """Evict entries idle longer than ttl_seconds. Returns count evicted."""
         ...
@@ -159,6 +165,19 @@ class InMemoryRunStore:
     def delete(self, run_id: str) -> None:
         with self._lock:
             self._states.pop(run_id, None)
+
+    def update(
+        self, run_id: str, updater: Callable[[_RunState | None], tuple[_RunState | None, _T]]
+    ) -> _T:
+        with self._lock:
+            state, result = updater(self._states.get(run_id))
+            if state is None:
+                return result
+            if run_id not in self._states and len(self._states) >= self._max_entries:
+                self._states.popitem(last=False)
+            self._states[run_id] = state
+            self._states.move_to_end(run_id)
+            return result
 
     def sweep_expired(self, ttl_seconds: float) -> int:
         now = time.monotonic()
@@ -302,6 +321,34 @@ class RedisRunStore:
         self._redis.delete(self._state_prefix + run_id)
         self._redis.zrem(self._lru_key, run_id)
 
+    def update(
+        self, run_id: str, updater: Callable[[_RunState | None], tuple[_RunState | None, _T]]
+    ) -> _T:
+        """Optimistic Redis transaction, safe across independent workers."""
+        import redis
+
+        state_key = self._state_prefix + run_id
+        while True:
+            with self._redis.pipeline() as pipe:
+                try:
+                    pipe.watch(state_key)
+                    raw = pipe.get(state_key)
+                    state, result = updater(self._deserialize(raw) if raw is not None else None)
+                    if state is None:
+                        pipe.unwatch()
+                        return result
+                    pipe.multi()
+                    pipe.set(state_key, self._serialize(state), ex=max(int(self._ttl_seconds), 1))
+                    pipe.zadd(self._lru_key, {run_id: time.time()})
+                    pipe.execute()
+                    if self._redis.zcard(self._lru_key) > self._max_entries:
+                        evicted = self._redis.zpopmin(self._lru_key)
+                        if evicted:
+                            self._redis.delete(self._state_prefix + evicted[0][0])
+                    return result
+                except redis.exceptions.WatchError:
+                    continue
+
     def sweep_expired(self, ttl_seconds: float) -> int:
         cutoff = time.time() - ttl_seconds
         expired = self._redis.zrangebyscore(self._lru_key, "-inf", cutoff)
@@ -380,27 +427,26 @@ class RunBudget:
         """
         self._maybe_housekeep()
         key = self._key(run_id, tenant_id)
-        with self._lock:
-            state = self._store.get(key)
+        def reserve(state: _RunState | None) -> tuple[_RunState, str]:
             if state is None:
                 state = _RunState(limits=RunLimits())
             state.last_touched = time.monotonic()
 
             frac, reason = _worst_fraction(state)
             if frac >= 1.0:
-                self._store.set(key, state)
                 # run_id here is the caller-facing (unscoped) id — never leak
                 # the tenant-scoped storage key into the exception/response.
                 raise RunBudgetExceeded(run_id, _summary(run_id, state, reason))
 
             state.pending_steps += 1
-            self._store.set(key, state)
-
             if frac >= RUN_WARN_THRESHOLD:
-                return "warning"
-            if frac >= RUN_DEGRADE_THRESHOLD:
-                return "degraded"
-            return "ok"
+                result = "warning"
+            elif frac >= RUN_DEGRADE_THRESHOLD:
+                result = "degraded"
+            else:
+                result = "ok"
+            return state, result
+        return self._store.update(key, reserve)
 
     def record_step(
         self,
@@ -413,8 +459,7 @@ class RunBudget:
         """Record a completed step's actual cost/tokens, releasing the
         reservation check_before_dispatch() made for it. Never raises."""
         key = self._key(run_id, tenant_id)
-        with self._lock:
-            state = self._store.get(key)
+        def record(state: _RunState | None) -> tuple[_RunState, None]:
             if state is None:
                 state = _RunState(limits=RunLimits())
             state.steps.append(
@@ -426,7 +471,8 @@ class RunBudget:
             state.cost_so_far += cost_usd
             state.tokens_so_far += tokens
             state.last_touched = time.monotonic()
-            self._store.set(key, state)
+            return state, None
+        self._store.update(key, record)
 
     def release_reservation(self, run_id: str, tenant_id: str | None = None) -> None:
         """Release a step slot reserved by check_before_dispatch() without a
@@ -436,12 +482,12 @@ class RunBudget:
         router/server.py's proxy handlers). Never raises; a no-op if the run
         is already gone (e.g. TTL-swept)."""
         key = self._key(run_id, tenant_id)
-        with self._lock:
-            state = self._store.get(key)
+        def release(state: _RunState | None) -> tuple[_RunState | None, None]:
             if state is None:
-                return
+                return None, None
             state.pending_steps = max(0, state.pending_steps - 1)
-            self._store.set(key, state)
+            return state, None
+        self._store.update(key, release)
 
     def snapshot(self, run_id: str, tenant_id: str | None = None) -> tuple[float, int]:
         """Return (cost_so_far, steps_so_far) for a run, or (0.0, 0) if unknown."""

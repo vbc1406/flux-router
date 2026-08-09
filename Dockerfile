@@ -35,10 +35,10 @@ VOLUME ["/data"]
 # the host on the command line left it believing it was on loopback while
 # actually serving every tenant's spend to the network.
 #
-# Consequence worth knowing: a container never has a loopback client — requests
-# arrive from the docker bridge — so the dashboard's unauthenticated
-# loopback-only allowance never applies here. Set FLUX_SERVER_TOKEN to use the
-# dashboard in Docker; without it this image serves the API only.
+# Authentication is mandatory because this is a non-loopback bind. Startup
+# fails closed without FLUX_SERVER_TOKEN/FLUX_SERVER_TOKENS. A deployment whose
+# network boundary supplies equivalent authentication may explicitly accept
+# the risk with FLUX_ALLOW_UNAUTHENTICATED_REMOTE=1.
 ENV FLUX_SERVER_HOST=0.0.0.0
 
 # Switch to non-root user
@@ -52,6 +52,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Default command: run the OpenAI-compatible HTTP proxy, with the data
 # directory created and the usage database pointed inside it. Bind address and
-# data dir come from the ENV above; set FLUX_SERVER_TOKEN to require auth
-# (and to allow the dashboard to be served) before exposing the port.
+# data dir come from the ENV above; an authentication token is required.
 CMD ["flux", "serve"]

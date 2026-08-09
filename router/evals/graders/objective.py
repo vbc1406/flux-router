@@ -12,17 +12,11 @@ item could not be graded) and correct is the bool outcome (or None).
 from __future__ import annotations
 
 import re
-import subprocess
-import sys
 
 from ..schemas import Completion, EvalSample
 
 _NUM_RE = re.compile(r"-?\d[\d,]*\.?\d*")
 _LETTER_RE = re.compile(r"\b([A-Da-d])\b")
-
-# Hard ceiling on how long a single HumanEval program may run, in seconds.
-_EXEC_TIMEOUT = 10
-
 
 def _last_number(text: str) -> str | None:
     """Return the final numeric token, preferring text after the last '####'."""
@@ -66,28 +60,10 @@ def grade_humaneval(
     completion: Completion,
     allow_exec: bool,
 ) -> tuple[float | None, bool | None]:
-    """Run the completion against the sample's unit tests in a subprocess.
-
-    Executing model-generated code is gated: callers pass allow_exec=True only
-    when the code is trusted (simulated) or the user opted in with
-    --allow-code-exec. Without it, the item is left ungraded (None).
-    """
-    if not allow_exec:
-        return (None, None)
-
-    code = _extract_code(completion.text)
-    entry_point = sample.metadata.get("entry_point", "")
-    test = sample.metadata.get("test", "")
-    program = f"{code}\n\n{test}\n\ncheck({entry_point})\n"
-
-    try:
-        proc = subprocess.run(  # noqa: S603 - trusted/opted-in code, isolated subprocess
-            [sys.executable, "-I", "-c", program],
-            capture_output=True,
-            timeout=_EXEC_TIMEOUT,
-            text=True,
+    """Leave HumanEval ungraded; host execution is intentionally unavailable."""
+    if allow_exec:
+        raise RuntimeError(
+            "HumanEval code execution is disabled: Flux has no security sandbox for "
+            "model-generated code. Run HumanEval in a purpose-built isolated runner."
         )
-    except subprocess.TimeoutExpired:
-        return (0.0, False)
-    passed = proc.returncode == 0
-    return (1.0 if passed else 0.0, passed)
+    return (None, None)

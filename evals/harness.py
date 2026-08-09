@@ -175,11 +175,7 @@ async def run_golden_set(
                     answer, correct = _mock_answer(model, task, priority)
                 else:
                     api_key = api_keys.get(model.provider.lower(), "")
-                    answer = (
-                        await _live_answer(model, task, api_key)
-                        if api_key
-                        else ""
-                    )
+                    answer = await _live_answer(model, task, api_key) if api_key else ""
                     correct = _normalize_exact(answer) == _normalize_exact(task.expected or "")
                 score = 5.0 if correct else 1.0
                 passed: bool | None = correct
@@ -189,9 +185,7 @@ async def run_golden_set(
                     score = mock_score(model, task, priority)
                 else:
                     api_key = api_keys.get(model.provider.lower(), "")
-                    answer = (
-                        await _live_answer(model, task, api_key) if api_key else ""
-                    )
+                    answer = await _live_answer(model, task, api_key) if api_key else ""
                     if judge_model is None:
                         score = 1.0
                     else:

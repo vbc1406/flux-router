@@ -22,6 +22,7 @@ How to run:
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -177,6 +178,43 @@ class TestRedisRunStoreSpecifics:
 
         assert cost == pytest.approx(0.05)
         assert steps == 1
+
+    def test_independent_instances_atomically_reserve_last_step(self):
+        client = fakeredis.FakeRedis(decode_responses=True)
+        rb_a = RunBudget(store=RedisRunStore(redis_client=client, ttl_seconds=3600.0))
+        rb_b = RunBudget(store=RedisRunStore(redis_client=client, ttl_seconds=3600.0))
+        rb_a.start("shared", RunLimits(max_steps=1))
+
+        def check(rb):
+            try:
+                rb.check_before_dispatch("shared")
+                return True
+            except RunBudgetExceeded:
+                return False
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            accepted = list(pool.map(check, (rb_a, rb_b)))
+        assert accepted.count(True) == 1
+
+    def test_independent_instances_do_not_lose_concurrent_records(self):
+        client = fakeredis.FakeRedis(decode_responses=True)
+        budgets = [
+            RunBudget(store=RedisRunStore(redis_client=client, ttl_seconds=3600.0))
+            for _ in range(8)
+        ]
+        budgets[0].start("shared", RunLimits(max_steps=1000))
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(
+                pool.map(
+                    lambda index: budgets[index % len(budgets)].record_step(
+                        "shared", "m", 0.01, 1
+                    ),
+                    range(100),
+                )
+            )
+        cost, steps = budgets[0].snapshot("shared")
+        assert cost == pytest.approx(1.0)
+        assert steps == 100
 
     def test_config_flag_selects_redis_backend(self, monkeypatch):
         import router.config as config_module

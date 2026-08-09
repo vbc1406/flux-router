@@ -17,7 +17,7 @@ Config Dependencies (all in config.py):
   BUDGET_LEDGER_MAX_PER_USER — max spend records per user (bounded deque)
 
 Key Methods:
-  BudgetTracker.would_exceed_budget(user_id, cost) — call before committing to a model
+  BudgetTracker.reserve_spend(user_id, cost) — atomically reserve before dispatch
   BudgetTracker.record_spend(user_id, amount, ...)  — call after a successful response
   DailyBudgetTracker.is_cap_exceeded(customer_id, daily_cap) — check daily cap
 
@@ -25,21 +25,16 @@ Key Methods:
   daily spend state across multiple service instances.  The public interface stays
   the same; only the storage backend changes.
 
-Things NOT to change without discussion:
-  - The lock pattern in would_exceed_budget() that reads plan, daily, and monthly
-    spend under a single acquisition. This makes a single check internally
-    consistent — but note that the check→record window across calls is NOT
-    atomic: two concurrent requests can both pass the budget check before
-    either records spend, so daily/monthly caps can be exceeded by a small
-    margin under high concurrency. This is the standard pre-bill pattern;
-    operators who need a hard cap should record_spend BEFORE the provider
-    call and refund on failure, or wrap routing with their own mutex.
+Compatibility note: would_exceed_budget() and record_spend() remain available,
+but callers needing a hard concurrent cap must use reserve_spend() followed by
+reconcile_spend() or release_reservation().
 """
 
 from __future__ import annotations
 
 import itertools
 import threading
+import uuid
 from collections import OrderedDict, defaultdict, deque
 from collections.abc import Iterable
 from datetime import date, datetime, timezone
@@ -109,6 +104,10 @@ class BudgetTracker:
         # lockstep with _ledger so the two never disagree on which users
         # are still tracked.
         self._plans: dict[str, str] = {}
+        # reservation_id -> (user_id, estimated amount, plan). Reservations are
+        # included in budget checks until reconciled with actual spend or
+        # explicitly released.
+        self._reservations: dict[str, tuple[str, float, str]] = {}
 
     # ── Internal: LRU-bounded ledger access ────────────────────────────────
 
@@ -231,6 +230,72 @@ class BudgetTracker:
                 limits["monthly"] - monthly_spend,
             )
         return estimated_cost > remaining
+
+    def reserve_spend(
+        self, user_id: str, estimated_cost: float, plan: str | None = None
+    ) -> str | None:
+        """Atomically reserve estimated spend, returning an opaque id.
+
+        Returns ``None`` when the estimate would exceed either limit. The
+        caller must eventually pass the id to ``reconcile_spend`` after a
+        successful provider call, or to ``release_reservation`` otherwise.
+        """
+        user_id = _validate_user_id(user_id)
+        if estimated_cost < 0:
+            raise ValueError("estimated_cost must be non-negative")
+        with self._lock:
+            resolved_plan = plan or self._plans.get(user_id, "free_plan")
+            limits = BUDGET_LIMITS.get(resolved_plan, BUDGET_LIMITS["free_plan"])
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            daily_spend = monthly_spend = 0.0
+            for record in reversed(self._ledger_for_read(user_id)):
+                if record.timestamp.year != now.year or record.timestamp.month != now.month:
+                    break
+                monthly_spend += record.amount
+                if record.timestamp.date() == now.date():
+                    daily_spend += record.amount
+            pending = sum(
+                amount for uid, amount, _ in self._reservations.values() if uid == user_id
+            )
+            if daily_spend + pending + estimated_cost > limits["daily"] or (
+                monthly_spend + pending + estimated_cost > limits["monthly"]
+            ):
+                return None
+            reservation_id = uuid.uuid4().hex
+            self._reservations[reservation_id] = (user_id, estimated_cost, resolved_plan)
+            return reservation_id
+
+    def reconcile_spend(
+        self,
+        reservation_id: str,
+        actual_amount: float,
+        model_id: str,
+        correlation_id: str,
+        task_type: str = "unknown",
+    ) -> None:
+        """Replace a reservation with one actual spend record atomically."""
+        if actual_amount < 0:
+            raise ValueError("actual_amount must be non-negative")
+        with self._lock:
+            reservation = self._reservations.pop(reservation_id, None)
+            if reservation is None:
+                raise KeyError(f"unknown budget reservation: {reservation_id}")
+            user_id, _, plan = reservation
+            self._plans[user_id] = plan
+            self._ledger_for_write(user_id).append(
+                _SpendRecord(
+                    amount=actual_amount,
+                    model_id=model_id,
+                    task_type=task_type,
+                    correlation_id=correlation_id,
+                    timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
+                )
+            )
+
+    def release_reservation(self, reservation_id: str) -> bool:
+        """Release unused estimated spend. Returns whether it existed."""
+        with self._lock:
+            return self._reservations.pop(reservation_id, None) is not None
 
     def check_daily_cap(self, customer_id: str, daily_cap: float) -> bool:
         """

@@ -24,17 +24,15 @@ services:
       GROQ_API_KEY: "${GROQ_API_KEY:-}"
       MISTRAL_API_KEY: "${MISTRAL_API_KEY:-}"
 
-      # REQUIRED IF YOU WANT THE DASHBOARD. Unlike a bare `flux serve` on the
+      # REQUIRED. Unlike a bare `flux serve` on the
       # host, a container can never see a loopback client: the proxy binds
       # 0.0.0.0 inside the container and requests arrive from the docker
       # bridge, so the dashboard's "loopback callers only" allowance never
       # applies — even when the port is published to 127.0.0.1 as above.
-      # Setting a token is what makes the dashboard serve at all here; paste
+      # Setting a token makes the container start and the dashboard serve; paste
       # the same value into the dashboard's token prompt on first load.
-      # Leave it empty and you get the API only, with no auth.
-      #
       #   FLUX_SERVER_TOKEN=$(openssl rand -hex 32) docker compose up -d
-      FLUX_SERVER_TOKEN: "${FLUX_SERVER_TOKEN:-}"
+      FLUX_SERVER_TOKEN: "${FLUX_SERVER_TOKEN:?Set FLUX_SERVER_TOKEN to a strong random value}"
 
       # Set to 0 for a headless deployment that serves the API only.
       FLUX_DASHBOARD: "1"

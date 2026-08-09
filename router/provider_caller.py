@@ -197,7 +197,18 @@ def _post_json(
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=PROVIDER_CALL_TIMEOUT_SECONDS) as resp:  # nosec B310 — scheme validated above
-            return json.loads(_bounded_read(resp).decode("utf-8"))
+            try:
+                decoded = _bounded_read(resp).decode("utf-8")
+                parsed = json.loads(decoded)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ProviderCallError(
+                    f"Malformed response from {provider_name}", http_status=None
+                ) from exc
+            if not isinstance(parsed, dict):
+                raise ProviderCallError(
+                    f"Invalid response structure from {provider_name}", http_status=None
+                )
+            return parsed
     except urllib.error.HTTPError as exc:
         body_text = ""
         # Swallow body-read failures so the original HTTP error is what we surface.
@@ -217,7 +228,7 @@ def _post_json(
             f"HTTP {exc.code} from {provider_name}",
             http_status=exc.code,
         ) from exc
-    except urllib.error.URLError as exc:
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise ProviderCallError(f"Network error calling {provider_name}") from exc
 
 

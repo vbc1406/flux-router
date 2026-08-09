@@ -40,6 +40,7 @@ import structlog
 from .config import (
     ATTRIBUTION_DB_PATH,
     ATTRIBUTION_METRICS_MAX_LABEL_COMBOS,
+    ATTRIBUTION_WRITE_BATCH_SIZE,
     ATTRIBUTION_WRITE_QUEUE_MAX_SIZE,
 )
 
@@ -228,6 +229,8 @@ class SqliteUsageStore:
         self._queue: queue.Queue[UsageRecord] = queue.Queue(
             maxsize=ATTRIBUTION_WRITE_QUEUE_MAX_SIZE
         )
+        self._dropped_records = 0
+        self._dropped_lock = threading.Lock()
         self._writer_thread = threading.Thread(
             target=self._writer_loop, name="flux-usage-writer", daemon=True
         )
@@ -249,30 +252,44 @@ class SqliteUsageStore:
 
     def _writer_loop(self) -> None:
         while True:
-            rec = self._queue.get()
+            batch = [self._queue.get()]
+            while len(batch) < ATTRIBUTION_WRITE_BATCH_SIZE:
+                try:
+                    batch.append(self._queue.get_nowait())
+                except queue.Empty:
+                    break
             try:
                 with self._lock:
                     # Column list and placeholders are both derived from the
                     # fixed _USAGE_COLUMNS tuple — no caller data reaches the
                     # SQL text, every value goes through a ? placeholder.
-                    self._conn.execute(
+                    self._conn.executemany(
                         f"INSERT INTO usage ({', '.join(_USAGE_COLUMNS)}) "  # noqa: S608 # nosec B608
                         f"VALUES ({', '.join('?' * len(_USAGE_COLUMNS))})",
-                        tuple(getattr(rec, col) for col in _USAGE_COLUMNS),
+                        [tuple(getattr(rec, col) for col in _USAGE_COLUMNS) for rec in batch],
                     )
                     self._conn.commit()
             finally:
-                self._queue.task_done()
+                for _ in batch:
+                    self._queue.task_done()
 
     def record(self, rec: UsageRecord) -> None:
         try:
             self._queue.put_nowait(rec)
         except queue.Full:
+            with self._dropped_lock:
+                self._dropped_records += 1
             log.warning(
                 "attribution_write_queue_full",
                 limit=ATTRIBUTION_WRITE_QUEUE_MAX_SIZE,
                 msg="usage-store writer thread is falling behind; dropping this record",
             )
+
+    @property
+    def dropped_records(self) -> int:
+        """Number of records dropped because the bounded writer queue was full."""
+        with self._dropped_lock:
+            return self._dropped_records
 
     def _flush(self) -> None:
         """Block until every record enqueued so far has been committed."""
@@ -728,6 +745,13 @@ class CostAttribution:
             "# HELP flux_cost_usd_total Total recorded cost in USD (actual or "
             "estimated), labelled by tenant and model.",
             "# TYPE flux_cost_usd_total counter",
+        ]
+        dropped = getattr(self._store, "dropped_records", 0)
+        lines += [
+            "# HELP flux_attribution_records_dropped_total Usage records dropped "
+            "because the SQLite writer queue was full.",
+            "# TYPE flux_attribution_records_dropped_total counter",
+            f"flux_attribution_records_dropped_total {dropped}",
         ]
         with self._lock:
             for (tenant, model), cost in sorted(self._cost_by_label.items()):

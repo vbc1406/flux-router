@@ -71,7 +71,10 @@ _PLAN_TASKS = [
         id="plan-02",
         step_type="plan",
         task_type="reasoning",
-        prompt="Create a step-by-step plan to onboard a new backend engineer in their first two weeks.",
+        prompt=(
+            "Create a step-by-step plan to onboard a new backend engineer in their "
+            "first two weeks."
+        ),
         grader="rubric",
         rubric=(
             "A strong plan sequences access/setup, codebase orientation, a "
@@ -83,7 +86,10 @@ _PLAN_TASKS = [
         id="plan-03",
         step_type="plan",
         task_type="reasoning",
-        prompt="Plan how to debug a production API that intermittently returns 500 errors under load.",
+        prompt=(
+            "Plan how to debug a production API that intermittently returns 500 errors "
+            "under load."
+        ),
         grader="rubric",
         rubric=(
             "A strong plan starts with observability (logs/metrics/traces), "
@@ -335,7 +341,10 @@ _FINAL_ANSWER_TASKS = [
         id="fa-03",
         step_type="final_answer",
         task_type="reasoning",
-        prompt="Convert 100 Fahrenheit to Celsius, rounded to the nearest whole number. Answer with only the number.",
+        prompt=(
+            "Convert 100 Fahrenheit to Celsius, rounded to the nearest whole number. "
+            "Answer with only the number."
+        ),
         grader="exact",
         expected="38",
     ),
@@ -357,7 +366,10 @@ _FINAL_ANSWER_TASKS = [
         id="fa-05",
         step_type="final_answer",
         task_type="code_generation",
-        prompt="Write a Python function that returns the nth Fibonacci number, iteratively (not recursive).",
+        prompt=(
+            "Write a Python function that returns the nth Fibonacci number, iteratively "
+            "(not recursive)."
+        ),
         grader="rubric",
         rubric=(
             "A strong answer is a correct, iterative (loop-based, not "
