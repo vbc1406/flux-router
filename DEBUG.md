@@ -20,6 +20,10 @@ python -c "from router.model_registry import ModelRegistry; m=ModelRegistry(); p
 
 # Check current adaptive weights state
 python -c "import json; d=json.load(open('router/adaptive_state.json')); print(json.dumps(d, indent=2))"
+
+# Real-provider smoke tests (opt-in, spends real money, needs real keys —
+# every test self-skips for whichever providers' key env var isn't set):
+ANTHROPIC_API_KEY=sk-ant-... OPENAI_API_KEY=sk-... pytest -v router/tests/test_provider_smoke.py
 ```
 
 ---
