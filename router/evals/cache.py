@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 
 def make_key(*parts: str) -> str:
@@ -26,17 +27,17 @@ class DiskCache:
     def __init__(self, path: str | None) -> None:
         self.enabled = path is not None
         self._path = Path(path) if path else None
-        self._data: dict[str, dict] = {}
+        self._data: dict[str, dict[str, Any]] = {}
         if self.enabled and self._path is not None and self._path.exists():
             try:
                 self._data = json.loads(self._path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 self._data = {}
 
-    def get(self, key: str) -> dict | None:
+    def get(self, key: str) -> dict[str, Any] | None:
         return self._data.get(key)
 
-    def set(self, key: str, value: dict) -> None:
+    def set(self, key: str, value: dict[str, Any]) -> None:
         if not self.enabled or self._path is None:
             return
         self._data[key] = value

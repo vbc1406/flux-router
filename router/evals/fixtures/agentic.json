@@ -1,0 +1,66 @@
+[
+  {
+    "step_type": "plan",
+    "prompt": "You are an agent helping a user migrate a PostgreSQL database to a new server with zero downtime. Before taking any action, write a short numbered plan of the steps you will take.",
+    "task_type": "reasoning"
+  },
+  {
+    "step_type": "tool_select",
+    "prompt": "You have these tools available:\n- get_weather(city): get the current weather for a city\n- get_stock_price(ticker): get the current stock price for a ticker symbol\n- send_email(to, body): send an email to a recipient\n\nThe user asked: \"What's the weather like in Tokyo right now?\"\n\nRespond with ONLY the name of the one tool you would call to answer this — nothing else.",
+    "task_type": "function_calling",
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "description": "Get the current weather for a city",
+          "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "get_stock_price",
+          "description": "Get the current stock price for a ticker symbol",
+          "parameters": {
+            "type": "object",
+            "properties": {"ticker": {"type": "string"}},
+            "required": ["ticker"]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "send_email",
+          "description": "Send an email to a recipient",
+          "parameters": {
+            "type": "object",
+            "properties": {"to": {"type": "string"}, "body": {"type": "string"}},
+            "required": ["to", "body"]
+          }
+        }
+      }
+    ],
+    "expected_tool": "get_weather"
+  },
+  {
+    "step_type": "tool_result_summarize",
+    "prompt": "A tool call returned this raw JSON result:\n{\"city\": \"Tokyo\", \"temp_c\": 18, \"condition\": \"light rain\", \"humidity\": 82}\nSummarize this result for the user in one plain-English sentence.",
+    "task_type": "summarization"
+  },
+  {
+    "step_type": "reflect",
+    "prompt": "You just attempted to fix a failing test by changing the assertion to match the buggy output instead of fixing the underlying bug. Critique your own last action: was this the right approach? What should you do instead?",
+    "task_type": "analysis"
+  },
+  {
+    "step_type": "final_answer",
+    "prompt": "You have gathered all the information needed: the user's flight was delayed by 3 hours (new departure 6:45pm), and a complimentary meal voucher is available at gate C12. Give the user your final answer summarizing this.",
+    "task_type": "summarization"
+  }
+]

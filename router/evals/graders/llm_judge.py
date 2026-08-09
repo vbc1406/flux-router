@@ -17,6 +17,7 @@ import structlog
 
 from ...model_registry import ModelRegistry
 from ...schemas import ModelOption, RoutingRequest
+from ..cache import DiskCache
 from ..schemas import Completion, EvalSample
 
 log = structlog.get_logger(__name__)
@@ -35,7 +36,9 @@ _SCORE_RE = re.compile(r"\b(10|[1-9])\b")
 class Judge:
     """Calls a provider to score an answer. Constructed only for live runs."""
 
-    def __init__(self, model: ModelOption, api_key: str, cache=None) -> None:
+    def __init__(
+        self, model: ModelOption, api_key: str, cache: DiskCache | None = None
+    ) -> None:
         self._model = model
         self._api_key = api_key
         self._cache = cache  # optional DiskCache; verdicts keyed by answer text
@@ -54,12 +57,18 @@ class Judge:
         prompt = _RUBRIC.format(prompt=sample.prompt, answer=completion.text)
         request = RoutingRequest(raw_prompt=prompt, user_id="flux-eval-judge", temperature=0.0)
         try:
-            raw = await call_provider(self._model, request, self._api_key)
+            # Bugfix: call_provider() returns a ProviderResult, not a bare
+            # str — same class of bug as completions.py::_live_completion.
+            # This would have raised AttributeError (ProviderResult has no
+            # .strip()) the moment a live judge call actually ran; caught by
+            # mypy --strict, not by any test (no test exercised a live judge
+            # call — see TestJudge in test_evals.py, all mock-mode).
+            result = await call_provider(self._model, request, self._api_key)
         except ProviderCallError as exc:
             log.warning("judge_call_failed", model=self._model.model_id, error=str(exc))
             return 0.0
-        score = _parse_score(raw)
-        if cache_key is not None:
+        score = _parse_score(result.text)
+        if cache_key is not None and self._cache is not None:
             self._cache.set(cache_key, {"score": score})
         return score
 
@@ -73,7 +82,10 @@ def _parse_score(raw: str) -> float:
 
 
 def make_judge(
-    registry: ModelRegistry, model_id: str, api_keys: dict[str, str], cache=None
+    registry: ModelRegistry,
+    model_id: str,
+    api_keys: dict[str, str],
+    cache: DiskCache | None = None,
 ) -> Judge:
     """Build a Judge for ``model_id`` using the matching provider key."""
     model = registry.get_model(model_id)

@@ -33,7 +33,7 @@ import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 import structlog
 
@@ -119,13 +119,16 @@ _USAGE_COLUMNS: tuple[str, ...] = (
 _BOOL_COLUMNS: frozenset[str] = frozenset({"cache_hit", "fallback_used"})
 
 
-def _row_to_record(row: tuple) -> UsageRecord:
+def _row_to_record(row: tuple[Any, ...]) -> UsageRecord:
     """Build a UsageRecord from a row selected in _USAGE_COLUMNS order.
 
     SQLite has no boolean type, so cache_hit/fallback_used come back as 0/1
     ints; convert them so callers (and GET /v1/usage's JSON) see real bools.
     """
-    values = [
+    # A raw sqlite3 row is inherently untyped column-by-column; `values` is
+    # deliberately Any here so unpacking into UsageRecord's mixed field
+    # types below doesn't need a per-column type assertion.
+    values: list[Any] = [
         bool(row[i]) if col in _BOOL_COLUMNS else row[i]
         for i, col in enumerate(_USAGE_COLUMNS)
     ]
@@ -295,8 +298,9 @@ class SqliteUsageStore:
         """Block until every record enqueued so far has been committed."""
         self._queue.join()
 
-    def _where(self, tenant_id: str | None, run_id: str | None) -> tuple[str, list]:
-        clauses, params = [], []
+    def _where(self, tenant_id: str | None, run_id: str | None) -> tuple[str, list[Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
         if tenant_id is not None:
             clauses.append("tenant_id = ?")
             params.append(tenant_id)
@@ -334,7 +338,8 @@ class SqliteUsageStore:
         with self._lock:
             # Same fixed-clause `where` as query() above — not injectable.
             cur = self._conn.execute(f"SELECT COUNT(*) FROM usage {where}", params)  # noqa: S608 # nosec B608
-            return cur.fetchone()[0]
+            count: int = cur.fetchone()[0]
+            return count
 
     # ── Aggregates for the local dashboard (GET /v1/stats/*) ─────────────────
     #
@@ -345,8 +350,9 @@ class SqliteUsageStore:
     # aggregates in SQL rather than pulling rows into Python, so a long
     # history stays cheap to render.
 
-    def _stats_where(self, tenant_id: str | None, since: float | None) -> tuple[str, list]:
-        clauses, params = [], []
+    def _stats_where(self, tenant_id: str | None, since: float | None) -> tuple[str, list[Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
         if tenant_id is not None:
             clauses.append("tenant_id = ?")
             params.append(tenant_id)
@@ -356,7 +362,7 @@ class SqliteUsageStore:
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         return where, params
 
-    def _percentile(self, where: str, params: list, fraction: float) -> float | None:
+    def _percentile(self, where: str, params: list[Any], fraction: float) -> float | None:
         """Nearest-rank percentile of latency_ms over the matching rows.
 
         SQLite has no percentile function, so this is done as a count plus an
@@ -380,7 +386,9 @@ class SqliteUsageStore:
         ).fetchone()
         return row[0] if row else None
 
-    def summary(self, *, since: float | None = None, tenant_id: str | None = None) -> dict:
+    def summary(
+        self, *, since: float | None = None, tenant_id: str | None = None
+    ) -> dict[str, Any]:
         """Headline numbers for the selected window."""
         self._flush()
         where, params = self._stats_where(tenant_id, since)
@@ -436,7 +444,7 @@ class SqliteUsageStore:
         since: float | None = None,
         bucket_seconds: int = 3600,
         tenant_id: str | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Cost and request count per fixed-width time bucket, oldest first.
 
         Buckets are aligned to epoch multiples of bucket_seconds so they stay
@@ -469,7 +477,9 @@ class SqliteUsageStore:
             for r in rows
         ]
 
-    def by_model(self, *, since: float | None = None, tenant_id: str | None = None) -> list[dict]:
+    def by_model(
+        self, *, since: float | None = None, tenant_id: str | None = None
+    ) -> list[dict[str, Any]]:
         """Per-model breakdown, most expensive first."""
         self._flush()
         where, params = self._stats_where(tenant_id, since)
@@ -499,7 +509,7 @@ class SqliteUsageStore:
 
     def by_task_type(
         self, *, since: float | None = None, tenant_id: str | None = None
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Per-task-type breakdown, most expensive first."""
         self._flush()
         where, params = self._stats_where(tenant_id, since)
@@ -524,7 +534,9 @@ class SqliteUsageStore:
             for r in rows
         ]
 
-    def by_tenant(self, *, since: float | None = None, tenant_id: str | None = None) -> list[dict]:
+    def by_tenant(
+        self, *, since: float | None = None, tenant_id: str | None = None
+    ) -> list[dict[str, Any]]:
         """Per-tenant breakdown, most expensive first.
 
         The tenant_id filter is still honoured even though grouping by tenant:
@@ -703,8 +715,12 @@ class CostAttribution:
         """
         return hasattr(self._store, "summary")
 
-    def stats_summary(self, *, since: float | None = None, tenant_id: str | None = None) -> dict:
-        return self._store.summary(since=since, tenant_id=tenant_id)  # type: ignore[attr-defined]
+    def stats_summary(
+        self, *, since: float | None = None, tenant_id: str | None = None
+    ) -> dict[str, Any]:
+        return self._store.summary(  # type: ignore[attr-defined, no-any-return]
+            since=since, tenant_id=tenant_id
+        )
 
     def stats_timeseries(
         self,
@@ -712,25 +728,31 @@ class CostAttribution:
         since: float | None = None,
         bucket_seconds: int = 3600,
         tenant_id: str | None = None,
-    ) -> list[dict]:
-        return self._store.timeseries(  # type: ignore[attr-defined]
+    ) -> list[dict[str, Any]]:
+        return self._store.timeseries(  # type: ignore[attr-defined, no-any-return]
             since=since, bucket_seconds=bucket_seconds, tenant_id=tenant_id
         )
 
     def stats_by_model(
         self, *, since: float | None = None, tenant_id: str | None = None
-    ) -> list[dict]:
-        return self._store.by_model(since=since, tenant_id=tenant_id)  # type: ignore[attr-defined]
+    ) -> list[dict[str, Any]]:
+        return self._store.by_model(  # type: ignore[attr-defined, no-any-return]
+            since=since, tenant_id=tenant_id
+        )
 
     def stats_by_task_type(
         self, *, since: float | None = None, tenant_id: str | None = None
-    ) -> list[dict]:
-        return self._store.by_task_type(since=since, tenant_id=tenant_id)  # type: ignore[attr-defined]
+    ) -> list[dict[str, Any]]:
+        return self._store.by_task_type(  # type: ignore[attr-defined, no-any-return]
+            since=since, tenant_id=tenant_id
+        )
 
     def stats_by_tenant(
         self, *, since: float | None = None, tenant_id: str | None = None
-    ) -> list[dict]:
-        return self._store.by_tenant(since=since, tenant_id=tenant_id)  # type: ignore[attr-defined]
+    ) -> list[dict[str, Any]]:
+        return self._store.by_tenant(  # type: ignore[attr-defined, no-any-return]
+            since=since, tenant_id=tenant_id
+        )
 
     def render_prometheus(self, tenant_filter: str | None = None) -> str:
         """Render current counters in Prometheus text exposition format.

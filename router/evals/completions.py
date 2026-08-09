@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import random
 import time
+from typing import Any
 
 from ..classifier import estimate_tokens
 from ..schemas import ModelOption, RoutingRequest
@@ -35,7 +36,7 @@ class LiveCompletionError(Exception):
 # Fallback quality by tier when a model has no rating for the task type.
 _TIER_DEFAULT_QUALITY = {"free": 0.55, "cheap": 0.70, "mid": 0.82, "premium": 0.92}
 
-_OBJECTIVE_GRADERS = {"gsm8k", "mmlu", "humaneval"}
+_OBJECTIVE_GRADERS = {"gsm8k", "mmlu", "humaneval", "agentic_tool_select"}
 
 
 def _sim_quality(model: ModelOption, task_type: str) -> float:
@@ -90,12 +91,21 @@ def _simulated_text(sample: EvalSample, correct: bool, rng: random.Random) -> st
         ans = ref if correct else _wrong_letter(ref, n, rng)
         return ans
     if sample.grader == "humaneval":
-        header = sample.metadata.get("prompt_header", "")
+        header: str = sample.metadata.get("prompt_header", "")
         if correct and sample.reference:
             body = sample.reference  # canonical solution body
         else:
             body = "    raise NotImplementedError\n"
         return header + body
+    if sample.grader == "agentic_tool_select":
+        expected: str = sample.metadata.get("expected_tool", "")
+        offered = [
+            t.get("function", {}).get("name")
+            for t in sample.metadata.get("tools", [])
+            if t.get("function", {}).get("name")
+        ]
+        wrong_candidates = [n for n in offered if n != expected]
+        return expected if correct else rng.choice(wrong_candidates or [expected])
     # open-ended — generic plausible prose; the mock judge uses sim_quality.
     return (
         f"Here is a thoughtful response to the request:\n\n"
@@ -109,7 +119,7 @@ async def get_completion(
     sample: EvalSample,
     *,
     mode: str = "mock",
-    api_keys: dict | None = None,
+    api_keys: dict[str, Any] | None = None,
     max_tokens: int = 1024,
     seed: str = "flux-eval",
 ) -> Completion:
@@ -151,7 +161,7 @@ def _mock_completion(model: ModelOption, sample: EvalSample, seed: str) -> Compl
 
 
 async def _live_completion(
-    model: ModelOption, sample: EvalSample, api_keys: dict, max_tokens: int
+    model: ModelOption, sample: EvalSample, api_keys: dict[str, Any], max_tokens: int
 ) -> Completion:
     """Call the real provider for ``model`` with the sample's prompt.
 
@@ -176,9 +186,16 @@ async def _live_completion(
     )
     t0 = time.perf_counter()
     try:
-        text = await call_provider(model, request, key)
+        # Bugfix: call_provider() returns a ProviderResult, not a bare str —
+        # this used to store the whole ProviderResult object as `text`,
+        # which every downstream grader (string ops on completion.text) and
+        # estimate_tokens(text) would have blown up on the moment this path
+        # was actually exercised with real keys. Untested before now (no
+        # test covered _live_completion at all — see test_evals.py).
+        result = await call_provider(model, request, key)
     except ProviderCallError as exc:
         raise LiveCompletionError(f"provider call failed for {model.model_id}: {exc}") from exc
+    text = result.text
     latency_ms = int((time.perf_counter() - t0) * 1000)
 
     input_tokens = estimate_tokens(sample.prompt)

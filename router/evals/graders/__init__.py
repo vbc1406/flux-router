@@ -33,6 +33,8 @@ async def grade(
         return objective.grade_mmlu(sample, completion)
     if g == "humaneval":
         return objective.grade_humaneval(sample, completion, allow_exec=allow_code_exec)
+    if g == "agentic_tool_select":
+        return objective.grade_tool_select(sample, completion)
     if g == "llm_judge":
         return await grade_llm_judge(sample, completion, judge=judge)
     raise ValueError(f"Unknown grader '{g}'")

@@ -125,3 +125,97 @@ def test_post_json_normalizes_malformed_success_responses(monkeypatch, payload):
             {"model": "test"},
             "test-provider",
         )
+
+
+# ── Item 2: provider_model_id — the literal string sent upstream ─────────────
+
+
+def test_provider_model_id_defaults_to_model_id():
+    m = _model("openai", "gpt-5-mini")
+    assert m.provider_model_id == "gpt-5-mini"
+
+
+def test_provider_model_id_override_used_when_set():
+    m = ModelOption(
+        provider="groq",
+        model_id="gpt-oss-120b",
+        provider_model_id="openai/gpt-oss-120b",
+        display_name="GPT-OSS 120B",
+        tier="mid",
+        cost_per_1k_input=0.00015,
+        cost_per_1k_output=0.0006,
+        max_context_window=131_072,
+        max_output_tokens=32_768,
+        capabilities=[],
+    )
+    assert m.model_id == "gpt-oss-120b"
+    assert m.provider_model_id == "openai/gpt-oss-120b"
+
+
+@pytest.mark.parametrize(
+    "model_id,expected_upstream",
+    [
+        ("gpt-oss-120b", "openai/gpt-oss-120b"),
+        ("gpt-oss-20b", "openai/gpt-oss-20b"),
+        ("qwen-3.6-27b", "qwen/qwen3.6-27b"),
+    ],
+)
+def test_groq_catalog_entries_send_namespaced_upstream_id(captured, model_id, expected_upstream):
+    """The three Groq entries with a real models.json provider_model_id
+    override must send THAT string as "model" upstream, not Flux's internal
+    model_id — this is the exact bug Item 2 fixes."""
+    from router.model_registry import ModelRegistry
+
+    registry = ModelRegistry()
+    model = registry.get_model(model_id)
+    assert model is not None, f"{model_id} missing from the loaded catalog"
+    assert model.provider_model_id == expected_upstream
+
+    provider_caller._call_openai_compat_sync(
+        model,
+        _request(),
+        api_key="gsk-test",
+        base_url="https://api.groq.com/openai/v1",
+        provider_name="groq",
+    )
+    assert captured["body"]["model"] == expected_upstream
+
+
+def test_every_catalog_entry_sends_its_provider_model_id_upstream(monkeypatch):
+    """Loop over the whole loaded registry: whatever body/URL a provider's
+    caller builds, the upstream model string must equal provider_model_id
+    (== model_id when no override is set in models.json)."""
+    from router.model_registry import ModelRegistry
+
+    box: dict = {}
+
+    def fake_post_anthropic(url, headers, body, provider_name):
+        box["model"] = body["model"]
+        return {"content": [{"text": "ok"}]}
+
+    def fake_post_google(url, headers, body, provider_name):
+        box["url"] = url
+        return {"candidates": [{"content": {"parts": [{"text": "ok"}]}, "finishReason": "STOP"}]}
+
+    def fake_post_compat(url, headers, body, provider_name):
+        box["model"] = body["model"]
+        return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]}
+
+    registry = ModelRegistry()
+    for model in registry.all_available_models():
+        expected = model.provider_model_id or model.model_id
+        if model.provider == "anthropic":
+            monkeypatch.setattr(provider_caller, "_post_json", fake_post_anthropic)
+            provider_caller._call_anthropic_sync(model, _request(), api_key="k")
+            assert box["model"] == expected
+        elif model.provider == "google":
+            monkeypatch.setattr(provider_caller, "_post_json", fake_post_google)
+            provider_caller._call_google_sync(model, _request(), api_key="k")
+            assert f"/models/{expected.replace('-thinking', '')}:" in box["url"]
+        else:
+            monkeypatch.setattr(provider_caller, "_post_json", fake_post_compat)
+            base = provider_caller._OPENAI_COMPAT_BASES[model.provider]
+            provider_caller._call_openai_compat_sync(
+                model, _request(), api_key="k", base_url=base, provider_name=model.provider
+            )
+            assert box["model"] == expected

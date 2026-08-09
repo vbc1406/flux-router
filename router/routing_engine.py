@@ -59,6 +59,7 @@ import threading
 import time
 from collections import OrderedDict, defaultdict, deque
 from datetime import datetime, timezone
+from typing import Any, Literal
 
 import structlog
 
@@ -134,11 +135,11 @@ class ConversationStore:
         # recency so eviction at the cap is move_to_end()/popitem(last=False)
         # (O(1)), matching the LRU pattern already used by run_budget.py and
         # budget_tracker.py, instead of a min() scan over every entry.
-        self._store: OrderedDict[str, dict] = OrderedDict()
+        self._store: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._max_entries = max_entries
         self._lock = threading.Lock()
 
-    def get(self, conversation_id: str) -> dict | None:
+    def get(self, conversation_id: str) -> dict[str, Any] | None:
         """
         Return the conversation entry, or None if unknown / expired.
         Expired entries are deleted lazily on access.
@@ -831,7 +832,7 @@ class RoutingEngine:
         )
         cache_prefix_hash = ""
         cache_prefix_tokens = 0
-        prompt_cache_status = "cold"
+        prompt_cache_status: Literal["cold", "warm", "would_lose_cache"] = "cold"
         warm_provider: str | None = None
         if cache_key and request.system_prompt:
             cache_prefix_tokens = self._classifier._count_tokens(request.system_prompt)
@@ -1022,7 +1023,7 @@ class RoutingEngine:
         fallback_on_rate_limit: list[ModelOption] | None = None,
         fallback_on_content_safety: list[ModelOption] | None = None,
         fallback_on_timeout: list[ModelOption] | None = None,
-        prompt_cache_status: str = "cold",
+        prompt_cache_status: Literal["cold", "warm", "would_lose_cache"] = "cold",
     ) -> RoutingDecision:
         """Assemble and return a fully populated RoutingDecision."""
         savings = _estimate_savings_vs_premium(analysis, chosen, self._registry)
@@ -1141,7 +1142,10 @@ class RoutingEngine:
 
         for attempt, model in enumerate(models_to_try):
             estimated_attempt_cost = estimate_step_cost(
-                model, decision.chosen_model, decision.estimated_cost
+                # decision.chosen_model is primary, checked non-None above;
+                # `or model` only satisfies the type checker for that
+                # unreachable-in-practice branch.
+                model, decision.chosen_model or model, decision.estimated_cost
             )
             reservation_id = self._budget.reserve_spend(
                 request.user_id, estimated_attempt_cost, request.plan or "free_plan"
@@ -1181,7 +1185,7 @@ class RoutingEngine:
                     usage_source = "provider"
                 else:
                     billed_cost = estimate_step_cost(
-                        model, decision.chosen_model, decision.estimated_cost
+                        model, decision.chosen_model or model, decision.estimated_cost
                     )
                     billed_tokens = max(len(response) // 4, 1)
                     usage_source = "estimated"

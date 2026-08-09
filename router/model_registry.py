@@ -242,6 +242,7 @@ def _build_hardcoded_registry() -> dict[str, ModelOption]:
         ModelOption(
             provider="groq",
             model_id="gpt-oss-20b",
+            provider_model_id="openai/gpt-oss-20b",
             display_name="GPT-OSS 20B (Groq free)",
             tier="free",
             cost_per_1k_input=0.0,

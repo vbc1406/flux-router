@@ -8,6 +8,7 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import contextlib
 import random
@@ -24,11 +25,11 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from router import routing_engine
 from router.adaptive_weights import AdaptiveWeights
 from router.analytics import RoutingAnalytics
 from router.budget_tracker import BudgetTracker
 from router.cache import ResponseCache, is_cache_eligible
-from router.cache import fingerprint as fp_fn
 from router.classifier import RequestClassifier
 from router.context_compressor import ContextCompressor
 from router.model_registry import ModelRegistry
@@ -631,8 +632,34 @@ def _extract_reasoning(reasoning: str) -> Tuple[str, float]:
 
 
 async def run_benchmark(dataset: List[dict]) -> BenchmarkResults:
+    """Wraps _run_benchmark_inner, forcing the cache on for the duration of
+    this call regardless of the ambient FLUX_ENABLE_RESPONSE_CACHE env var.
+
+    ResponseCache(enabled=True) alone is not sufficient: RoutingEngine.route()
+    gates its OWN cache get/set attempt on the module-level ENABLE_RESPONSE_CACHE
+    constant (routing_engine.py), imported by value at import time from
+    config.py — not on the ResponseCache instance's .enabled flag. So the
+    benchmark must also flip that module global for the duration of the run,
+    restoring it afterward so this process-wide toggle doesn't leak into
+    anything else importing router.routing_engine (e.g. a test suite running
+    this benchmark alongside other tests in the same process).
+    """
+    prev_enable_cache = routing_engine.ENABLE_RESPONSE_CACHE
+    routing_engine.ENABLE_RESPONSE_CACHE = True
+    try:
+        return await _run_benchmark_inner(dataset)
+    finally:
+        routing_engine.ENABLE_RESPONSE_CACHE = prev_enable_cache
+
+
+async def _run_benchmark_inner(dataset: List[dict]) -> BenchmarkResults:
     registry = ModelRegistry()
-    cache = ResponseCache()
+    # Explicitly enabled regardless of the ambient FLUX_ENABLE_RESPONSE_CACHE
+    # env var (ResponseCache() defaults to disabled — see cache.py). The
+    # cache-hit-rate check in validate() exists specifically to demonstrate
+    # the cache path works, so it must not depend on how the environment
+    # this benchmark happens to run in is configured.
+    cache = ResponseCache(enabled=True)
     adaptive = AdaptiveWeights(state_file=None)
     analytics = RoutingAnalytics(log_path=None)
     budget = BudgetTracker()
@@ -696,6 +723,7 @@ async def run_benchmark(dataset: List[dict]) -> BenchmarkResults:
 
         # Always classify directly — don't rely on reasoning string which is
         # absent for cache hits.
+        _analysis = None
         try:
             _analysis = _probe_clf.analyze(req)
             task_type = _analysis.task_type
@@ -703,23 +731,37 @@ async def run_benchmark(dataset: List[dict]) -> BenchmarkResults:
         except Exception:
             task_type, complexity = _extract_reasoning(decision.reasoning)
 
-        # Seed the response cache after the first successful routing of a cache-eligible
-        # request, so that subsequent identical prompts can return cache hits.
+        # Seed the response cache only once this request has what stands in,
+        # in this synthetic benchmark, for a successful completion: routing
+        # produced a chosen_model, didn't error, wasn't already a cache hit,
+        # and wasn't cost-blocked. This benchmark never calls a real provider
+        # (see the module docstring), so there is no actual completion to
+        # wait for — these four checks are the honest proxy for "the request
+        # would have gone on to complete successfully," matching the real
+        # invariant enforced in production by
+        # RoutingEngine.record_prompt_cache_success ("mark warm only after
+        # that provider succeeded") for the separate prompt-prefix cache.
         if (
             error is None
             and not decision.cache_hit
             and not decision.cost_blocked
             and decision.chosen_model is not None
             and is_cache_eligible(task_type, temp)
+            and _analysis is not None
         ):
-            real_fp = fp_fn(
-                req.raw_prompt,
-                req.system_prompt,
-                req.message_history,
-                req.temperature,
-            )
+            # Bugfix: must use the classifier's OWN scope-aware fingerprint
+            # (_analysis.prompt_fingerprint, built from prompt+scope_key —
+            # see classifier.py::_cache_scope_key) rather than recomputing a
+            # bare fingerprint here. RoutingEngine.route()'s cache lookup
+            # (Step 2) reads analysis.prompt_fingerprint for every request,
+            # which is scoped per tenant/user/plan/sensitivity; a bare
+            # fp_fn(...) call with no scope_key produces a DIFFERENT digest,
+            # so a "duplicate" request's later cache.get() would silently
+            # miss the entry this seeded — the second half of why the
+            # cache-hit-rate check always read 0%, even after the cache
+            # itself was correctly enabled (see run_benchmark's docstring).
             cache.set(
-                fp=real_fp,
+                fp=_analysis.prompt_fingerprint,
                 response_text="[benchmark mock response]",
                 model_used=decision.chosen_model,
                 original_cost=decision.estimated_cost,
@@ -1240,7 +1282,27 @@ def validate(bench: BenchmarkResults) -> Tuple[bool, List[str]]:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 
-async def main() -> None:
+def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="python -m router.benchmark",
+        description=(
+            "Routing-decision benchmark: 500 synthetic requests through the "
+            "full routing stack, no real provider API calls."
+        ),
+    )
+    parser.add_argument(
+        "--n",
+        type=int,
+        default=None,
+        metavar="N",
+        help="use only the first N requests of the 500-request dataset "
+        "(default: all 500). Useful for a fast smoke run.",
+    )
+    return parser.parse_args(argv)
+
+
+async def main(args: Optional[argparse.Namespace] = None) -> None:
+    args = args or _parse_args([])
     console.print()
     console.print(
         Panel.fit(
@@ -1253,6 +1315,8 @@ async def main() -> None:
 
     console.print("[dim]Generating 500-request dataset (seed=42)...[/dim]")
     dataset = generate_test_dataset()
+    if args.n is not None:
+        dataset = dataset[: args.n]
     console.print("[dim]Generated {} requests across 6 categories.[/dim]".format(len(dataset)))
     console.print()
 
@@ -1336,4 +1400,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # argparse's own --help handling (via SystemExit) fires inside
+    # _parse_args, before generate_test_dataset()/run_benchmark() ever run —
+    # this must stay OUTSIDE the asyncio.run() call, not inside main(), or
+    # --help would only exit after the event loop was already spun up.
+    asyncio.run(main(_parse_args()))

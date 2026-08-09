@@ -138,6 +138,10 @@ class FluxResponse:
                           DispatchUsage. None only if somehow no dispatch
                           recording occurred (should not happen on any
                           successful response).
+        tool_calls      — OpenAI-shaped tool calls the model made, or None.
+                          See provider_caller.ProviderResult for the shape.
+        finish_reason   — Normalized finish reason ("stop" | "tool_calls" |
+                          "length" | "content_filter").
     """
 
     text: str
@@ -146,6 +150,8 @@ class FluxResponse:
     fallback_used: bool = False
     fallback_reason: str | None = None
     usage: DispatchUsage | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+    finish_reason: str = "stop"
 
 
 class Flux:
@@ -240,7 +246,7 @@ class Flux:
         prompt: str,
         max_retries: int = 2,
         cascade_verifier: Verifier | None = None,
-        **request_kwargs,
+        **request_kwargs: Any,
     ) -> FluxResponse:
         """
         Route ``prompt`` and call the selected model, retrying on transient
@@ -263,8 +269,8 @@ class Flux:
 
         request = self._build_request(prompt, **request_kwargs)
         decision = await self._engine.route(request)
-        text, model, fallback_used, fallback_reason, usage = await self._dispatch_with_fallback(
-            decision, request, max_retries
+        text, model, fallback_used, fallback_reason, usage, tool_calls, finish_reason = (
+            await self._dispatch_with_fallback(decision, request, max_retries)
         )
         return FluxResponse(
             text=text,
@@ -273,6 +279,8 @@ class Flux:
             fallback_used=fallback_used,
             fallback_reason=fallback_reason,
             usage=usage,
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
         )
 
     async def _dispatch_with_fallback(
@@ -280,7 +288,7 @@ class Flux:
         decision: RoutingDecision,
         request: RoutingRequest,
         max_retries: int = 2,
-    ) -> tuple[str, ModelOption, bool, str | None, DispatchUsage]:
+    ) -> tuple[str, ModelOption, bool, str | None, DispatchUsage, list[dict[str, Any]] | None, str]:
         """
         Call ``decision.chosen_model`` and, on a typed transient failure, walk
         the appropriate fallback chain up to ``max_retries`` further attempts.
@@ -289,7 +297,8 @@ class Flux:
         identical retry, budget-recording, run-budget, and attribution
         behavior — see module docstring.
 
-        Returns (text, model_used, fallback_used, fallback_reason, usage).
+        Returns (text, model_used, fallback_used, fallback_reason, usage,
+        tool_calls, finish_reason).
 
         Raises:
             AuthenticationError — immediately, never retried.
@@ -317,7 +326,7 @@ class Flux:
         decision: RoutingDecision,
         request: RoutingRequest,
         max_retries: int = 2,
-    ) -> tuple[str, ModelOption, bool, str | None, DispatchUsage]:
+    ) -> tuple[str, ModelOption, bool, str | None, DispatchUsage, list[dict[str, Any]] | None, str]:
         models_to_try: list[ModelOption] = []
         if decision.chosen_model:
             models_to_try.append(decision.chosen_model)
@@ -334,7 +343,12 @@ class Flux:
             # This closes the route-check -> provider-call race where many
             # concurrent requests could all observe the same remaining budget.
             estimated_attempt_cost = estimate_step_cost(
-                model, decision.chosen_model, decision.estimated_cost
+                # decision.chosen_model is only None when models_to_try is
+                # empty (see its construction above), so this loop body never
+                # actually runs with it None — `or model` just satisfies the
+                # type checker for that unreachable case without changing
+                # behavior.
+                model, decision.chosen_model or model, decision.estimated_cost
             )
             reservation_id = self._engine._budget.reserve_spend(
                 request.user_id, estimated_attempt_cost, request.plan or "free_plan"
@@ -403,7 +417,7 @@ class Flux:
                     usage_source = "provider"
                 else:
                     billed_cost = estimate_step_cost(
-                        model, decision.chosen_model, decision.estimated_cost
+                        model, decision.chosen_model or model, decision.estimated_cost
                     )
                     billed_tokens = max(len(text) // 4, 1)
                     usage_source = "estimated"
@@ -457,7 +471,26 @@ class Flux:
                     input_tokens=result.input_tokens,
                     output_tokens=result.output_tokens,
                 )
-                return text, model, attempts > 0, last_error, usage
+                return (
+                    text,
+                    model,
+                    attempts > 0,
+                    last_error,
+                    usage,
+                    result.tool_calls,
+                    result.finish_reason,
+                )
+
+            except err.UnsupportedFeatureError:
+                self._engine._budget.release_reservation(reservation_id)
+                # The request/provider combo is unsupported (e.g.
+                # response_format routed to Anthropic) — deterministic, not a
+                # transient failure, so it's raised immediately instead of
+                # falling through to the generic `except err.FluxAPIError`
+                # below, which would swallow it into a last_error="unknown"
+                # retry loop and lose the type server.py needs to return 400
+                # instead of 502.
+                raise
 
             except err.AuthenticationError:
                 self._engine._budget.release_reservation(reservation_id)
@@ -527,7 +560,7 @@ class Flux:
         self,
         prompt: str,
         cascade_verifier: Verifier | None,
-        **request_kwargs,
+        **request_kwargs: Any,
     ) -> FluxResponse:
         """
         Task 8: dispatch the cheapest capable tier, verify locally, escalate
@@ -580,7 +613,7 @@ class Flux:
         if cascade_reservation_id is None:
             raise err.FluxAPIError("Budget exceeded before cascade dispatch")
 
-        step_breakdown: list[dict] = []
+        step_breakdown: list[dict[str, Any]] = []
         # Parallel to step_breakdown (same index, same length): the
         # ProviderResult for a tier that got a response, None for a tier
         # whose call raised FluxAPIError outright (no text, no usage).
@@ -797,7 +830,7 @@ class Flux:
 
     # ── Internal helpers ────────────────────────────────────────────────────
 
-    def _build_request(self, prompt: str, **kwargs) -> RoutingRequest:
+    def _build_request(self, prompt: str, **kwargs: Any) -> RoutingRequest:
         """Build a RoutingRequest from the prompt and keyword overrides."""
         kwargs.setdefault("user_id", "flux_default")
         return RoutingRequest(raw_prompt=prompt, **kwargs)
@@ -835,6 +868,8 @@ class Flux:
                 raise err.AuthenticationError(str(exc)) from exc
             if status == 429:
                 raise err.RateLimitError(str(exc)) from exc
+            if status == 400:
+                raise err.UnsupportedFeatureError(str(exc)) from exc
             if status in (500, 502, 503):
                 raise err.ProviderDownError(str(exc)) from exc
             if "timeout" in msg:
@@ -850,7 +885,7 @@ class Flux:
 def make_flux(
     api_key: SecretStr | str | None = None,
     api_keys: dict[str, SecretStr | str] | None = None,
-    **engine_kwargs,
+    **engine_kwargs: Any,
 ) -> Flux:
     """
     Convenience factory that wires up a full RoutingEngine with sane defaults

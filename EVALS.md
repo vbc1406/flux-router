@@ -44,8 +44,17 @@ aren't:
 |-------------|------------------|----------------------------------------------------|
 | GSM8K       | reasoning/math   | extract final number, exact match                  |
 | MMLU        | knowledge Q&A    | extract chosen letter (A–D), exact match           |
-| HumanEval   | code generation  | execute against unit tests in a subprocess (pass@1)|
+| HumanEval   | code generation  | left ungraded — no code execution, see below       |
 | MT-Bench    | open-ended       | Claude-as-judge, 1–10 rubric → normalized to [0,1] |
+| Agentic     | plan / tool_select / tool_result_summarize / reflect / final_answer | tool_select: exact tool-name match; the other four: Claude-as-judge |
+
+The **Agentic** dataset (`router/evals/fixtures/agentic.json`, fixture-only —
+it's a Flux-original set, not a public benchmark) is the answer to "does
+routing hold up on agent *steps*, not just one-shot Q&A?" Each sample carries
+an explicit `step_type` that's threaded into the `RoutingRequest`
+(`runner.py`), so routing for these cases is step-type-floor-aware
+(`config.STEP_TYPE_FLOORS`) exactly like a real agent loop passing
+`step_type=`, not just task-type-classified like every other dataset here.
 
 ## Modes
 
@@ -72,18 +81,18 @@ python -m router.evals --datasets gsm8k,mmlu --n 100
 # Real numbers (needs API keys + the optional 'datasets' extra; costs money):
 pip install 'flux-router[evals]'
 export ANTHROPIC_API_KEY=...   # plus keys for every provider the strategies touch
-python -m router.evals --live --n 30 --allow-code-exec
+python -m router.evals --live --n 30
 ```
 
-`--allow-code-exec` is required to run live model-generated code for HumanEval
-(simulated code in mock mode runs without it). Each run writes a JSON snapshot to
-`eval_results/<timestamp>.json` for tracking over time; add `--md PATH` to also
-emit a markdown table.
+Each run writes a JSON snapshot to `eval_results/<timestamp>.json` for
+tracking over time; add `--md PATH` to also emit a markdown table.
 
-> **A note on HumanEval:** grading executes code. In mock mode the code is the
-> bundled canonical/broken solutions (trusted). In live mode it is real model
-> output, which only runs when you pass `--allow-code-exec`, in an isolated
-> subprocess with a timeout.
+> **A note on HumanEval:** Flux provides no sandbox for executing
+> model-generated code, so HumanEval samples are graded `(None, None)` —
+> skipped, not scored — in every mode. `--allow-code-exec` is not a supported
+> flag; passing it exits immediately with an explanation. Run HumanEval
+> through a purpose-built isolated code runner outside this harness if you
+> need pass@1 numbers.
 
 ## Example (mock / SIMULATED, bundled fixtures)
 
@@ -122,10 +131,16 @@ cost savings + quality retention against each provider default. The full
 per-question payload (rows + rollup) is also written into the JSON snapshot, and
 appended to the `--md` markdown table.
 
-> Quality here is each model's **rated benchmark** for that question's task type
-> (from the registry `quality_ratings` tables), not a freshly graded live answer
-> — i.e. the drill-down is a mock/analytical comparison, consistent with the
-> default mock mode.
+> Quality here is the same **graded** value the aggregate table uses
+> (`GradedResult.quality`) — a *simulated* grade in mock mode, a *measured*
+> grade of a real completion under `--live`. The payload's top-level `"mode"`
+> field says which (`"simulated"` or `"measured"`), and the console/markdown
+> output prints an explicit SIMULATED/MEASURED banner — so `--per-question
+> --live` gives you real, per-question numbers, not the mock ones with a live
+> label slapped on. (Earlier versions of this drill-down always showed each
+> model's static catalog `quality_ratings` entry here regardless of mode —
+> that bug is fixed; `GradedResult.quality_rating` is still on the data
+> model for other uses, just no longer what the per-question view plots.)
 
 ## Extending
 

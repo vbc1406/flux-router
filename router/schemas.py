@@ -230,11 +230,25 @@ class RoutingRequest(BaseModel):
         | None
     ) = None
     # OpenAI-shaped tool definitions, if this step offers the model tools to
-    # call. Only presence/count is used by routing (capability filtering,
-    # step_type inference) — contents are not validated against a JSON schema.
+    # call. Used both by routing (capability filtering, step_type inference)
+    # AND, as of Item 1, forwarded to the provider — see provider_caller.py's
+    # per-provider translation functions. Contents are not validated against
+    # a JSON schema; malformed tool defs surface as a provider-side error.
     tools: list[dict] = Field(default_factory=list)
+    # OpenAI-shaped tool_choice ("auto" | "none" | "required" | a specific
+    # {"type": "function", "function": {"name": ...}}). Only meaningful when
+    # tools is non-empty. Forwarded to the provider with per-provider
+    # translation (see provider_caller.py); not validated against an enum
+    # here since Anthropic/Google accept a subset — an unsupported value for
+    # the chosen provider raises a clear ProviderCallError at call time
+    # rather than being silently dropped.
+    tool_choice: dict | str | None = None
     # OpenAI-shaped response_format (e.g. {"type": "json_schema", ...}).
-    # Presence signals a structured-output step for step_type inference.
+    # Presence signals a structured-output step for step_type inference AND
+    # is forwarded to providers that support it (OpenAI/Groq/Mistral/Google).
+    # Anthropic has no native equivalent — a request with response_format
+    # routed to an Anthropic model is rejected with a clear error rather
+    # than silently ignored (see provider_caller.py::_call_anthropic_sync).
     response_format: dict | None = None
 
     @field_validator("max_tokens_requested")
@@ -359,6 +373,13 @@ class ModelOption(BaseModel):
 
     provider: str
     model_id: str
+    # The literal model string sent to the provider's API. Distinct from
+    # model_id (Flux's stable internal/public identifier used for routing,
+    # attribution, adaptive-weights keys, and everything client-facing).
+    # None (the default) means "same as model_id" — resolved by the
+    # validator below so every existing models.json entry and hardcoded
+    # ModelOption() call site keeps working without a change.
+    provider_model_id: str | None = None
     display_name: str
     tier: Literal["free", "cheap", "mid", "premium"]
     cost_per_1k_input: float
@@ -398,6 +419,12 @@ class ModelOption(BaseModel):
     # Runtime-only fields — set by the routing engine on a .model_copy()
     adjusted_quality: float = 0.5
     routing_score: float = 0.0
+
+    @model_validator(mode="after")
+    def _default_provider_model_id(self) -> "ModelOption":
+        if self.provider_model_id is None:
+            self.provider_model_id = self.model_id
+        return self
 
 
 class RoutingDecision(BaseModel):

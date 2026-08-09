@@ -67,3 +67,30 @@ def grade_humaneval(
             "model-generated code. Run HumanEval in a purpose-built isolated runner."
         )
     return (None, None)
+
+
+_TOOL_NAME_RE = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
+
+
+def grade_tool_select(
+    sample: EvalSample, completion: Completion
+) -> tuple[float | None, bool | None]:
+    """Item 6: the one agent-step-type grader with a verifiable right answer.
+
+    Correct iff the completion names the expected tool and no other tool
+    from the offered set — a live model's text-only answer ("I'll call
+    get_weather") and a real tool_calls response (whose JSON naturally
+    contains the function name as a bare token) both parse the same way,
+    since this only ever runs against Completion.text.
+    """
+    expected = sample.metadata.get("expected_tool")
+    if not expected:
+        return (None, None)
+    offered = {
+        t.get("function", {}).get("name")
+        for t in sample.metadata.get("tools", [])
+        if t.get("function", {}).get("name")
+    }
+    mentioned = set(_TOOL_NAME_RE.findall(completion.text)) & offered
+    correct = mentioned == {expected}
+    return (1.0 if correct else 0.0, correct)

@@ -37,9 +37,8 @@ import threading
 import time
 import uuid
 from collections import OrderedDict, defaultdict, deque
-from collections.abc import Iterable
 from datetime import date, datetime, timezone
-from typing import Callable, NamedTuple
+from typing import Any, Callable, NamedTuple, Reversible
 
 import structlog
 
@@ -74,7 +73,9 @@ class _SpendRecord(NamedTuple):
     timestamp: datetime
 
 
-def _sum_while(records: Iterable[_SpendRecord], predicate: Callable[[_SpendRecord], bool]) -> float:
+def _sum_while(
+    records: Reversible[_SpendRecord], predicate: Callable[[_SpendRecord], bool]
+) -> float:
     """Sum r.amount for the most-recent records matching predicate, scanning
     backward and stopping at the first non-match. Records are appended in
     non-decreasing timestamp order, so once one fails a "recent enough"
@@ -336,7 +337,7 @@ class BudgetTracker:
         # get_daily_spend already validates the id.
         return self.get_daily_spend(customer_id) >= daily_cap
 
-    def get_savings_report(self, user_id: str) -> dict:
+    def get_savings_report(self, user_id: str) -> dict[str, Any]:
         """
         Compare actual spend vs what it would have cost using the most expensive
         model for every request.  Useful for ROI dashboards.
@@ -454,7 +455,7 @@ class DailyBudgetTracker:
         # get_daily_spend already validates the id.
         return self.get_daily_spend(customer_id) >= daily_cap
 
-    def get_report(self, customer_id: str) -> dict:
+    def get_report(self, customer_id: str) -> dict[str, Any]:
         """Today's spend summary for a customer."""
         customer_id = _validate_user_id(customer_id)
         today = date.today()

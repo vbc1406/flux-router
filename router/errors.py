@@ -53,3 +53,13 @@ class ProviderDownError(FluxAPIError):
     Provider returned a 5xx server error or is otherwise unavailable.
     Routed to the rate-limit fallback chain (same-tier alternatives).
     """
+
+
+class UnsupportedFeatureError(FluxAPIError):
+    """
+    The request asked for a feature the chosen provider doesn't support
+    (currently: response_format routed to an Anthropic model, which has no
+    native JSON-mode equivalent — see provider_caller.py). This is a caller
+    error, not an upstream failure — never retried, and router/server.py
+    maps it to HTTP 400 rather than the 502 used for real provider outages.
+    """

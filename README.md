@@ -167,6 +167,69 @@ up — and only raises `RunBudgetExceeded` once a limit is actually hit,
 proxy, tag repeated calls with the same `X-Flux-Run-Id` header to get the
 same enforcement without any Python. See `examples/agent_loop.py`.
 
+Multi-worker deployments (`flux serve --workers N`) run budgets
+**under-enforce by default** — each worker only sees the steps it personally
+handled, since run state is process-local. Set `FLUX_RUN_STORE=redis` (plus
+`FLUX_REDIS_URL`) to share it across workers; the server warns at startup if
+you're running multiple workers without it. See SELF_HOSTING.md's "Multiple
+workers" section for the rate-limit caveat that goes with it.
+
+### Agent step types (`X-Flux-Step-Type`)
+
+Different points in an agent trajectory warrant different quality floors — a
+planning step shouldn't get routed to a model too weak to plan with, even
+while the rest of a budget-constrained run is on cost-optimized routing.
+`RoutingRequest.step_type` (SDK) / the `X-Flux-Step-Type` header (HTTP proxy)
+tags a request with one of:
+
+```
+plan · tool_select · tool_result_summarize · reflect · extract · format · final_answer · unknown
+```
+
+An explicit value always wins over inference and gets its configured floor
+(`STEP_TYPE_FLOORS` in `router/config.py` — e.g. `plan` and `tool_select`
+floor at `mid`, `tool_result_summarize` has no floor at all). Leave it unset
+and Flux infers it from the request shape (presence of `tools`,
+`response_format`, a `role: "tool"` message in history, planning language in
+the prompt) — an invalid explicit value is rejected with `400`. See
+`examples/agent_loop.py` for the SDK form (`step_type="plan"` /
+`step_type="final_answer"`).
+
+```python
+resp = requests.post(
+    "http://localhost:8000/v1/chat/completions",
+    headers={"X-Flux-Step-Type": "plan", "X-Flux-Run-Id": run_id},
+    json={"model": "flux-auto", "messages": [...]},
+)
+```
+
+---
+
+## Tool calling
+
+`tools`, `tool_choice`, and `response_format` are forwarded to the routed
+provider and translated into that provider's native request/response shape
+— not just used as a routing signal. Assistant `tool_calls` (with `id`,
+`function.name`, `function.arguments`) and tool-role messages round-trip
+through both the Python SDK (`FluxResponse.tool_calls` /
+`FluxResponse.finish_reason`) and the HTTP proxy's OpenAI-compatible response
+body, including streamed `tool_calls` deltas for OpenAI-compatible providers.
+
+| | OpenAI | Groq | Mistral | Google | Anthropic |
+|---|---|---|---|---|---|
+| `tools` / `tool_choice` | ✅ | ✅ | ✅ | ✅ (translated) | ✅ (translated) |
+| `response_format` | ✅ | ✅ | ✅ | ✅ (translated) | ❌ — no native equivalent |
+| Streamed `tool_calls` deltas | ✅ | ✅ | ✅ | — (no native streaming caller) | — (no native streaming caller) |
+
+Anthropic has no JSON-mode/`response_format` equivalent — a request that sets
+`response_format` and routes to an Anthropic model is **rejected** with a
+clear `400` (`UnsupportedFeatureError`) rather than silently ignoring the
+field or guessing at an emulation. Route around it (a different provider, or
+drop `response_format`) if you need both on the same request. Google and
+Anthropic have no native streaming caller in `provider_caller.py`, so the
+proxy falls back to a synthesized single, non-incremental chunk for them —
+a tool call still comes through, just not as incremental deltas.
+
 ---
 
 ## Cost attribution: actual vs. estimated
@@ -206,6 +269,18 @@ print(resp.usage.input_tokens, resp.usage.output_tokens)  # None if estimated
 See [MIGRATIONS.md](./MIGRATIONS.md) for the `usage` table's `usage_source`/
 `input_tokens`/`output_tokens` columns and how an existing on-disk
 `usage.db` migrates automatically.
+
+This section is about **cost**: actual vs. estimated dollars. A separate,
+easy-to-conflate distinction is about **quality**: `RoutingDecision.
+estimated_savings` and the dashboard's `estimated_savings_usd` are cost
+projections (this request vs. the registry's most expensive model — nobody
+ran that counterfactual), not a claim that quality was measured to be
+unaffected. Whether a cheaper model actually holds up on real answers is a
+separate question, and it's the one [EVALS.md](./EVALS.md)'s harness exists
+to answer — with its own explicit **SIMULATED** (mock, catalog-adjacent)
+vs. **MEASURED** (`--live`, real graded completions) labeling. Don't cite a
+mock-mode eval number as a quality claim; don't cite `estimated_savings_usd`
+as a quality claim either — they're both estimates of different things.
 
 ---
 

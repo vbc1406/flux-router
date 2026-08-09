@@ -29,7 +29,7 @@ import time
 import uuid
 from collections.abc import MutableMapping
 from importlib import resources
-from typing import Any
+from typing import Any, AsyncIterator
 
 import structlog
 
@@ -67,7 +67,7 @@ from .config import (
     TENANT_DAILY_CAP_USD,
     ServerTokenBinding,
 )
-from .errors import AuthenticationError, FluxAPIError
+from .errors import AuthenticationError, FluxAPIError, UnsupportedFeatureError
 from .flux import _PROVIDER_ENV_VARS, Flux, _routing_telemetry, make_flux
 from .provider_caller import (
     STREAMING_NATIVE_PROVIDERS,
@@ -78,7 +78,7 @@ from .provider_caller import (
 from .provider_caller import _safe_usage_int as _safe_stream_usage_int
 from .rate_limit import RateLimiter
 from .run_budget import RunBudgetExceeded
-from .schemas import RoutingRequest
+from .schemas import RoutingDecision, RoutingRequest
 
 log = structlog.get_logger(__name__)
 
@@ -290,7 +290,7 @@ async def _read_bounded_body(request: Request) -> bytes:
 
 def _messages_to_request_fields(
     messages: list[dict[str, Any]],
-) -> tuple[str | None, str, list[dict]]:
+) -> tuple[str | None, str, list[dict[str, Any]]]:
     """Split an OpenAI `messages` array into (system_prompt, raw_prompt, message_history)."""
     for i, m in enumerate(messages):
         if not isinstance(m, dict):
@@ -324,14 +324,29 @@ def _messages_to_request_fields(
         )
     system_prompt = "\n".join(system_parts) if system_parts else None
     raw_prompt = non_system[-1].get("content", "")
-    history = [
-        {"role": m.get("role", "user"), "content": m.get("content", "")} for m in non_system[:-1]
-    ]
+    history = []
+    for m in non_system[:-1]:
+        turn: dict[str, Any] = {"role": m.get("role", "user"), "content": m.get("content", "")}
+        # Preserve tool-calling linkage (Item 1): an assistant turn that made
+        # tool calls, and a tool-role turn answering one, both need these
+        # fields to survive into message_history or the provider-side
+        # conversation loses which call a tool result answers.
+        if m.get("tool_calls"):
+            turn["tool_calls"] = m["tool_calls"]
+        if m.get("tool_call_id"):
+            turn["tool_call_id"] = m["tool_call_id"]
+        if m.get("name"):
+            turn["name"] = m["name"]
+        history.append(turn)
     return system_prompt, raw_prompt, history
 
 
 def _build_routing_request(
-    body: dict[str, Any], run_id: str, tenant_id: str | None = None, plan: str | None = None
+    body: dict[str, Any],
+    run_id: str,
+    tenant_id: str | None = None,
+    plan: str | None = None,
+    step_type: str | None = None,
 ) -> tuple[RoutingRequest, bool]:
     """Translate an OpenAI chat-completion request body into a RoutingRequest.
 
@@ -350,6 +365,13 @@ def _build_routing_request(
     configured (auth disabled, legacy shared-token mode, or a legacy
     string-shorthand FLUX_SERVER_TOKENS entry), so existing deployments that
     haven't opted in see no behavior change.
+
+    `step_type` (Item 3) comes from the X-Flux-Step-Type header. An
+    unrecognized value is rejected by RoutingRequest's own Literal validator
+    below (ValueError -> 400), same as any other invalid field — no separate
+    header-specific validation needed. None means "no header sent";
+    RoutingRequest.step_type stays unset and RequestClassifier infers it as
+    before, so absence of the header is a strict no-op.
     """
     if "messages" not in body or not isinstance(body["messages"], list):
         raise HTTPException(status_code=400, detail="'messages' is required and must be a list")
@@ -374,12 +396,15 @@ def _build_routing_request(
         # Task 7: X-Flux-Tenant-Id, for router/attribution.py aggregation.
         "tenant_id": tenant_id,
         "plan": plan or "pro_plan",
-        # Task 6: passed through verbatim for step_type inference + capability
-        # filtering. Not forwarded to the provider call itself in this proxy —
-        # tool-calling over the proxy is a routing-only signal for now.
+        # Task 6 / Item 1: used for step_type inference + capability filtering
+        # AND forwarded to the provider (see provider_caller.py's per-provider
+        # translation). tool_choice is only meaningful when tools is set.
         "tools": body.get("tools") or [],
+        "tool_choice": body.get("tool_choice"),
         "response_format": body.get("response_format"),
     }
+    if step_type is not None:
+        kwargs["step_type"] = step_type
 
     is_literal_model = False
     if model_field in _ROUTING_DIRECTIVES:
@@ -404,7 +429,7 @@ def _build_routing_request(
     return request, is_literal_model
 
 
-def _flux_headers(decision, decision_latency_ms: float) -> dict[str, str]:
+def _flux_headers(decision: RoutingDecision, decision_latency_ms: float) -> dict[str, str]:
     task_type = decision.explanation.task_type if decision.explanation else ""
     complexity = decision.explanation.complexity_score if decision.explanation else 0.0
     headers = {
@@ -851,6 +876,7 @@ async def chat_completions(
     authorization: str | None = Header(default=None),
     x_flux_run_id: str | None = Header(default=None, alias="X-Flux-Run-Id"),
     x_flux_tenant_id: str | None = Header(default=None, alias="X-Flux-Tenant-Id"),
+    x_flux_step_type: str | None = Header(default=None, alias="X-Flux-Step-Type"),
 ) -> Any:
     binding = _check_auth(authorization)
     bound_tenant = binding.tenant_id if binding is not None else None
@@ -913,7 +939,9 @@ async def chat_completions(
             reason="no X-Flux-Run-Id header on request; run-scoped budget "
             "enforcement will not span multiple steps for this call",
         )
-    routing_request, _ = _build_routing_request(body, run_id, tenant_id, plan=bound_plan)
+    routing_request, _ = _build_routing_request(
+        body, run_id, tenant_id, plan=bound_plan, step_type=x_flux_step_type
+    )
     if binding is not None:
         # Budget and rate-limit identity must come from authenticated context,
         # never the caller-controlled OpenAI `user` field.
@@ -984,7 +1012,7 @@ async def chat_completions(
         # _call_model() directly. `usage` carries what was ACTUALLY billed —
         # provider-reported tokens/cost when the provider returned them,
         # the pre-dispatch estimate otherwise. See flux.DispatchUsage.
-        text, used_model, _fallback_used, _fallback_reason, usage = (
+        text, used_model, _fallback_used, _fallback_reason, usage, tool_calls, finish_reason = (
             await _flux._dispatch_with_fallback(decision, routing_request, max_retries=2)
         )
     except AuthenticationError as exc:
@@ -1009,6 +1037,11 @@ async def chat_completions(
         raise HTTPException(
             status_code=502, detail="Upstream provider authentication failed"
         ) from exc
+    except UnsupportedFeatureError as exc:
+        # The request asked for a provider/feature combination Flux can't
+        # bridge (e.g. response_format routed to Anthropic) — a caller error,
+        # not an upstream failure, so 400 rather than the 502 below.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except FluxAPIError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -1040,6 +1073,9 @@ async def chat_completions(
             "total_tokens": max((len(routing_request.raw_prompt) + len(text)) // 4, 1),
         }
 
+    message: dict[str, Any] = {"role": "assistant", "content": text}
+    if tool_calls:
+        message["tool_calls"] = tool_calls
     response_body = {
         "id": completion_id,
         "object": "chat.completion",
@@ -1048,8 +1084,8 @@ async def chat_completions(
         "choices": [
             {
                 "index": 0,
-                "message": {"role": "assistant", "content": text},
-                "finish_reason": "stop",
+                "message": message,
+                "finish_reason": finish_reason,
             }
         ],
         "usage": usage_block,
@@ -1058,14 +1094,14 @@ async def chat_completions(
 
 
 async def _stream_completion(
-    routing_request,
-    decision,
-    completion_id,
-    created,
-    headers,
-    bound_tenant=None,
-    client_wants_usage=False,
-):
+    routing_request: RoutingRequest,
+    decision: RoutingDecision,
+    completion_id: str,
+    created: int,
+    headers: dict[str, str],
+    bound_tenant: str | None = None,
+    client_wants_usage: bool = False,
+) -> AsyncIterator[bytes]:
     """Yield SSE chunks for a chat completion.
 
     For providers that speak OpenAI-native SSE (openai/groq/mistral), each
@@ -1097,6 +1133,10 @@ async def _stream_completion(
     the run-budget reservation is resolved by that recording rather than
     left dangling.
     """
+    # The caller (chat_completions) already returns a 502 before ever
+    # invoking this generator when decision.chosen_model is None — this
+    # narrows that same invariant for the type checker.
+    assert decision.chosen_model is not None
     model = decision.chosen_model
     model_id = model.model_id
     reservation_id = _flux._engine._budget.reserve_spend(
@@ -1113,7 +1153,7 @@ async def _stream_completion(
         yield b"data: [DONE]\n\n"
         return
 
-    def _chunk(delta: dict, finish_reason: str | None) -> bytes:
+    def _chunk(delta: dict[str, Any], finish_reason: str | None) -> bytes:
         payload = {
             "id": completion_id,
             "object": "chat.completion.chunk",
@@ -1200,7 +1240,7 @@ async def _stream_completion(
         if model.provider.lower() in STREAMING_NATIVE_PROVIDERS:
             api_key = _flux._resolve_api_key(model, routing_request)
             yield _chunk({"role": "assistant"}, None)
-            captured_usage: dict | None = None
+            captured_usage: dict[str, Any] | None = None
             async for line in stream_openai_compat_lines(model, routing_request, api_key):
                 text = line.decode("utf-8", errors="replace").strip()
                 if not text or text == "data: [DONE]":

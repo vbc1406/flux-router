@@ -29,7 +29,29 @@ jobs:
       - name: Run ruff
         run: ruff check router/
 
-      - name: Run mypy
+      # Blocking: these paths are strict-clean (see CHANGELOG "Item 8") and
+      # must stay that way. Listed explicitly rather than `router/` so a
+      # new mypy error anywhere else in the tree can't fail CI until that
+      # file is deliberately added to this list. --follow-imports=silent is
+      # required: without it mypy also reports pre-existing errors from
+      # every module these files import (schemas.py, classifier.py, etc.)
+      # even though only the 8 listed paths are meant to be checked —
+      # silent still uses their type info for cross-module checking, it
+      # just doesn't emit diagnostics for their bodies.
+      - name: Run mypy (strict, blocking — hardened paths)
+        run: |
+          mypy --strict --follow-imports=silent \
+            router/provider_caller.py \
+            router/flux.py \
+            router/routing_engine.py \
+            router/run_budget.py \
+            router/budget_tracker.py \
+            router/attribution.py \
+            router/server.py \
+            router/evals/
+
+      # Informational only: the rest of router/ isn't strict-clean yet.
+      - name: Run mypy (strict, informational — full tree)
         run: mypy --strict router/ || true
         continue-on-error: true
 
@@ -67,6 +89,15 @@ jobs:
 
       - name: Run the keyless demo
         run: python -m router.demo
+
+      # Regression guard: evals/fixtures/*.json previously shipped only in
+      # the editable/dev checkout, not the built wheel/sdist — `python -m
+      # router.evals` (mock mode, no extra needed) crashed with
+      # FileNotFoundError on any real install. Nothing else in this workflow
+      # installs the actual package and runs it, so this is the only job
+      # that would have caught it.
+      - name: Run the eval harness mock smoke against the installed package
+        run: python -m router.evals --n 3
 
   # Validate the container image and docker-compose.yml. A GitHub runner is the
   # clean VM this would otherwise need: the image is built from scratch, booted,

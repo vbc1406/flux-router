@@ -10,16 +10,17 @@ exec permission, or a judge with no key) are skipped and counted.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from typing import Any
 
 import structlog
 
-from ..flux import make_flux
-from ..schemas import RoutingRequest
+from ..flux import Flux, make_flux
+from ..schemas import ModelOption, RoutingRequest
 from .cache import DiskCache, make_key
 from .completions import LiveCompletionError, get_completion
 from .datasets import DATASETS, load_datasets
 from .graders import grade, make_judge
-from .schemas import Completion, GradedResult
+from .schemas import Completion, EvalSample, GradedResult
 from .strategies import pick_model
 
 log = structlog.get_logger(__name__)
@@ -46,24 +47,24 @@ class RunOutput:
     n_skipped: int
 
 
-def _question_type(sample) -> str:
+def _question_type(sample: EvalSample) -> str:
     """Human-readable type label: dataset + the finest topic tag we already have."""
     topic = sample.metadata.get("subject") or sample.metadata.get("category")
     base = f"{sample.dataset}/{topic}" if topic else sample.dataset
     return f"{base} ({sample.task_type})"
 
 
-def _provider_keys(flux) -> dict[str, str]:
+def _provider_keys(flux: Flux) -> dict[str, str]:
     """Extract plain-text provider keys from a Flux instance for live calls."""
     return {prov: sec.get_secret_value() for prov, sec in flux._provider_keys.items()}
 
 
 async def _completion(
     cache: DiskCache,
-    model,
-    sample,
+    model: ModelOption,
+    sample: EvalSample,
     mode: str,
-    api_keys: dict,
+    api_keys: dict[str, Any],
     seed: str,
 ) -> Completion:
     """get_completion with a live-mode disk cache wrapped around it."""
@@ -105,6 +106,12 @@ async def run_eval(config: RunConfig) -> RunOutput:
             raw_prompt=sample.prompt,
             user_id="flux-eval",
             required_capabilities=sample.metadata.get("required_capabilities", []),
+            # Item 6: agentic-dataset samples carry an explicit step_type
+            # (plan/tool_select/...) so routing for those cases is
+            # step-type-floor-aware (config.STEP_TYPE_FLOORS), same as a real
+            # agent loop passing step_type= — not just task-type-classified
+            # like every other dataset here.
+            step_type=sample.metadata.get("step_type"),
             # Disable A/B exploration so the flux strategy is deterministic and
             # the published tradeoff numbers reproduce across runs.
             exploration_rate=0.0,
