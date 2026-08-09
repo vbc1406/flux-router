@@ -282,12 +282,32 @@ class TestServeModuleBanner:
         from router import _serve, config
 
         monkeypatch.setattr(config, "SERVER_HOST", "0.0.0.0")
+        # Not what this test is about — the fail-closed gate on an
+        # unauthenticated non-loopback bind is covered separately.
+        monkeypatch.setattr(config, "SERVER_REQUIRE_AUTH", True)
         monkeypatch.setattr(uvicorn, "run", lambda *a, **k: None)
         _serve.main()
 
         out = capsys.readouterr().out
         assert "http://0.0.0.0" not in out
         assert "http://127.0.0.1" in out
+
+    def test_refuses_unauthenticated_non_loopback_bind_at_startup(self, monkeypatch):
+        """The fail-closed check runs when the server actually starts, not as
+        an import-time side effect of `import router.config` — otherwise any
+        unrelated import sharing this env (tests, other CLI subcommands,
+        evals) would crash too."""
+        pytest.importorskip("fastapi")
+        uvicorn = pytest.importorskip("uvicorn")
+        from router import _serve, config
+
+        monkeypatch.setattr(config, "SERVER_HOST", "0.0.0.0")
+        monkeypatch.setattr(config, "SERVER_REQUIRE_AUTH", False)
+        monkeypatch.setattr(config, "SERVER_ALLOW_UNAUTHENTICATED_REMOTE", False)
+        monkeypatch.setattr(uvicorn, "run", lambda *a, **k: None)
+
+        with pytest.raises(RuntimeError, match="Refusing unauthenticated server bind"):
+            _serve.main()
 
     def test_multiple_workers_uses_an_import_string(self, monkeypatch):
         """uvicorn can only fork workers from an import string, not a live app."""

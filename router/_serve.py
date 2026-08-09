@@ -25,9 +25,21 @@ def main() -> int:
     from .config import (
         ATTRIBUTION_DB_PATH,
         DATA_DIR,
+        SERVER_ALLOW_UNAUTHENTICATED_REMOTE,
         SERVER_HOST,
         SERVER_PORT,
+        SERVER_REQUIRE_AUTH,
         SERVER_WORKERS,
+        validate_server_binding,
+    )
+
+    # Fails closed here, at the moment we're actually about to bind — not as
+    # an import-time side effect, which would crash any unrelated import of
+    # router.config (tests, other CLI subcommands, evals) sharing this env.
+    validate_server_binding(
+        SERVER_HOST,
+        SERVER_REQUIRE_AUTH,
+        allow_unauthenticated_remote=SERVER_ALLOW_UNAUTHENTICATED_REMOTE,
     )
 
     # 0.0.0.0 is a bind address, not somewhere a browser can be pointed. Compared

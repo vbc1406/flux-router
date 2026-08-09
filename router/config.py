@@ -626,6 +626,17 @@ BUDGET_LEDGER_MAX_PER_USER: int = 10_000
 # cap is hit. How to tune: raise for legitimately high-cardinality user bases.
 BUDGET_TRACKER_MAX_USERS: int = 100_000
 
+# Maximum age (seconds) an unreconciled BudgetTracker reservation is allowed
+# to live before it's swept away as stale. A reservation should normally be
+# reconciled or released within one provider round trip (seconds); nothing
+# previously bounded this dict, so any dispatch path that fails to pair
+# reserve_spend() with reconcile_spend()/release_reservation() (e.g. a new
+# exception path added later) would leak entries forever and permanently
+# shrink that user's effective budget with no operator-visible signal.
+# How to tune: raise if legitimately long-running dispatches are reserving
+# for longer than this without reconciling.
+BUDGET_RESERVATION_MAX_AGE_SECONDS: float = 600.0
+
 # ══════════════════════════════════════════════════════════════════════════════
 # HTTP PROXY SERVER (router/server.py)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -718,12 +729,6 @@ def validate_server_binding(
             "FLUX_ALLOW_UNAUTHENTICATED_REMOTE=1."
         )
 
-
-validate_server_binding(
-    SERVER_HOST,
-    SERVER_REQUIRE_AUTH,
-    allow_unauthenticated_remote=SERVER_ALLOW_UNAUTHENTICATED_REMOTE,
-)
 
 @dataclass(frozen=True)
 class ServerTokenBinding:

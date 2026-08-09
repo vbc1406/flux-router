@@ -109,24 +109,20 @@ jobs:
           # database silently went back to ":memory:".
           test -f ./fluxdata/flux.db
 
-      - name: Refuse the dashboard when bound off-loopback with no token
+      - name: Refuse to bind off-loopback with no token
         run: |
           set -euo pipefail
           cd "$(mktemp -d)"
 
-          FLUX_SERVER_HOST=0.0.0.0 flux serve --data-dir ./fluxdata --port 8001 &
-          SERVER_PID=$!
-          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+          # An unauthenticated non-loopback bind must fail closed at startup —
+          # the process should exit before it ever opens the port.
+          if FLUX_SERVER_HOST=0.0.0.0 timeout 10 flux serve --data-dir ./fluxdata --port 8001; then
+            echo "server started despite an unauthenticated non-loopback bind" >&2
+            exit 1
+          fi
 
-          for i in $(seq 1 30); do
-            if curl -fsS localhost:8001/health >/dev/null 2>&1; then break; fi
-            if [ "$i" = 30 ]; then echo "server did not become healthy" >&2; exit 1; fi
-            sleep 1
-          done
-
-          STATUS="$(curl -s -o /dev/null -w '%{http_code}' localhost:8001/dashboard/)"
-          if [ "$STATUS" != "404" ]; then
-            echo "dashboard mounted on a non-loopback bind with no token (got $STATUS)" >&2
+          if curl -fsS --max-time 2 localhost:8001/health >/dev/null 2>&1; then
+            echo "server is reachable despite refusing to bind" >&2
             exit 1
           fi
 

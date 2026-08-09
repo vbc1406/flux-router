@@ -619,9 +619,16 @@ class Flux:
                 step_latencies_ms.append((time.monotonic() - tier_started) * 1000)
                 last_reason = str(exc)
                 continue
+            except BaseException:
+                # Cancellation or any other unexpected error mid-tier: the
+                # cascade-wide reservation (covering every remaining tier's
+                # estimated cost) must still be released, or it leaks forever.
+                self._engine._budget.release_reservation(cascade_reservation_id)
+                raise
 
             step_latencies_ms.append((time.monotonic() - tier_started) * 1000)
             self._engine._circuit_breaker.record_success(model.provider)
+            self._engine.record_prompt_cache_success(request, model)
             got_any_response = True
             text = provider_result.text
             verify_result = verify_response(text, request, cascade_verifier)

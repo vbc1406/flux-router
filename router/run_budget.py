@@ -427,16 +427,20 @@ class RunBudget:
         """
         self._maybe_housekeep()
         key = self._key(run_id, tenant_id)
-        def reserve(state: _RunState | None) -> tuple[_RunState, str]:
+        def reserve(state: _RunState | None) -> tuple[_RunState, tuple[str, dict | None]]:
             if state is None:
                 state = _RunState(limits=RunLimits())
             state.last_touched = time.monotonic()
 
             frac, reason = _worst_fraction(state)
             if frac >= 1.0:
-                # run_id here is the caller-facing (unscoped) id — never leak
-                # the tenant-scoped storage key into the exception/response.
-                raise RunBudgetExceeded(run_id, _summary(run_id, state, reason))
+                # Return the exceeded summary as data instead of raising here:
+                # self._store.update() is what actually persists `state` (with
+                # the refreshed last_touched/TTL) — raising inside the updater
+                # would make RedisRunStore's transaction bail out before its
+                # pipe.set(), silently skipping the TTL refresh and letting an
+                # over-budget run's key expire and reset to zero spend.
+                return state, ("exceeded", _summary(run_id, state, reason))
 
             state.pending_steps += 1
             if frac >= RUN_WARN_THRESHOLD:
@@ -445,8 +449,13 @@ class RunBudget:
                 result = "degraded"
             else:
                 result = "ok"
-            return state, result
-        return self._store.update(key, reserve)
+            return state, (result, None)
+        kind, payload = self._store.update(key, reserve)
+        if kind == "exceeded":
+            # run_id here is the caller-facing (unscoped) id — never leak the
+            # tenant-scoped storage key into the exception/response.
+            raise RunBudgetExceeded(run_id, payload)
+        return kind
 
     def record_step(
         self,

@@ -57,7 +57,7 @@ import asyncio
 import random
 import threading
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from datetime import datetime, timezone
 
 import structlog
@@ -130,7 +130,11 @@ class ConversationStore:
     """
 
     def __init__(self, max_entries: int = 100_000) -> None:
-        self._store: dict[str, dict] = {}
+        # OrderedDict, not a plain dict — insertion/access order tracks
+        # recency so eviction at the cap is move_to_end()/popitem(last=False)
+        # (O(1)), matching the LRU pattern already used by run_budget.py and
+        # budget_tracker.py, instead of a min() scan over every entry.
+        self._store: OrderedDict[str, dict] = OrderedDict()
         self._max_entries = max_entries
         self._lock = threading.Lock()
 
@@ -146,14 +150,14 @@ class ConversationStore:
             if time.monotonic() - entry["last_used"] > CONVERSATION_EXPIRY_SECONDS:
                 del self._store[conversation_id]
                 return None
+            self._store.move_to_end(conversation_id)
             return dict(entry)  # shallow copy; callers must not mutate
 
     def update(self, conversation_id: str, model_id: str) -> None:
         """Record that model_id was used for this conversation turn."""
         with self._lock:
             if conversation_id not in self._store and len(self._store) >= self._max_entries:
-                oldest = min(self._store, key=lambda key: self._store[key]["last_used"])
-                del self._store[oldest]
+                self._store.popitem(last=False)
             prev = self._store.get(conversation_id, {})
             self._store[conversation_id] = {
                 "last_model": model_id,
@@ -161,6 +165,7 @@ class ConversationStore:
                 "last_used": time.monotonic(),
                 "last_failed": False,
             }
+            self._store.move_to_end(conversation_id)
 
     def record_failure(self, conversation_id: str) -> None:
         """
@@ -1162,6 +1167,7 @@ class RoutingEngine:
                 )
                 # Fix 4: Record success on the circuit breaker.
                 self._circuit_breaker.record_success(model.provider)
+                self.record_prompt_cache_success(request, model)
                 # Bill from the provider's own reported usage when it gave us
                 # one; otherwise fall back to the pre-dispatch estimate
                 # rescaled to the model actually called (a fallback may have

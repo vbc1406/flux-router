@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import itertools
 import threading
+import time
 import uuid
 from collections import OrderedDict, defaultdict, deque
 from collections.abc import Iterable
@@ -42,7 +43,12 @@ from typing import Callable, NamedTuple
 
 import structlog
 
-from .config import BUDGET_LEDGER_MAX_PER_USER, BUDGET_LIMITS, BUDGET_TRACKER_MAX_USERS
+from .config import (
+    BUDGET_LEDGER_MAX_PER_USER,
+    BUDGET_LIMITS,
+    BUDGET_RESERVATION_MAX_AGE_SECONDS,
+    BUDGET_TRACKER_MAX_USERS,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -104,10 +110,14 @@ class BudgetTracker:
         # lockstep with _ledger so the two never disagree on which users
         # are still tracked.
         self._plans: dict[str, str] = {}
-        # reservation_id -> (user_id, estimated amount, plan). Reservations are
-        # included in budget checks until reconciled with actual spend or
-        # explicitly released.
-        self._reservations: dict[str, tuple[str, float, str]] = {}
+        # reservation_id -> (user_id, estimated amount, plan, created_at).
+        # Reservations are included in budget checks until reconciled with
+        # actual spend or explicitly released. Bounded by a staleness sweep
+        # (see _sweep_stale_reservations) rather than an LRU cap: a live
+        # reservation must never be evicted while its dispatch is still in
+        # flight, so age — not recency of access — is the only safe signal
+        # for reclaiming one that was never reconciled/released.
+        self._reservations: dict[str, tuple[str, float, str, float]] = {}
 
     # ── Internal: LRU-bounded ledger access ────────────────────────────────
 
@@ -231,6 +241,21 @@ class BudgetTracker:
             )
         return estimated_cost > remaining
 
+    def _sweep_stale_reservations(self) -> None:
+        """Reclaim reservations that outlived any plausible dispatch — evidence
+        of a leak (a dispatch path that raised without reconciling or
+        releasing) rather than normal operation. Caller holds self._lock."""
+        cutoff = time.monotonic() - BUDGET_RESERVATION_MAX_AGE_SECONDS
+        stale = [rid for rid, (_, _, _, created) in self._reservations.items() if created < cutoff]
+        for rid in stale:
+            self._reservations.pop(rid, None)
+        if stale:
+            log.warning(
+                "budget_tracker_swept_stale_reservations",
+                count=len(stale),
+                max_age_seconds=BUDGET_RESERVATION_MAX_AGE_SECONDS,
+            )
+
     def reserve_spend(
         self, user_id: str, estimated_cost: float, plan: str | None = None
     ) -> str | None:
@@ -244,6 +269,7 @@ class BudgetTracker:
         if estimated_cost < 0:
             raise ValueError("estimated_cost must be non-negative")
         with self._lock:
+            self._sweep_stale_reservations()
             resolved_plan = plan or self._plans.get(user_id, "free_plan")
             limits = BUDGET_LIMITS.get(resolved_plan, BUDGET_LIMITS["free_plan"])
             now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -255,14 +281,19 @@ class BudgetTracker:
                 if record.timestamp.date() == now.date():
                     daily_spend += record.amount
             pending = sum(
-                amount for uid, amount, _ in self._reservations.values() if uid == user_id
+                amount for uid, amount, _, _ in self._reservations.values() if uid == user_id
             )
             if daily_spend + pending + estimated_cost > limits["daily"] or (
                 monthly_spend + pending + estimated_cost > limits["monthly"]
             ):
                 return None
             reservation_id = uuid.uuid4().hex
-            self._reservations[reservation_id] = (user_id, estimated_cost, resolved_plan)
+            self._reservations[reservation_id] = (
+                user_id,
+                estimated_cost,
+                resolved_plan,
+                time.monotonic(),
+            )
             return reservation_id
 
     def reconcile_spend(
@@ -280,7 +311,7 @@ class BudgetTracker:
             reservation = self._reservations.pop(reservation_id, None)
             if reservation is None:
                 raise KeyError(f"unknown budget reservation: {reservation_id}")
-            user_id, _, plan = reservation
+            user_id, _, plan, _ = reservation
             self._plans[user_id] = plan
             self._ledger_for_write(user_id).append(
                 _SpendRecord(
