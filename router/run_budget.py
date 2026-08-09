@@ -42,7 +42,7 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Protocol, TypeVar
+from typing import Any, Callable, Literal, Protocol, TypeVar, cast
 
 import structlog
 
@@ -107,7 +107,7 @@ class RunBudgetExceeded(Exception):  # noqa: N818 — name matches the Task 3 pu
     partial results instead of nothing.
     """
 
-    def __init__(self, run_id: str, summary: dict) -> None:
+    def __init__(self, run_id: str, summary: dict[str, Any]) -> None:
         self.run_id = run_id
         self.summary = summary
         super().__init__(
@@ -404,7 +404,9 @@ class RunBudget:
         """Drop a run's state immediately rather than waiting for TTL eviction."""
         self._store.delete(self._key(run_id, tenant_id))
 
-    def check_before_dispatch(self, run_id: str, tenant_id: str | None = None) -> str:
+    def check_before_dispatch(
+        self, run_id: str, tenant_id: str | None = None
+    ) -> Literal["ok", "degraded", "warning"]:
         """
         Evaluate this run's state from steps recorded (and reserved — see
         below) so far, and return the budget_state for the step about to be
@@ -427,7 +429,9 @@ class RunBudget:
         """
         self._maybe_housekeep()
         key = self._key(run_id, tenant_id)
-        def reserve(state: _RunState | None) -> tuple[_RunState, tuple[str, dict | None]]:
+        def reserve(
+            state: _RunState | None,
+        ) -> tuple[_RunState, tuple[str, dict[str, Any] | None]]:
             if state is None:
                 state = _RunState(limits=RunLimits())
             state.last_touched = time.monotonic()
@@ -452,10 +456,18 @@ class RunBudget:
             return state, (result, None)
         kind, payload = self._store.update(key, reserve)
         if kind == "exceeded":
+            # reserve() only pairs "exceeded" with a real summary dict (see
+            # its body above) — payload is None only alongside "ok"/
+            # "degraded"/"warning".
+            assert payload is not None
             # run_id here is the caller-facing (unscoped) id — never leak the
             # tenant-scoped storage key into the exception/response.
             raise RunBudgetExceeded(run_id, payload)
-        return kind
+        # `reserve()`'s inner `result` is only ever "ok"/"degraded"/"warning"
+        # (the "exceeded" case returns via the branch above instead) — the
+        # generic RunStore.update() plumbing types its return as bare str,
+        # so this narrows back to what's actually always true at runtime.
+        return cast(Literal["ok", "degraded", "warning"], kind)
 
     def record_step(
         self,
@@ -542,7 +554,7 @@ def _worst_fraction(state: _RunState) -> tuple[float, str]:
     return max(candidates, key=lambda c: c[0])
 
 
-def _summary(run_id: str, state: _RunState, exceeded_reason: str) -> dict:
+def _summary(run_id: str, state: _RunState, exceeded_reason: str) -> dict[str, Any]:
     return {
         "run_id": run_id,
         "steps_taken": len(state.steps),

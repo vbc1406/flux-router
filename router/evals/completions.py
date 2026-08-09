@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import random
 import time
+from typing import Any
 
 from ..classifier import estimate_tokens
 from ..schemas import ModelOption, RoutingRequest
@@ -90,14 +91,14 @@ def _simulated_text(sample: EvalSample, correct: bool, rng: random.Random) -> st
         ans = ref if correct else _wrong_letter(ref, n, rng)
         return ans
     if sample.grader == "humaneval":
-        header = sample.metadata.get("prompt_header", "")
+        header: str = sample.metadata.get("prompt_header", "")
         if correct and sample.reference:
             body = sample.reference  # canonical solution body
         else:
             body = "    raise NotImplementedError\n"
         return header + body
     if sample.grader == "agentic_tool_select":
-        expected = sample.metadata.get("expected_tool", "")
+        expected: str = sample.metadata.get("expected_tool", "")
         offered = [
             t.get("function", {}).get("name")
             for t in sample.metadata.get("tools", [])
@@ -118,7 +119,7 @@ async def get_completion(
     sample: EvalSample,
     *,
     mode: str = "mock",
-    api_keys: dict | None = None,
+    api_keys: dict[str, Any] | None = None,
     max_tokens: int = 1024,
     seed: str = "flux-eval",
 ) -> Completion:
@@ -160,7 +161,7 @@ def _mock_completion(model: ModelOption, sample: EvalSample, seed: str) -> Compl
 
 
 async def _live_completion(
-    model: ModelOption, sample: EvalSample, api_keys: dict, max_tokens: int
+    model: ModelOption, sample: EvalSample, api_keys: dict[str, Any], max_tokens: int
 ) -> Completion:
     """Call the real provider for ``model`` with the sample's prompt.
 

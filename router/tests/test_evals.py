@@ -192,6 +192,30 @@ class TestJudge:
         assert _parse_score("The rating is 10/10") == 1.0
         assert _parse_score("no number here") == 0.0
 
+    def test_judge_score_extracts_text_from_provider_result(self, monkeypatch):
+        """Regression test: Judge.score() used to pass the whole
+        ProviderResult call_provider() returns to _parse_score() instead of
+        .text — _parse_score calls .strip() on it, which ProviderResult
+        doesn't have. A live judge call would have raised AttributeError.
+        No test exercised it before (needs a real key) — mocked here."""
+        from router.evals.graders.llm_judge import Judge
+        from router.provider_caller import ProviderResult
+
+        async def fake_call_provider(model, request, api_key):
+            return ProviderResult(
+                text="7",
+                input_tokens=10,
+                output_tokens=1,
+                usage_source="provider",
+            )
+
+        monkeypatch.setattr("router.provider_caller.call_provider", fake_call_provider)
+        sample = load_dataset("mtbench", n=1)[0]
+        model = ModelRegistry().most_expensive_model()
+        judge = Judge(model, api_key="fake-key")
+        score = _run(judge.score(sample, _completion("some answer")))
+        assert score == 0.7
+
 
 # ── Mock completion determinism ────────────────────────────────────────────
 

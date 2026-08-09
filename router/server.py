@@ -29,7 +29,7 @@ import time
 import uuid
 from collections.abc import MutableMapping
 from importlib import resources
-from typing import Any
+from typing import Any, AsyncIterator
 
 import structlog
 
@@ -78,7 +78,7 @@ from .provider_caller import (
 from .provider_caller import _safe_usage_int as _safe_stream_usage_int
 from .rate_limit import RateLimiter
 from .run_budget import RunBudgetExceeded
-from .schemas import RoutingRequest
+from .schemas import RoutingDecision, RoutingRequest
 
 log = structlog.get_logger(__name__)
 
@@ -290,7 +290,7 @@ async def _read_bounded_body(request: Request) -> bytes:
 
 def _messages_to_request_fields(
     messages: list[dict[str, Any]],
-) -> tuple[str | None, str, list[dict]]:
+) -> tuple[str | None, str, list[dict[str, Any]]]:
     """Split an OpenAI `messages` array into (system_prompt, raw_prompt, message_history)."""
     for i, m in enumerate(messages):
         if not isinstance(m, dict):
@@ -429,7 +429,7 @@ def _build_routing_request(
     return request, is_literal_model
 
 
-def _flux_headers(decision, decision_latency_ms: float) -> dict[str, str]:
+def _flux_headers(decision: RoutingDecision, decision_latency_ms: float) -> dict[str, str]:
     task_type = decision.explanation.task_type if decision.explanation else ""
     complexity = decision.explanation.complexity_score if decision.explanation else 0.0
     headers = {
@@ -1094,14 +1094,14 @@ async def chat_completions(
 
 
 async def _stream_completion(
-    routing_request,
-    decision,
-    completion_id,
-    created,
-    headers,
-    bound_tenant=None,
-    client_wants_usage=False,
-):
+    routing_request: RoutingRequest,
+    decision: RoutingDecision,
+    completion_id: str,
+    created: int,
+    headers: dict[str, str],
+    bound_tenant: str | None = None,
+    client_wants_usage: bool = False,
+) -> AsyncIterator[bytes]:
     """Yield SSE chunks for a chat completion.
 
     For providers that speak OpenAI-native SSE (openai/groq/mistral), each
@@ -1133,6 +1133,10 @@ async def _stream_completion(
     the run-budget reservation is resolved by that recording rather than
     left dangling.
     """
+    # The caller (chat_completions) already returns a 502 before ever
+    # invoking this generator when decision.chosen_model is None — this
+    # narrows that same invariant for the type checker.
+    assert decision.chosen_model is not None
     model = decision.chosen_model
     model_id = model.model_id
     reservation_id = _flux._engine._budget.reserve_spend(
@@ -1149,7 +1153,7 @@ async def _stream_completion(
         yield b"data: [DONE]\n\n"
         return
 
-    def _chunk(delta: dict, finish_reason: str | None) -> bytes:
+    def _chunk(delta: dict[str, Any], finish_reason: str | None) -> bytes:
         payload = {
             "id": completion_id,
             "object": "chat.completion.chunk",
@@ -1236,7 +1240,7 @@ async def _stream_completion(
         if model.provider.lower() in STREAMING_NATIVE_PROVIDERS:
             api_key = _flux._resolve_api_key(model, routing_request)
             yield _chunk({"role": "assistant"}, None)
-            captured_usage: dict | None = None
+            captured_usage: dict[str, Any] | None = None
             async for line in stream_openai_compat_lines(model, routing_request, api_key):
                 text = line.decode("utf-8", errors="replace").strip()
                 if not text or text == "data: [DONE]":

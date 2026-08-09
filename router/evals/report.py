@@ -20,6 +20,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean
+from typing import Any
 
 from rich import box
 from rich.console import Console
@@ -209,7 +210,7 @@ def _by_sample(results: list[GradedResult]) -> tuple[list[str], dict[str, dict[s
     return order, rows
 
 
-def per_question_payload(out: RunOutput) -> dict:
+def per_question_payload(out: RunOutput) -> dict[str, Any]:
     """Machine-readable per-question rows + a by-question-type rollup.
 
     Bugfix (Item 6): this used to report each strategy's model's static
@@ -273,7 +274,7 @@ def per_question_payload(out: RunOutput) -> dict:
     }
 
 
-def _flux_vs_baselines(out: RunOutput) -> dict[str, dict]:
+def _flux_vs_baselines(out: RunOutput) -> dict[str, dict[str, Any]]:
     """Per-strategy mean quality + total cost, with flux's deltas vs each.
 
     Bugfix (Item 6): same class of bug as per_question_payload — this used
@@ -433,8 +434,8 @@ except Exception:  # pragma: no cover
 def _snapshot(
     out: RunOutput,
     reports: dict[str, StrategyReport],
-    per_question: dict | None = None,
-) -> dict:
+    per_question: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     snap = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "mode": out.config.mode,
@@ -454,7 +455,7 @@ def write_json(
     out: RunOutput,
     reports: dict[str, StrategyReport],
     out_dir: str,
-    per_question: dict | None = None,
+    per_question: dict[str, Any] | None = None,
 ) -> Path:
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

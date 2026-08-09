@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 from .schemas import EvalSample
 
@@ -62,7 +63,7 @@ def _extract_gsm8k_answer(answer_field: str) -> str:
     return nums[-1].replace(",", "") if nums else tail.strip()
 
 
-def _build_gsm8k(rec: dict, idx: int) -> EvalSample:
+def _build_gsm8k(rec: dict[str, Any], idx: int) -> EvalSample:
     return EvalSample(
         id=f"gsm8k-{idx}",
         dataset="gsm8k",
@@ -73,7 +74,7 @@ def _build_gsm8k(rec: dict, idx: int) -> EvalSample:
     )
 
 
-def _build_mmlu(rec: dict, idx: int) -> EvalSample:
+def _build_mmlu(rec: dict[str, Any], idx: int) -> EvalSample:
     choices = list(rec["choices"])
     answer = rec["answer"]
     letter = answer if isinstance(answer, str) else _LETTERS[int(answer)]
@@ -89,7 +90,7 @@ def _build_mmlu(rec: dict, idx: int) -> EvalSample:
     )
 
 
-def _build_humaneval(rec: dict, idx: int) -> EvalSample:
+def _build_humaneval(rec: dict[str, Any], idx: int) -> EvalSample:
     header = rec["prompt"]
     return EvalSample(
         id=rec.get("task_id", f"humaneval-{idx}"),
@@ -106,7 +107,7 @@ def _build_humaneval(rec: dict, idx: int) -> EvalSample:
     )
 
 
-def _build_mtbench(rec: dict, idx: int) -> EvalSample:
+def _build_mtbench(rec: dict[str, Any], idx: int) -> EvalSample:
     turns = rec["prompt"]
     first = turns[0] if isinstance(turns, list) else turns
     category = rec.get("category", "writing")
@@ -121,7 +122,7 @@ def _build_mtbench(rec: dict, idx: int) -> EvalSample:
     )
 
 
-def _build_agentic(rec: dict, idx: int) -> EvalSample:
+def _build_agentic(rec: dict[str, Any], idx: int) -> EvalSample:
     """Item 6: agent-step-type eval cases — planning, tool selection,
     tool-result interpretation, reflection, final answer. Fixture-only (no
     hub source — this is a Flux-original set, not a public benchmark).
@@ -134,7 +135,7 @@ def _build_agentic(rec: dict, idx: int) -> EvalSample:
     """
     step_type = rec["step_type"]
     grader = "agentic_tool_select" if step_type == "tool_select" else "llm_judge"
-    metadata: dict = {"step_type": step_type}
+    metadata: dict[str, Any] = {"step_type": step_type}
     if "tools" in rec:
         metadata["tools"] = rec["tools"]
     if "expected_tool" in rec:
@@ -162,15 +163,16 @@ _BUILDERS = {
 # ── Loaders ─────────────────────────────────────────────────────────────────
 
 
-def _load_fixture_records(name: str) -> list[dict]:
+def _load_fixture_records(name: str) -> list[dict[str, Any]]:
     path = _FIXTURE_DIR / f"{name}.json"
     if not path.exists():
         raise FileNotFoundError(f"No fixture for dataset '{name}' at {path}")
     with path.open(encoding="utf-8") as fh:
-        return json.load(fh)
+        records: list[dict[str, Any]] = json.load(fh)
+        return records
 
 
-def _load_hub_records(name: str, n: int) -> list[dict]:
+def _load_hub_records(name: str, n: int) -> list[dict[str, Any]]:
     """Download up to n raw records from the HuggingFace hub.
 
     Imported lazily so the core package never hard-depends on `datasets`.

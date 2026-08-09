@@ -25,7 +25,7 @@ import json
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, AsyncIterator
 
 import structlog
 
@@ -62,7 +62,7 @@ class ProviderResult:
     input_tokens: int | None
     output_tokens: int | None
     usage_source: str  # "provider" | "estimated"
-    tool_calls: list[dict] | None = None
+    tool_calls: list[dict[str, Any]] | None = None
     finish_reason: str = "stop"
 
 
@@ -133,12 +133,15 @@ def compute_actual_cost(model: ModelOption, input_tokens: int, output_tokens: in
     )
 
 
-def _bounded_read(stream, limit: int = MAX_PROVIDER_RESPONSE_BYTES) -> bytes:
+def _bounded_read(stream: Any, limit: int = MAX_PROVIDER_RESPONSE_BYTES) -> bytes:
     """Read at most `limit` bytes plus one. Raise if exceeded.
 
     The +1 lets us detect overflow without buffering the entire malicious payload.
+    `stream` is whatever urllib.request.urlopen()/HTTPError gives us — both
+    support .read(n) -> bytes but share no common typed base worth importing
+    just for this.
     """
-    data = stream.read(limit + 1)
+    data: bytes = stream.read(limit + 1)
     if len(data) > limit:
         raise ProviderCallError(
             f"Provider response exceeded {limit} bytes",
@@ -189,7 +192,7 @@ def _build_messages(request: RoutingRequest) -> list[dict[str, Any]]:
 # verbatim) since they already speak this format.
 
 
-def _openai_tools_to_anthropic(tools: list[dict]) -> list[dict[str, Any]]:
+def _openai_tools_to_anthropic(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out = []
     for t in tools:
         fn = t.get("function", t)
@@ -203,7 +206,9 @@ def _openai_tools_to_anthropic(tools: list[dict]) -> list[dict[str, Any]]:
     return out
 
 
-def _openai_tool_choice_to_anthropic(tool_choice: dict | str | None) -> dict[str, Any] | None:
+def _openai_tool_choice_to_anthropic(
+    tool_choice: dict[str, Any] | str | None,
+) -> dict[str, Any] | None:
     if tool_choice is None:
         return None
     if tool_choice == "auto":
@@ -220,9 +225,11 @@ def _openai_tool_choice_to_anthropic(tool_choice: dict | str | None) -> dict[str
     raise ProviderCallError(f"Unsupported tool_choice value for anthropic: {tool_choice!r}")
 
 
-def _parse_anthropic_content(content: list[dict]) -> tuple[str, list[dict] | None]:
+def _parse_anthropic_content(
+    content: list[dict[str, Any]]
+) -> tuple[str, list[dict[str, Any]] | None]:
     text_parts: list[str] = []
-    tool_calls: list[dict] = []
+    tool_calls: list[dict[str, Any]] = []
     for block in content:
         btype = block.get("type")
         # A real Anthropic response always sets "type", but tolerate a block
@@ -244,7 +251,7 @@ def _parse_anthropic_content(content: list[dict]) -> tuple[str, list[dict] | Non
     return "".join(text_parts), (tool_calls or None)
 
 
-def _openai_tools_to_google(tools: list[dict]) -> list[dict[str, Any]]:
+def _openai_tools_to_google(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     decls = []
     for t in tools:
         fn = t.get("function", t)
@@ -258,7 +265,9 @@ def _openai_tools_to_google(tools: list[dict]) -> list[dict[str, Any]]:
     return [{"functionDeclarations": decls}]
 
 
-def _openai_tool_choice_to_google(tool_choice: dict | str | None) -> dict[str, Any] | None:
+def _openai_tool_choice_to_google(
+    tool_choice: dict[str, Any] | str | None,
+) -> dict[str, Any] | None:
     if tool_choice is None:
         return None
     if tool_choice == "auto":
@@ -275,7 +284,7 @@ def _openai_tool_choice_to_google(tool_choice: dict | str | None) -> dict[str, A
     raise ProviderCallError(f"Unsupported tool_choice value for google: {tool_choice!r}")
 
 
-def _google_response_format_config(response_format: dict | None) -> dict[str, Any]:
+def _google_response_format_config(response_format: dict[str, Any] | None) -> dict[str, Any]:
     if not response_format:
         return {}
     rtype = response_format.get("type")
@@ -290,9 +299,11 @@ def _google_response_format_config(response_format: dict | None) -> dict[str, An
     raise ProviderCallError(f"Unsupported response_format type for google: {rtype!r}")
 
 
-def _parse_google_parts(parts: list[dict]) -> tuple[str, list[dict] | None]:
+def _parse_google_parts(
+    parts: list[dict[str, Any]]
+) -> tuple[str, list[dict[str, Any]] | None]:
     text_parts: list[str] = []
-    tool_calls: list[dict] = []
+    tool_calls: list[dict[str, Any]] = []
     for i, part in enumerate(parts):
         if "text" in part:
             text_parts.append(part["text"])
@@ -625,7 +636,7 @@ def _open_openai_compat_stream(
     api_key: str,
     base_url: str,
     provider_name: str,
-):
+) -> Any:
     """Open a streaming POST to an OpenAI-compatible provider. Returns the open response.
 
     Synchronous — always called via loop.run_in_executor. The caller is
@@ -688,7 +699,7 @@ async def stream_openai_compat_lines(
     model: ModelOption,
     request: RoutingRequest,
     api_key: str,
-):
+) -> AsyncIterator[bytes]:
     """
     Async generator yielding raw SSE lines (bytes, including the trailing
     newline) from an OpenAI-compatible provider as they arrive on the wire.

@@ -150,7 +150,7 @@ class FluxResponse:
     fallback_used: bool = False
     fallback_reason: str | None = None
     usage: DispatchUsage | None = None
-    tool_calls: list[dict] | None = None
+    tool_calls: list[dict[str, Any]] | None = None
     finish_reason: str = "stop"
 
 
@@ -246,7 +246,7 @@ class Flux:
         prompt: str,
         max_retries: int = 2,
         cascade_verifier: Verifier | None = None,
-        **request_kwargs,
+        **request_kwargs: Any,
     ) -> FluxResponse:
         """
         Route ``prompt`` and call the selected model, retrying on transient
@@ -288,7 +288,7 @@ class Flux:
         decision: RoutingDecision,
         request: RoutingRequest,
         max_retries: int = 2,
-    ) -> tuple[str, ModelOption, bool, str | None, DispatchUsage, list[dict] | None, str]:
+    ) -> tuple[str, ModelOption, bool, str | None, DispatchUsage, list[dict[str, Any]] | None, str]:
         """
         Call ``decision.chosen_model`` and, on a typed transient failure, walk
         the appropriate fallback chain up to ``max_retries`` further attempts.
@@ -326,7 +326,7 @@ class Flux:
         decision: RoutingDecision,
         request: RoutingRequest,
         max_retries: int = 2,
-    ) -> tuple[str, ModelOption, bool, str | None, DispatchUsage, list[dict] | None, str]:
+    ) -> tuple[str, ModelOption, bool, str | None, DispatchUsage, list[dict[str, Any]] | None, str]:
         models_to_try: list[ModelOption] = []
         if decision.chosen_model:
             models_to_try.append(decision.chosen_model)
@@ -343,7 +343,12 @@ class Flux:
             # This closes the route-check -> provider-call race where many
             # concurrent requests could all observe the same remaining budget.
             estimated_attempt_cost = estimate_step_cost(
-                model, decision.chosen_model, decision.estimated_cost
+                # decision.chosen_model is only None when models_to_try is
+                # empty (see its construction above), so this loop body never
+                # actually runs with it None — `or model` just satisfies the
+                # type checker for that unreachable case without changing
+                # behavior.
+                model, decision.chosen_model or model, decision.estimated_cost
             )
             reservation_id = self._engine._budget.reserve_spend(
                 request.user_id, estimated_attempt_cost, request.plan or "free_plan"
@@ -412,7 +417,7 @@ class Flux:
                     usage_source = "provider"
                 else:
                     billed_cost = estimate_step_cost(
-                        model, decision.chosen_model, decision.estimated_cost
+                        model, decision.chosen_model or model, decision.estimated_cost
                     )
                     billed_tokens = max(len(text) // 4, 1)
                     usage_source = "estimated"
@@ -555,7 +560,7 @@ class Flux:
         self,
         prompt: str,
         cascade_verifier: Verifier | None,
-        **request_kwargs,
+        **request_kwargs: Any,
     ) -> FluxResponse:
         """
         Task 8: dispatch the cheapest capable tier, verify locally, escalate
@@ -608,7 +613,7 @@ class Flux:
         if cascade_reservation_id is None:
             raise err.FluxAPIError("Budget exceeded before cascade dispatch")
 
-        step_breakdown: list[dict] = []
+        step_breakdown: list[dict[str, Any]] = []
         # Parallel to step_breakdown (same index, same length): the
         # ProviderResult for a tier that got a response, None for a tier
         # whose call raised FluxAPIError outright (no text, no usage).
@@ -825,7 +830,7 @@ class Flux:
 
     # ── Internal helpers ────────────────────────────────────────────────────
 
-    def _build_request(self, prompt: str, **kwargs) -> RoutingRequest:
+    def _build_request(self, prompt: str, **kwargs: Any) -> RoutingRequest:
         """Build a RoutingRequest from the prompt and keyword overrides."""
         kwargs.setdefault("user_id", "flux_default")
         return RoutingRequest(raw_prompt=prompt, **kwargs)
@@ -880,7 +885,7 @@ class Flux:
 def make_flux(
     api_key: SecretStr | str | None = None,
     api_keys: dict[str, SecretStr | str] | None = None,
-    **engine_kwargs,
+    **engine_kwargs: Any,
 ) -> Flux:
     """
     Convenience factory that wires up a full RoutingEngine with sane defaults
