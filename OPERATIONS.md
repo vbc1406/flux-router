@@ -15,6 +15,32 @@ Record these before every release:
 
 Never store provider keys or bearer tokens in the deployment record.
 
+## Production-like staging stack
+
+`docker-compose.staging.yml` exercises the deployment shape that matters in
+production: two authenticated Flux workers, Redis-backed shared run budgets,
+persistent attribution storage, and a persistent Redis append-only log.
+
+```bash
+cp .env.staging.example .env.staging
+# Replace the token placeholder and add only the provider keys being tested.
+docker compose --env-file .env.staging -f docker-compose.staging.yml up -d --build
+docker compose --env-file .env.staging -f docker-compose.staging.yml ps
+python scripts/staging_smoke.py --token 'the-token-key-from-FLUX_SERVER_TOKENS'
+```
+
+Keep the published port on host loopback unless a separately authenticated
+ingress is ready. Use the tenant-bound bearer token from `FLUX_SERVER_TOKENS`
+for the dashboard, stats endpoints, wrapper smoke tests, and agent-run smoke
+tests. Stop the stack without deleting its volumes during ordinary testing:
+
+```bash
+docker compose --env-file .env.staging -f docker-compose.staging.yml down
+```
+
+Use `down -v` only when intentionally discarding staging attribution and Redis
+state.
+
 ## Backup and restore
 
 Stop Flux or take a SQLite-safe online backup before changing versions:

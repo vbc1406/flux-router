@@ -3,3 +3,6 @@ uvicorn[standard]>=0.27,<1.0
 # Security floors for uvicorn's optional transitive dependencies.
 click>=8.3.3,<9.0
 python-dotenv>=1.2.2,<2.0
+# Included in the production image so switching FLUX_RUN_STORE=redis for
+# multi-worker run-budget correctness never fails at runtime.
+redis>=5.0,<6.0

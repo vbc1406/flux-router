@@ -45,6 +45,7 @@
     {
       "provider": "mistral",
       "model_id": "mistral-medium-3",
+      "provider_model_id": "mistral-medium-2505",
       "display_name": "Mistral Medium 3",
       "tier": "mid",
       "cost_per_1k_input": 0.0004,
@@ -1067,6 +1068,7 @@
     {
       "provider": "mistral",
       "model_id": "mistral-small-4",
+      "provider_model_id": "mistral-small-2603",
       "display_name": "Mistral Small 4",
       "tier": "cheap",
       "cost_per_1k_input": 0.00015,
@@ -1109,6 +1111,7 @@
     {
       "provider": "mistral",
       "model_id": "mistral-large-3",
+      "provider_model_id": "mistral-large-2512",
       "display_name": "Mistral Large 3",
       "tier": "mid",
       "cost_per_1k_input": 0.0005,

@@ -93,6 +93,18 @@ class TestRegistryLoadsFromJson:
             assert m.tier == tier
             assert m.is_available
 
+    def test_mistral_marketing_names_resolve_to_documented_api_ids(self):
+        reg = ModelRegistry()
+        expected = {
+            "mistral-medium-3": "mistral-medium-2505",
+            "mistral-small-4": "mistral-small-2603",
+            "mistral-large-3": "mistral-large-2512",
+        }
+        for model_id, provider_model_id in expected.items():
+            model = reg.get_model(model_id)
+            assert model is not None
+            assert model.provider_model_id == provider_model_id
+
     def test_deprecated_llama_4_scout_is_excluded_from_routing(self):
         # Groq deprecated llama-4-scout on 2026-06-17 — it must no longer be
         # a routable candidate, but the entry stays in the catalog (with

@@ -1,0 +1,50 @@
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - flux-staging-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  flux:
+    build: .
+    image: flux-router:staging
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      FLUX_SERVER_TOKENS: "${FLUX_SERVER_TOKENS:?Set a JSON token-to-tenant map}"
+      FLUX_SERVER_WORKERS: "2"
+      FLUX_RUN_STORE: redis
+      FLUX_REDIS_URL: redis://redis:6379/0
+      FLUX_ATTRIBUTION_DB: /data/flux.db
+      FLUX_DASHBOARD: "1"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      GOOGLE_API_KEY: "${GOOGLE_API_KEY:-}"
+      GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      MISTRAL_API_KEY: "${MISTRAL_API_KEY:-}"
+    volumes:
+      - flux-staging-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  flux-staging-data:
+  flux-staging-redis:

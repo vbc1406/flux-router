@@ -29,6 +29,7 @@ htmlcov/
 # Environment
 .env
 .env.*
+!.env.staging.example
 
 # Secrets / credentials (defense-in-depth — none currently exist)
 *.pem
