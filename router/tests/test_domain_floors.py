@@ -17,6 +17,8 @@ import asyncio
 import uuid
 from typing import Any
 
+import pytest
+
 from router.adaptive_weights import AdaptiveWeights
 from router.analytics import RoutingAnalytics
 from router.budget_tracker import BudgetTracker
@@ -89,6 +91,34 @@ class TestMedicalDetection:
         analysis = _classify("Write a short story about a doctor who loves gardening.")
         assert analysis.task_type != "medical"
 
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            "Should I stop taking warfarin before surgery tomorrow?",
+            "My toddler swallowed cleaning fluid. What should I do?",
+            "Do these symptoms mean cancer?",
+            "Is it safe for me to combine tramadol and sertraline?",
+            "Could my symptoms be appendicitis?",
+            "I accidentally ingested household cleaner. Is this an emergency?",
+            "Should I change my medication dose before the procedure?",
+            "My child drank a chemical from the garage. What do I do now?",
+        ],
+    )
+    def test_adversarial_medical_wording_is_caught(self, prompt: str):
+        assert _classify(prompt).task_type == "medical"
+
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            "Summarize an article about combining tramadol and sertraline.",
+            "Translate: the patient stopped taking warfarin before surgery.",
+            "Write a fictional scene where a toddler spills cleaning fluid.",
+            "Extract the medication names from this report: warfarin and aspirin.",
+        ],
+    )
+    def test_adversarial_medical_transformations_do_not_escalate(self, prompt: str):
+        assert _classify(prompt).task_type != "medical"
+
 
 class TestLegalDetection:
     def test_liability_question_classified_legal(self):
@@ -120,8 +150,52 @@ class TestLegalDetection:
         analysis = _classify("What's the score of the basketball game on Court 2?")
         assert analysis.task_type != "legal"
 
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            "My landlord kept my security deposit. What can I do?",
+            "Can I sue my employer for unpaid wages?",
+            "My landlord is trying to evict me. What are my rights?",
+            "A debt collector keeps calling my family. What can I do?",
+            "The police arrested me without explaining why. What are my rights?",
+            "Should I sue over the damage caused by this contractor?",
+        ],
+    )
+    def test_adversarial_legal_wording_is_caught(self, prompt: str):
+        assert _classify(prompt).task_type == "legal"
+
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            "Summarize a story about a landlord returning a security deposit.",
+            "Translate: the employer paid all outstanding wages.",
+            "Extract the landlord and tenant names from this lease.",
+            "Write a courtroom drama about a fictional debt collector.",
+        ],
+    )
+    def test_adversarial_legal_transformations_do_not_escalate(self, prompt: str):
+        assert _classify(prompt).task_type != "legal"
+
 
 class TestDomainTierFloor:
+    @pytest.mark.parametrize(
+        "prompt, expected_task",
+        [
+            ("Should I stop taking warfarin before surgery tomorrow?", "medical"),
+            ("My toddler swallowed cleaning fluid. What should I do?", "medical"),
+            ("Do these symptoms mean cancer?", "medical"),
+            ("Is it safe for me to combine tramadol and sertraline?", "medical"),
+            ("My landlord kept my security deposit. What can I do?", "legal"),
+        ],
+    )
+    def test_adversarial_high_stakes_requests_route_to_premium(
+        self, prompt: str, expected_task: str
+    ):
+        decision = rr(_engine().route(_req(prompt)))
+        assert decision.task_type == expected_task
+        assert decision.chosen_model is not None
+        assert decision.chosen_model.tier == "premium"
+
     def test_medical_request_routes_to_premium(self):
         engine = _engine()
         decision = rr(

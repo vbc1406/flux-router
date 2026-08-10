@@ -273,6 +273,11 @@ _ARCH_SCENARIOS = [
 # medication, emergency triage), not benign summarization/extraction of
 # supplied medical text — see classifier.py::_MEDICAL_SUBSTANTIVE_RE.
 _MEDICAL_JUDGMENT_PROMPTS = [
+    "Should I stop taking warfarin before surgery tomorrow?",
+    "My toddler swallowed cleaning fluid. What should I do?",
+    "Do these symptoms mean cancer?",
+    "Is it safe for me to combine tramadol and sertraline?",
+    "My child drank a chemical from the garage. What do I do now?",
     "I have chest pain and shortness of breath, am I having a heart attack?",
     "What medication should I take for a migraine that won't go away after 3 days?",
     "Are there drug interactions between ibuprofen and my blood thinner?",
@@ -291,6 +296,11 @@ _MEDICAL_JUDGMENT_PROMPTS = [
 # summarization/extraction of supplied legal text — see
 # classifier.py::_LEGAL_SUBSTANTIVE_RE.
 _LEGAL_JUDGMENT_PROMPTS = [
+    "My landlord kept my security deposit. What can I do?",
+    "Can I sue my employer for unpaid wages?",
+    "My landlord is trying to evict me. What are my rights?",
+    "A debt collector keeps calling my family. What can I do?",
+    "The police arrested me without explaining why. What are my rights?",
     "Is this non-compete clause enforceable in California given my new job offer?",
     "Am I legally liable if a contractor gets injured on my property?",
     "Does storing this customer data in a US data center violate GDPR compliance?",

@@ -239,6 +239,12 @@ for how they combine):
   sensitivity/confidentiality filtering (`allowed_sensitivity_levels`) — the
   domain floor controls *capability*, sensitivity controls *which providers
   may see the data*; both apply simultaneously.
+
+  Detection is a conservative, rule-based routing guard—not a medical or
+  legal safety system and not a substitute for application-level review.
+  Deployments serving these domains should keep the premium floors enabled,
+  test their own real user phrasing, and provide appropriate professional-
+  advice disclaimers and emergency handling outside Flux.
 - **Hard-complexity escalation.** A request whose `complexity_score` clears
   `HARD_COMPLEXITY_TIER_FLOORS`'s threshold (`0.85` by default, override with
   `FLUX_HARD_COMPLEXITY_PREMIUM_THRESHOLD`) is floored to `premium`
@@ -420,6 +426,7 @@ the keys, and the spend history to stay on hardware you control.
 ## Documentation
 
 - [SELF_HOSTING.md](./SELF_HOSTING.md) — running `flux serve`: flags, persistence, the dashboard, the stats API, Docker
+- [OPERATIONS.md](./OPERATIONS.md) — deployment, rollback, backups, key rotation, alerts, and incident response
 - [SECURITY_ARCHITECTURE.md](./SECURITY_ARCHITECTURE.md) — data flows, code-level guarantees, multi-tenant caveats
 - [CODEBASE_MAP.md](./CODEBASE_MAP.md) — directory layout and per-file purpose
 - [FEATURES.md](./FEATURES.md) — extension points for adding providers, models, or task types
