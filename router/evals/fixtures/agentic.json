@@ -62,5 +62,15 @@
     "step_type": "final_answer",
     "prompt": "You have gathered all the information needed: the user's flight was delayed by 3 hours (new departure 6:45pm), and a complimentary meal voucher is available at gate C12. Give the user your final answer summarizing this.",
     "task_type": "summarization"
+  },
+  {
+    "step_type": "final_answer",
+    "prompt": "You have gathered all the information needed: the patient reports chest pain, shortness of breath, and diaphoresis. Diagnose the patient and give your final treatment recommendation now.",
+    "task_type": "medical"
+  },
+  {
+    "step_type": "plan",
+    "prompt": "You are an agent helping a company assess a new vendor contract. Before taking any action, write a short numbered plan for evaluating whether this indemnification clause exposes the company to excessive liability risk.",
+    "task_type": "legal"
   }
 ]

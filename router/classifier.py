@@ -227,6 +227,67 @@ _DOMAIN_SPECIFIC_RE = re.compile(
     r"amortized\s+(?:complexity|analysis)|ramanujan|p\s*[≠!=]\s*np)\b",
     re.IGNORECASE,
 )
+# Substantive high-stakes MEDICAL judgment/advice detection (see task_type
+# "medical" in COMPLEXITY_BASE_SCORES / DOMAIN_TIER_FLOORS). Deliberately
+# requires a judgment-seeking VERB PHRASE (diagnose, "what medication should
+# I", "is it safe to take", "am I having a heart attack", drug interactions,
+# side effects, prescribing, ER/emergency triage) rather than bare topic
+# words — "doctor", "medicine", "hospital" alone must NOT match, so a request
+# like "write a story about a doctor" or "summarize this medical report"
+# stays on its normal (cheap) task_type. Checked before extraction/
+# summarization/translation in _detect_task_type so a request that ALSO asks
+# Flux to render a substantive judgment on supplied text is still floored,
+# while a pure transformation of supplied text is not.
+_MEDICAL_SUBSTANTIVE_RE = re.compile(
+    r"\b("
+    r"diagnos(?:e|is|ing|ed)\s+(?:me\b|this\b|my\b|the\s+patient\b|and\s+treat\b)|"
+    r"what(?:'s| is)\s+wrong\s+with\s+me|"
+    r"do\s+i\s+have\b.{0,40}\b(?:cancer|diabetes|infection|disease|condition)|"
+    r"treat(?:ment|ing)?\s+(?:for|of)\s+(?:my|this)|"
+    r"how\s+(?:should|do)\s+i\s+treat\s+(?:my|this)|"
+    r"what\s+(?:medication|drug|dose|dosage)\s+(?:should|can)\s+i\s+(?:take|use)|"
+    r"is\s+it\s+safe\s+(?:for\s+me\s+)?to\s+take|"
+    r"drug\s+interaction(?:s)?\s+(?:with|between)|"
+    r"side\s+effects?\s+of\s+(?:taking\s+)?\w+|"
+    r"symptoms?\s+of\b.{0,40}\b(?:mean|indicate|suggest|could\s+be)|"
+    r"am\s+i\s+having\s+a\s+(?:heart\s+attack|stroke|seizure)|"
+    r"should\s+i\s+go\s+to\s+the\s+(?:er|emergency\s+room|hospital)|"
+    r"is\s+this\s+(?:rash|lump|mole|pain)\b.{0,40}\bserious|"
+    r"prescri(?:be|ption)\s+(?:me|for\s+me)|"
+    r"contraindicat\w*|"
+    r"how\s+much\s+\w+\s+(?:is|would\s+be)\s+(?:an\s+)?overdose"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Substantive high-stakes LEGAL judgment/advice detection (see task_type
+# "legal" above). Same design constraint as medical: requires an explicit
+# judgment/liability/compliance verb phrase — bare mentions of "contract",
+# "court", "law" do not match, so "extract the parties from this contract"
+# or "summarize this court ruling" keeps its normal (cheap) task_type.
+_LEGAL_SUBSTANTIVE_RE = re.compile(
+    r"\b("
+    r"is\s+(?:this|it)\s+legal(?:ly)?\s+(?:binding|enforceable|allowed|permitted)|"
+    r"is\s+this\s+contract\s+enforceable|"
+    r"am\s+i\s+(?:legally\s+)?liable|"
+    r"can\s+i\s+(?:be\s+)?sue|"
+    r"can\s+i\s+be\s+sued|"
+    r"what\s+are\s+my\s+(?:legal\s+)?rights|"
+    r"breach\s+of\s+contract|"
+    r"liability\s+(?:exposure|risk|clause)|"
+    r"indemnif(?:y|ication|ies|ied)|"
+    r"regulatory\s+compliance|"
+    r"comply\s+with\s+(?:gdpr|hipaa|sox|ccpa|the\s+regulations?)|"
+    r"does\s+(?:this|releasing\s+this|doing\s+this)\b.{0,60}\bviolate|"
+    r"is\s+this\s+a\s+violation\s+of|"
+    r"(?:need|want|give\s+me)\s+legal\s+advice|"
+    r"should\s+i\s+sign\s+this|"
+    r"non.compete\s+(?:clause\s+)?enforceable|"
+    r"statute\s+of\s+limitations|"
+    r"file\s+a\s+lawsuit"
+    r")\b",
+    re.IGNORECASE,
+)
 _SENSITIVE_RESTRICTED_RE = re.compile(
     r"\b(ssn|social\s+security\s+number|bank\s+account|routing\s+number|"
     r"private\s+key|secret\s+key|password|passwd|classified|top\s+secret)\b",
@@ -653,6 +714,21 @@ class RequestClassifier:
         # Function calling: explicit in metadata or capabilities
         if "function_calling" in request.required_capabilities or meta.get("tools"):
             return "function_calling", 0.9
+
+        # Substantive legal/medical judgment calls: checked before
+        # long_document/summarization/translation/extraction so a request
+        # asking Flux to render a high-stakes judgment on supplied text is
+        # still floored to DOMAIN_TIER_FLOORS, while a PURE transformation
+        # (summarize/translate/extract/format supplied text) — which does not
+        # match these judgment-seeking patterns — keeps its normal, cheaper
+        # task_type. Checked against prompt + system prompt.
+        sys_prompt_text = request.system_prompt or ""
+        if _MEDICAL_SUBSTANTIVE_RE.search(prompt) or _MEDICAL_SUBSTANTIVE_RE.search(
+            sys_prompt_text
+        ):
+            return "medical", 0.85
+        if _LEGAL_SUBSTANTIVE_RE.search(prompt) or _LEGAL_SUBSTANTIVE_RE.search(sys_prompt_text):
+            return "legal", 0.85
 
         # Long document: large input (>~2700 tokens already warrants long-doc routing)
         word_count = len(prompt.split())

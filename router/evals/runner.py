@@ -159,6 +159,7 @@ async def run_eval(config: RunConfig) -> RunOutput:
                     question_type=question_type,
                     complexity=complexity,
                     quality_rating=model.quality_ratings.get(sample.task_type, 0.0),
+                    step_type=sample.metadata.get("step_type", ""),
                 )
             )
         if i % 25 == 0:

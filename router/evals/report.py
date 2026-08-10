@@ -266,11 +266,35 @@ def per_question_payload(out: RunOutput) -> dict[str, Any]:
         }
         for qtype, by_strat in by_type_groups.items()
     }
+
+    # Item 3: quality-by-agent-step-type rollup, same shape as
+    # by_question_type above. Only samples that carry a step_type (currently
+    # the "agentic" dataset) are included — GradedResult.step_type is ""
+    # (not "unknown") for every other sample, so this rollup naturally
+    # excludes gsm8k/mmlu/humaneval/mtbench without an explicit filter list.
+    by_step_groups: dict[str, dict[str, list[GradedResult]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for r in out.results:
+        if r.step_type:
+            by_step_groups[r.step_type][r.strategy].append(r)
+    by_step_type = {
+        step: {
+            s: {
+                "n": len(rs),
+                "quality": round(mean(x.quality for x in rs), 4),
+                "cost": round(sum(x.cost for x in rs), 6),
+            }
+            for s, rs in by_strat.items()
+        }
+        for step, by_strat in by_step_groups.items()
+    }
     return {
         "mode": mode,
         "strategies": strategies,
         "questions": questions,
         "by_question_type": by_type,
+        "by_step_type": by_step_type,
     }
 
 
@@ -368,6 +392,24 @@ def print_per_question(out: RunOutput) -> None:
             cells.append(f"q={cell['quality']:.2f} ${cell['cost']:.5f}" if cell else "—")
         rollup.add_row(*cells)
     console.print(rollup)
+
+    # Item 3: mean quality + total cost per agent step_type (agentic dataset
+    # only — samples from every other dataset carry step_type="" and are
+    # excluded from this rollup, see per_question_payload()).
+    if payload["by_step_type"]:
+        console.print()
+        console.rule("[bold cyan]Mean quality / total cost by agent step type[/bold cyan]")
+        step_rollup = Table(box=box.SIMPLE)
+        step_rollup.add_column("Step Type", style="bold")
+        for s in strategies:
+            step_rollup.add_column(s, justify="right")
+        for step in sorted(payload["by_step_type"]):
+            cells = [step]
+            for s in strategies:
+                cell = payload["by_step_type"][step].get(s)
+                cells.append(f"q={cell['quality']:.2f} ${cell['cost']:.5f}" if cell else "—")
+            step_rollup.add_row(*cells)
+        console.print(step_rollup)
 
     # Headline: flux vs each baseline overall.
     summary = _flux_vs_baselines(out)

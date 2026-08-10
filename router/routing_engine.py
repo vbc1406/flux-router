@@ -96,9 +96,12 @@ from .config import (
     CONVERSATION_EXPIRY_SECONDS,
     CONVERSATION_STICKY_BIAS_DEEP,
     CONVERSATION_STICKY_BIAS_SHALLOW,
+    DOMAIN_TIER_FLOORS,
     ENABLE_RESPONSE_CACHE,
     FREE_TIER_ABUSE_THRESHOLD_RPM,
+    HARD_COMPLEXITY_TIER_FLOORS,
     LATENCY_PRIORITY_MAP,
+    LONG_DOCUMENT_CONTEXT_SAFETY_MARGIN,
     MAX_COST_PER_REQUEST,
     MIN_CONFIDENCE_THRESHOLD,
     MIN_QUALITY_THRESHOLD,
@@ -418,9 +421,16 @@ class RoutingEngine:
             for m in all_models
             if passes_constraints[m.model_id] and circuit_ok.get(m.model_id, False)
         ]
+        # Items 1/2/Task 6: compute once for explainability and for the
+        # no-candidates reasoning message below — _passes_hard_constraints()/
+        # _relaxed_filter() each recompute it per-model internally, this call
+        # is purely for surfacing WHICH floors were in effect.
+        _floor_tier, _floor_reasons = _composed_min_tier(analysis)
+
         if expl:
             expl.candidates_considered = len(all_models)
             expl.candidates_filtered = len(all_models) - len(candidates)
+            expl.floors_applied = list(_floor_reasons)
             for m in all_models:
                 if m not in candidates:
                     # A model that fails constraints never had its circuit
@@ -456,8 +466,15 @@ class RoutingEngine:
             candidates = _relaxed_filter(all_models, request, analysis)
 
         if not candidates:
+            no_candidates_reasoning = "No models available matching request constraints"
+            if _floor_reasons:
+                no_candidates_reasoning += (
+                    f" (mandatory floor(s) in effect: {', '.join(_floor_reasons)} — "
+                    "no catalog model at/above the required tier passed every other "
+                    "constraint)"
+                )
             return RoutingDecision(
-                reasoning="No models available matching request constraints",
+                reasoning=no_candidates_reasoning,
                 routing_rule_matched="no_candidates",
                 correlation_id=cid,
                 timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
@@ -725,10 +742,16 @@ class RoutingEngine:
         # 🔧 EXTENSION POINT: add new quality signals here (e.g., latency-based
         # quality adjustments, A/B test quality overrides).
         for m in candidates:
+            # Item 3: base_score resolves step_quality_ratings first when
+            # step_type is known (see _resolve_quality). The adaptive-weights
+            # EMA key stays task_type-only (model_id, task_type) — only the
+            # starting value changes, never the learning key — so adaptive
+            # learning cannot conflate step-level and task-level signal.
+            resolved_quality, _source = _resolve_quality(m, analysis)
             m.adjusted_quality = self._adaptive.get_adjusted_score(
                 model_id=m.model_id,
                 task_type=analysis.task_type,
-                base_score=m.quality_ratings.get(analysis.task_type, 0.5),
+                base_score=resolved_quality,
                 customer_id=request.customer_id,
             )
 
@@ -747,7 +770,7 @@ class RoutingEngine:
         target_tier = _get_tier_for_score(analysis.complexity_score)  # kept for logs/explanation
         quality_floor = _quality_floor_for_complexity(analysis.complexity_score)
         tier_candidates = [
-            m for m in candidates if m.quality_ratings.get(analysis.task_type, 0.5) >= quality_floor
+            m for m in candidates if _resolve_quality(m, analysis)[0] >= quality_floor
         ]
         if not tier_candidates:
             # Floor too strict — fall back to all candidates so we always return something.
@@ -874,10 +897,12 @@ class RoutingEngine:
             expl.tier_selected = target_tier
             expl.rules_fired.append("tier_selection")
             for i, m in enumerate(tier_candidates):
+                _, quality_source = _resolve_quality(m, analysis)
                 expl.scoring_breakdown.append(
                     {
                         "model": m.model_id,
                         "quality": m.adjusted_quality,
+                        "quality_source": quality_source,
                         "cost": 1.0 - norm_cost[i],
                         "latency": 1.0 - norm_latency[i],
                         "score": m.routing_score,
@@ -1422,7 +1447,7 @@ def _route_cascade_initial(
         tier_models = [
             m
             for m in candidates
-            if m.tier == tier and m.quality_ratings.get(analysis.task_type, 0.5) >= min_quality
+            if m.tier == tier and _resolve_quality(m, analysis)[0] >= min_quality
         ]
         if tier_models:
             best = _pick_best(tier_models, analysis)
@@ -1458,7 +1483,7 @@ def _route_quality_max(
     best = max(
         candidates,
         key=lambda m: (
-            m.quality_ratings.get(analysis.task_type, 0.5),
+            _resolve_quality(m, analysis)[0],
             _TIER_ORDER.index(m.tier),
             -(m.cost_per_1k_input + m.cost_per_1k_output),
         ),
@@ -1633,6 +1658,115 @@ def _quality_floor_for_complexity(score: float) -> float:
     return COMPLEXITY_QUALITY_FLOOR[-1][1]
 
 
+def _composed_min_tier(analysis: TaskAnalysis) -> tuple[str | None, list[str]]:
+    """
+    Centralized minimum-tier composition (cross-cutting requirement): the
+    ONLY place tier floors are computed. Combines three independent floor
+    sources — agent step_type (STEP_TYPE_FLOORS), high-stakes domain
+    (DOMAIN_TIER_FLOORS), and hard-complexity escalation
+    (HARD_COMPLEXITY_TIER_FLOORS) — into one effective minimum tier by taking
+    the STRONGEST (highest TIER_ORDER index) applicable floor. They compose,
+    they don't override each other: a "plan" step (mid) for a "medical"
+    domain (premium) at complexity 0.91 (premium) floors at premium either way,
+    but a "plan" step for an ordinary "code_generation" task at complexity
+    0.40 floors only at "mid" from the step type.
+
+    Called from _passes_hard_constraints()/_relaxed_filter() so every routing
+    priority (balanced, quality-first, cost-optimized, always-premium,
+    quality_max, cascade) and the budget walk-down inherit floor compliance
+    automatically — they all select from the already-floor-filtered candidate
+    set, so a floor can never be silently bypassed downstream.
+
+    Returns (floor_tier_or_None, reasons) where reasons lists every floor
+    that applied (not just the winning one), e.g.
+    ["agent_step:plan → mid", "domain:medical → premium",
+     "complexity:0.91 → premium"] — for RoutingExplanation.floors_applied.
+    """
+    reasons: list[str] = []
+    floor_tiers: list[str] = []
+
+    step_floor = STEP_TYPE_FLOORS.get(analysis.step_type)
+    if step_floor is not None:
+        reasons.append(f"agent_step:{analysis.step_type} → {step_floor}")
+        floor_tiers.append(step_floor)
+
+    domain_floor = DOMAIN_TIER_FLOORS.get(analysis.task_type)
+    if domain_floor is not None and domain_floor in _TIER_ORDER:
+        reasons.append(f"domain:{analysis.task_type} → {domain_floor}")
+        floor_tiers.append(domain_floor)
+
+    for threshold, tier in HARD_COMPLEXITY_TIER_FLOORS:
+        if analysis.complexity_score >= threshold and tier in _TIER_ORDER:
+            reasons.append(f"complexity:{analysis.complexity_score:.2f} → {tier}")
+            floor_tiers.append(tier)
+
+    if not floor_tiers:
+        return None, reasons
+    strongest = max(floor_tiers, key=_TIER_ORDER.index)
+    return strongest, reasons
+
+
+def _capability_satisfied(cap: str, model: ModelOption, analysis: TaskAnalysis) -> bool:
+    """
+    Item 4: "long_document" is a DERIVED capability rather than a catalog tag
+    — no models.json entry lists it in `capabilities`, since whether a model
+    can handle a long document is purely a function of its context window
+    versus this specific request's size, not a fixed trait of the model.
+
+    A model satisfies required_capabilities=["long_document"] when its
+    max_context_window can hold this request's total_context_needed PLUS a
+    configured safety margin (LONG_DOCUMENT_CONTEXT_SAFETY_MARGIN) — not
+    merely equal it. This makes the explicit capability request work for both
+    short prompts (trivially satisfied by almost every model) and genuinely
+    large ones (only satisfied by models with a large enough window), and
+    composes normally with every other hard constraint (sensitivity,
+    tools, response_format, tier floors) since it's evaluated inside the same
+    all()-based check. All other capability strings are matched exactly
+    against the catalog's `capabilities` list, unchanged.
+    """
+    if cap == "long_document":
+        return model.max_context_window >= (
+            analysis.total_context_needed + LONG_DOCUMENT_CONTEXT_SAFETY_MARGIN
+        )
+    return cap in model.capabilities
+
+
+def _resolve_quality(model: ModelOption, analysis: TaskAnalysis) -> tuple[float, str]:
+    """
+    Item 3: resolve the quality figure used to score `model` against this
+    request, with agent-step-specific data taking priority when available.
+
+    Priority: ModelOption.step_quality_ratings[step_type] (when step_type is
+    known, i.e. not None/"unknown") → ModelOption.quality_ratings[task_type]
+    → ModelOption.quality_ratings["general"] → 0.5. This is THE single
+    resolution path used everywhere quality is read for candidate selection:
+    Step 8 adaptive-quality base score (balanced/quality-first/
+    cost-optimized), _route_quality_max(), _route_cascade_initial() tier
+    escalation, and _pick_best() (always-premium/trivial-request/
+    daily-budget-forced-free) — so every routing priority and cascade
+    ordering uses the same resolved number consistently.
+
+    Returns (quality, source) where source is one of "step:<step_type>",
+    "task:<task_type>", or "fallback:general" — surfaced in
+    RoutingExplanation.scoring_breakdown[i]["quality_source"] for
+    explainability. Falling back to "general" (present on every catalog
+    model today) instead of a flat 0.5 gives per-model differentiation for
+    any task_type without fabricating new empirical numbers, and is a
+    strict no-op for every task_type that already has its own catalog entry.
+    """
+    step_type = analysis.step_type
+    if step_type and step_type != "unknown":
+        step_val = model.step_quality_ratings.get(step_type)
+        if step_val is not None:
+            return step_val, f"step:{step_type}"
+
+    task_val = model.quality_ratings.get(analysis.task_type)
+    if task_val is not None:
+        return task_val, f"task:{analysis.task_type}"
+
+    return model.quality_ratings.get("general", 0.5), "fallback:general"
+
+
 def _get_adjacent_tier_models(candidates: list[ModelOption], target_tier: str) -> list[ModelOption]:
     """
     When the target tier has no candidates, expand to the nearest populated tier.
@@ -1678,13 +1812,15 @@ def _passes_hard_constraints(
         return False
     if request.response_format and not model.supports_structured_output:
         return False
-    # Task 6: step_type quality floor — applied BEFORE scoring so a cheap
-    # model can never win a plan/tool_select/final_answer step purely on cost.
-    floor_tier = STEP_TYPE_FLOORS.get(analysis.step_type)
+    # Items 1/2/Task 6: composed minimum-tier floor (agent step_type + domain
+    # + hard-complexity) — applied BEFORE scoring so a cheap model can never
+    # win a plan/tool_select/final_answer step, a substantive legal/medical
+    # judgment call, or a very-hard-complexity request purely on cost.
+    floor_tier, _reasons = _composed_min_tier(analysis)
     if floor_tier is not None and _TIER_ORDER.index(model.tier) < _TIER_ORDER.index(floor_tier):
         return False
     return (
-        all(cap in model.capabilities for cap in request.required_capabilities)
+        all(_capability_satisfied(cap, model, analysis) for cap in request.required_capabilities)
         and model.max_context_window >= analysis.total_context_needed
         and model.is_available
         and analysis.sensitivity_level in model.allowed_sensitivity_levels
@@ -1703,16 +1839,18 @@ def _relaxed_filter(
     Relaxed filter: drop rate-limit and streaming requirements.
     Called when the strict filter yields zero candidates.
 
-    Task 6 NOTE: tools/response_format/step_type-floor constraints are NOT
-    relaxed here — they gate actual capability (can this model call tools at
-    all?), not a soft preference like streaming, so relaxing them would hand
-    a tool_select step to a model that will fumble the tool schema.
+    Task 6 / Items 1/2 NOTE: tools/response_format/composed-min-tier-floor
+    constraints are NOT relaxed here — they gate actual capability (can this
+    model call tools at all? is it qualified for this step/domain/
+    complexity?), not a soft preference like streaming, so relaxing them
+    would hand a tool_select step to a model that will fumble the tool
+    schema, or a substantive medical/legal judgment to an under-qualified one.
     """
-    floor_tier = STEP_TYPE_FLOORS.get(analysis.step_type)
+    floor_tier, _reasons = _composed_min_tier(analysis)
     return [
         m
         for m in models
-        if all(cap in m.capabilities for cap in request.required_capabilities)
+        if all(_capability_satisfied(cap, m, analysis) for cap in request.required_capabilities)
         and m.max_context_window >= analysis.total_context_needed
         and m.is_available
         and analysis.sensitivity_level in m.allowed_sensitivity_levels
@@ -1755,7 +1893,7 @@ def _pick_best(models: list[ModelOption], analysis: TaskAnalysis) -> ModelOption
     return max(
         models,
         key=lambda m: (
-            m.quality_ratings.get(analysis.task_type, 0.5),
+            _resolve_quality(m, analysis)[0],
             -(m.cost_per_1k_input + m.cost_per_1k_output),
         ),
     )

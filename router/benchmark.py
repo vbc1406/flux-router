@@ -31,6 +31,7 @@ from router.analytics import RoutingAnalytics
 from router.budget_tracker import BudgetTracker
 from router.cache import ResponseCache, is_cache_eligible
 from router.classifier import RequestClassifier
+from router.config import HARD_COMPLEXITY_TIER_FLOORS
 from router.context_compressor import ContextCompressor
 from router.model_registry import ModelRegistry
 from router.quality_scorer import QualityScorer
@@ -266,6 +267,77 @@ _ARCH_SCENARIOS = [
     "a real-time fraud detection system for a payment processor handling global transactions",
 ]
 
+# Item 1: substantive high-stakes medical judgment prompts — must classify
+# task_type="medical" and route to DOMAIN_TIER_FLOORS's premium floor. These
+# are deliberately phrased as first-person judgment requests (diagnose,
+# medication, emergency triage), not benign summarization/extraction of
+# supplied medical text — see classifier.py::_MEDICAL_SUBSTANTIVE_RE.
+_MEDICAL_JUDGMENT_PROMPTS = [
+    "I have chest pain and shortness of breath, am I having a heart attack?",
+    "What medication should I take for a migraine that won't go away after 3 days?",
+    "Are there drug interactions between ibuprofen and my blood thinner?",
+    "I've had a fever and cough for a week, can you diagnose what's wrong with me?",
+    "Should I go to the emergency room for a deep cut that won't stop bleeding?",
+    "What's the safe dosage of acetaminophen for a 6-year-old with a fever?",
+    "Is this mole serious enough that I should see a dermatologist urgently?",
+    "I think I overdosed on my prescription — what should I do right now?",
+    "What are the side effects of combining this antidepressant with alcohol?",
+    "Do I have symptoms that could mean appendicitis, and should I treat it as an emergency?",
+]
+
+# Item 1: substantive high-stakes legal judgment prompts — must classify
+# task_type="legal" and route to DOMAIN_TIER_FLOORS's premium floor. Phrased
+# as liability/compliance/enforceability judgment requests, not benign
+# summarization/extraction of supplied legal text — see
+# classifier.py::_LEGAL_SUBSTANTIVE_RE.
+_LEGAL_JUDGMENT_PROMPTS = [
+    "Is this non-compete clause enforceable in California given my new job offer?",
+    "Am I legally liable if a contractor gets injured on my property?",
+    "Does storing this customer data in a US data center violate GDPR compliance?",
+    "My vendor missed the delivery deadline — is this a breach of contract I can sue over?",
+    "What are my legal rights if my landlord enters my apartment without notice?",
+    "Should I sign this employment contract given the indemnification clause?",
+    "Does this marketing claim violate FTC regulatory compliance rules?",
+    "Can I be sued for using this trademarked logo in my app's branding?",
+    "What's my liability exposure if this software causes a customer's data loss?",
+    "Is the statute of limitations still open for me to file a lawsuit over this?",
+]
+
+# Item 2: hard-complexity escalation prompts that carry NO domain signal
+# (not legal/medical) but must still force a premium floor purely from
+# complexity_score >= HARD_COMPLEXITY_TIER_FLOORS's threshold — proving the
+# complexity floor is independent of the domain floor above.
+_HARD_COMPLEXITY_PROMPTS = [
+    (
+        "Design a linearizable distributed key-value store that tolerates network "
+        "partitions and Byzantine leader failures, supports online resharding with "
+        "zero downtime, and guarantees exactly-once delivery across cross-region "
+        "replicas — reason step by step through every consistency tradeoff, "
+        "including clock skew, split-brain scenarios, and quorum overlap during "
+        "concurrent membership changes."
+    ),
+    (
+        "Prove rigorously, step by step, that the halting problem is undecidable "
+        "using a diagonalization argument, addressing every edge case of the "
+        "reduction in full formal detail."
+    ),
+    (
+        "Design a wait-free, lock-free concurrent hash map implementation in Rust "
+        "that supports resizing without blocking readers, reasoning step by step "
+        "through every memory-ordering and ABA-problem edge case."
+    ),
+    (
+        "Derive, step by step, the time and space complexity of a persistent "
+        "red-black tree under concurrent structural sharing, addressing every "
+        "amortized-analysis edge case of the rebalancing operations."
+    ),
+    (
+        "Design a Byzantine fault-tolerant consensus protocol from first "
+        "principles that beats PBFT's message complexity, proving safety and "
+        "liveness step by step under an adversarial network scheduler."
+    ),
+]
+
 _THEOREMS = [
     "Prove that √2 is irrational using proof by contradiction. Show all algebraic steps.",
     (
@@ -336,7 +408,11 @@ def _req(
 def generate_test_dataset() -> List[dict]:
     """
     Return exactly 500 synthetic benchmark requests, seeded for reproducibility.
-    Distribution: 100 free + 100 cheap + 100 mid + 100 premium + 50 ultra + 50 edge.
+    Distribution: 100 free + 100 cheap + 105 mid (incl. 5 domain_medical_judgment
+    + 5 domain_legal_judgment) + 100 premium (incl. 5 hard_complexity_escalation)
+    + 45 ultra + 50 edge. The domain/hard-complexity categories are sized small
+    deliberately — they exist to catch a regression in Items 1/2's tier floors,
+    not to shift the overall tier distribution baseline.
     """
     random.seed(42)
     ds: List[dict] = []
@@ -429,9 +505,20 @@ def generate_test_dataset() -> List[dict]:
             _req("Explain {} in detail with practical examples".format(topic), "mid_explanation")
         )
 
-    # Analysis (15)
-    for topic in random.choices(_ANALYSIS_TOPICS, k=15):
+    # Analysis (10)
+    for topic in random.choices(_ANALYSIS_TOPICS, k=10):
         ds.append(_req("Analyze the pros and cons of {}".format(topic), "mid_analysis"))
+
+    # Items 1/2: substantive high-stakes medical judgment calls (5) — must
+    # route to the DOMAIN_TIER_FLOORS "medical" premium floor, not just land
+    # in "mid" by complexity alone.
+    for prompt in random.choices(_MEDICAL_JUDGMENT_PROMPTS, k=5):
+        ds.append(_req(prompt, "domain_medical_judgment"))
+
+    # Items 1/2: substantive high-stakes legal judgment calls (5) — must
+    # route to the DOMAIN_TIER_FLOORS "legal" premium floor.
+    for prompt in random.choices(_LEGAL_JUDGMENT_PROMPTS, k=5):
+        ds.append(_req(prompt, "domain_legal_judgment"))
 
     # ── PREMIUM tier targets (100) ────────────────────────────────────────────
 
@@ -455,14 +542,20 @@ def generate_test_dataset() -> List[dict]:
             )
         )
 
-    # Architecture (25)
-    for scenario in random.choices(_ARCH_SCENARIOS, k=25):
+    # Architecture (20)
+    for scenario in random.choices(_ARCH_SCENARIOS, k=20):
         ds.append(
             _req(
                 "Design a complete system architecture for {}".format(scenario),
                 "premium_architecture",
             )
         )
+
+    # Item 2: hard-complexity escalation on NON-domain requests (5) — proves
+    # HARD_COMPLEXITY_TIER_FLOORS forces premium purely from complexity_score,
+    # independent of the "legal"/"medical" domain floors above.
+    for prompt in random.choices(_HARD_COMPLEXITY_PROMPTS, k=5):
+        ds.append(_req(prompt, "hard_complexity_escalation", priority="high"))
 
     # ── ULTRA tier targets (50) ───────────────────────────────────────────────
 
@@ -483,8 +576,8 @@ def generate_test_dataset() -> List[dict]:
             )
         )
 
-    # Multi-step reasoning (15)
-    for prompt in random.choices(_REASONING_PROMPTS, k=15):
+    # Multi-step reasoning (10)
+    for prompt in random.choices(_REASONING_PROMPTS, k=10):
         ds.append(_req(prompt, "ultra_reasoning", priority="critical"))
 
     # ── EDGE CASES (50) ──────────────────────────────────────────────────────
@@ -942,12 +1035,23 @@ def print_section_c(bench: BenchmarkResults) -> None:
         "mid_comparison": {"analysis"},
         "mid_explanation": {"simple_qa", "reasoning", "analysis", "unknown"},
         "mid_analysis": {"analysis"},
+        "domain_medical_judgment": {"medical"},
+        "domain_legal_judgment": {"legal"},
         "premium_code": {"code_generation", "code_review"},
-        "premium_legal": {"analysis", "long_document", "unknown"},
+        # Item 1: a subset of these substantive legal/financial prompts now
+        # classify as "legal" (e.g. the indemnification-clause one matches
+        # _LEGAL_SUBSTANTIVE_RE) rather than falling into "analysis" — both
+        # are expected outcomes for this category's prompt mix.
+        "premium_legal": {"analysis", "legal", "long_document", "unknown"},
         "premium_debug": {"code_review"},
         "premium_architecture": {"analysis", "unknown"},
+        "hard_complexity_escalation": {"analysis", "reasoning", "code_generation"},
         "ultra_math": {"reasoning"},
-        "ultra_longdoc": {"long_document"},
+        # Item 1: the long contract prompt also matches _LEGAL_SUBSTANTIVE_RE
+        # ("liability clause", "indemnification") so it now classifies
+        # "legal" instead of "long_document" — both are correct; either way
+        # it still gets floored to premium (domain floor or complexity floor).
+        "ultra_longdoc": {"long_document", "legal"},
         "ultra_reasoning": {"reasoning"},
     }
 
@@ -1276,6 +1380,38 @@ def validate(bench: BenchmarkResults) -> Tuple[bool, List[str]]:
             "{} reasoning/long_document request(s) routed to free tier".format(len(critical_free))
         )
 
+    # 8. Item 1: every request classified "legal"/"medical" must be premium
+    # tier (DOMAIN_TIER_FLOORS) — catches a regression that silently drops
+    # the domain floor.
+    domain_below_floor = [
+        r
+        for r in bench.results
+        if r.task_type in ("legal", "medical")
+        and r.decision.chosen_model is not None
+        and r.decision.chosen_model.tier != "premium"
+    ]
+    if domain_below_floor:
+        failures.append(
+            "{} legal/medical request(s) routed below the premium domain floor".format(
+                len(domain_below_floor)
+            )
+        )
+
+    # 9. Item 2: every request with complexity >= the hard-complexity
+    # threshold must be premium tier (HARD_COMPLEXITY_TIER_FLOORS).
+    hard_complexity_below_floor = [
+        r
+        for r in bench.results
+        if r.complexity >= HARD_COMPLEXITY_TIER_FLOORS[0][0]
+        and r.decision.chosen_model is not None
+        and r.decision.chosen_model.tier != "premium"
+    ]
+    if hard_complexity_below_floor:
+        failures.append(
+            "{} request(s) at/above the hard-complexity threshold routed below "
+            "premium".format(len(hard_complexity_below_floor))
+        )
+
     return len(failures) == 0, failures
 
 
@@ -1388,7 +1524,7 @@ async def main(args: Optional[argparse.Namespace] = None) -> None:
     if passed:
         console.print(
             Panel(
-                "[bold bright_green]✓  PASS — All {} validation checks passed[/]".format(7),
+                "[bold bright_green]✓  PASS — All {} validation checks passed[/]".format(9),
                 border_style="bright_green",
                 expand=False,
             )

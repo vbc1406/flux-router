@@ -54,7 +54,10 @@ routing hold up on agent *steps*, not just one-shot Q&A?" Each sample carries
 an explicit `step_type` that's threaded into the `RoutingRequest`
 (`runner.py`), so routing for these cases is step-type-floor-aware
 (`config.STEP_TYPE_FLOORS`) exactly like a real agent loop passing
-`step_type=`, not just task-type-classified like every other dataset here.
+`step_type=`, not just task-type-classified like every other dataset here. It
+includes a `medical` (`final_answer`) and a `legal` (`plan`) case exercising
+the high-stakes domain floor (`config.DOMAIN_TIER_FLOORS`) composed with an
+agent-step floor in the same request.
 
 ## Modes
 
@@ -130,6 +133,15 @@ followed by a mean-quality/cost rollup per question type and a headline of flux'
 cost savings + quality retention against each provider default. The full
 per-question payload (rows + rollup) is also written into the JSON snapshot, and
 appended to the `--md` markdown table.
+
+For samples that carry a `step_type` (currently only the Agentic dataset), a
+second rollup — **mean quality / cost by agent step type** — prints
+immediately below the question-type one, and the payload's `by_step_type` key
+carries the same data. This is where `ModelOption.step_quality_ratings`
+(when populated) would show up as a quality delta on a specific step, as
+opposed to the question-type rollup which reflects the flat task-type
+rating. Samples with no step concept (`step_type=""`, i.e. everything outside
+Agentic) are excluded rather than lumped under `"unknown"`.
 
 > Quality here is the same **graded** value the aggregate table uses
 > (`GradedResult.quality`) — a *simulated* grade in mock mode, a *measured*

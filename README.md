@@ -203,6 +203,77 @@ resp = requests.post(
 )
 ```
 
+Agent steps now also carry an optional **step-specific quality signal**:
+`ModelOption.step_quality_ratings` (keyed by the same step-type strings above)
+lets a catalog entry document that it's specifically strong or weak at, say,
+`tool_select` — independent of its general per-task-type `quality_ratings`.
+When a request's `step_type` is known and the chosen model has an entry for
+it, routing scores on that figure instead of the flat task-type rating,
+falling back to `quality_ratings[task_type]` → `quality_ratings["general"]` →
+`0.5` when absent (`routing_engine._resolve_quality()`). No catalog entry
+ships with fabricated step ratings today — the field is opt-in, and every
+model routes on its existing task-type rating until real step-level data is
+added.
+
+---
+
+## High-stakes domain routing and hard-complexity escalation
+
+Two more mandatory **minimum-tier floors** compose with the step-type floor
+above, all enforced before cost scoring ever runs (`_passes_hard_constraints`
+in Step 4 of the routing pipeline — see `routing_engine._composed_min_tier()`
+for how they combine):
+
+- **Legal / medical judgment calls.** A prompt asking Flux to render a
+  substantive legal or medical judgment — diagnosis, treatment, medication,
+  emergency triage, contractual liability, regulatory compliance, or advice
+  affecting someone's legal rights — classifies as `task_type="legal"` /
+  `"medical"` (`classifier.py`'s `_LEGAL_SUBSTANTIVE_RE` /
+  `_MEDICAL_SUBSTANTIVE_RE`) and is floored to `DOMAIN_TIER_FLOORS`'s tier
+  (`premium` by default; override with `FLUX_LEGAL_TIER_FLOOR` /
+  `FLUX_MEDICAL_TIER_FLOOR`). A bare mention of "doctor," "contract," or
+  "court" does **not** trigger this — detection requires a judgment-seeking
+  phrase, so pure transformations of supplied text ("summarize this medical
+  report," "extract the parties from this contract") keep routing on their
+  normal, cheaper task_type. This is independent of and additional to
+  sensitivity/confidentiality filtering (`allowed_sensitivity_levels`) — the
+  domain floor controls *capability*, sensitivity controls *which providers
+  may see the data*; both apply simultaneously.
+- **Hard-complexity escalation.** A request whose `complexity_score` clears
+  `HARD_COMPLEXITY_TIER_FLOORS`'s threshold (`0.85` by default, override with
+  `FLUX_HARD_COMPLEXITY_PREMIUM_THRESHOLD`) is floored to `premium`
+  regardless of task_type — catching very hard coding/proof requests that a
+  static per-task-type quality rating alone might still leave mid-tier.
+
+All floors compose by taking the **strongest** applicable one (highest tier),
+never by overriding each other, and are always enforced ahead of
+`always-premium`/`quality_max`/`cascade`/explicit-overrides/budget
+walk-down — every routing priority selects from the same already-floor-
+filtered candidate set, so a floor can't be silently bypassed downstream. If
+a mandatory floor leaves zero eligible models (e.g. after budget/plan/context
+filtering), routing returns a `chosen_model=None` decision with
+`routing_rule_matched="no_candidates"` and a `reasoning` string naming the
+floor that caused it — never an under-qualified selection. Pass
+`verbose=True` to see exactly which floors applied on a given decision via
+`RoutingDecision.explanation.floors_applied` (e.g.
+`["agent_step:plan → mid", "domain:medical → premium",
+"complexity:0.91 → premium"]`).
+
+### The `long_document` capability
+
+`required_capabilities=["long_document"]` is a **derived** capability, not a
+catalog tag — no `models.json` entry lists it explicitly. A model satisfies
+it when its `max_context_window` covers the request's calculated context
+need plus a safety margin (`LONG_DOCUMENT_CONTEXT_SAFETY_MARGIN`, 2000 tokens
+by default, override with `FLUX_LONG_DOCUMENT_SAFETY_MARGIN`) — not merely
+equal it. This works for both short prompts (trivially satisfied by nearly
+every model) and genuinely large ones (only satisfied by models with enough
+headroom), and composes normally with every other hard constraint. A request
+whose input exceeds every eligible model's context still returns a clean
+`no_candidates` decision. Automatic long-document detection — a prompt over
+~2000 words classifying as `task_type="long_document"` — is unrelated and
+unaffected; that's a `task_type`, not a capability.
+
 ---
 
 ## Tool calling

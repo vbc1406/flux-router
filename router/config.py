@@ -49,6 +49,8 @@ COMPLEXITY_BASE_SCORES: dict[str, float] = {
     "function_calling": 0.40,  # structured tool use — mid tier
     "vision": 0.50,  # image understanding — mid tier
     "long_document": 0.50,  # large document processing — mid tier
+    "legal": 0.62,  # substantive legal judgment/liability/compliance — premium tier
+    "medical": 0.62,  # substantive medical diagnosis/treatment — premium tier
     "unknown": 0.40,  # fallback when classifier is uncertain — mid tier
     "general": 0.40,  # broad catch-all — mid tier
 }
@@ -133,6 +135,69 @@ COMPLEXITY_QUALITY_FLOOR: list[tuple[float, float]] = [
     (0.60, 0.75),  # mid:        require generally capable models
     (1.01, 0.85),  # premium:    require frontier-grade quality
 ]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MINIMUM-TIER FLOORS (composed by routing_engine._composed_min_tier)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Three independent sources can each impose a hard minimum TIER (not quality
+# value) on the candidate set, enforced in Step 4 BEFORE scoring so a cheap
+# model can never win purely on cost: STEP_TYPE_FLOORS (above/existing),
+# DOMAIN_TIER_FLOORS, and HARD_COMPLEXITY_TIER_FLOORS below. All three are
+# combined into a single effective floor by routing_engine._composed_min_tier(),
+# which takes the STRONGEST (highest TIER_ORDER index) applicable floor — they
+# compose, they don't override each other. Sensitivity/confidentiality
+# filtering (ModelOption.allowed_sensitivity_levels) is a completely separate,
+# independently-enforced constraint — a domain or complexity floor never
+# widens or narrows which providers are allowed to see the data.
+
+# Minimum tier for a request the classifier tagged as a substantive legal or
+# medical judgment call (task_type == "legal" / "medical" — see
+# classifier.py::_MEDICAL_SUBSTANTIVE_RE / _LEGAL_SUBSTANTIVE_RE). This is
+# deliberately a TIER floor, not just a complexity bump: sensitivity filtering
+# alone controls which providers may see the data but says nothing about
+# whether the model is capable enough to reason about diagnosis, treatment,
+# contractual liability, or regulatory compliance correctly.
+# How to tune: lower to "mid" if premium routing for these domains is too
+# expensive for your use case; raising is a no-op past "premium" (no "ultra").
+# What breaks if changed: cost profile for all legal/medical-classified
+# requests shifts; lowering risks routing high-stakes judgment calls to
+# under-qualified models.
+DOMAIN_TIER_FLOORS: dict[str, str] = {
+    "legal": os.environ.get("FLUX_LEGAL_TIER_FLOOR", "premium"),
+    "medical": os.environ.get("FLUX_MEDICAL_TIER_FLOOR", "premium"),
+}
+
+# Minimum tier forced by complexity score alone, independent of task_type.
+# Each entry is (min_complexity, tier): a request whose complexity_score is
+# >= min_complexity is floored at that tier. Catches very hard coding/proof
+# requests that a static per-task-type quality rating alone might still let
+# land mid-tier.
+# Note: the "ultra" tier was intentionally removed from TIER_ORDER (Change 8)
+# and no catalog model carries it — a >=0.95 -> "ultra" escalation is NOT
+# implemented here, since there is no eligible ultra-tier model to escalate
+# to. If an ultra tier is ever reintroduced with real catalog entries, add a
+# second (0.95, "ultra") entry to this list.
+# How to tune: raise the threshold to escalate fewer requests; lower it to
+# escalate more aggressively.
+# What breaks if changed: shifts the premium-tier share of the benchmark's
+# tier distribution for the hardest requests.
+HARD_COMPLEXITY_TIER_FLOORS: list[tuple[float, str]] = [
+    (float(os.environ.get("FLUX_HARD_COMPLEXITY_PREMIUM_THRESHOLD", "0.85")), "premium"),
+]
+
+# Safety margin (tokens) added on top of a request's calculated context need
+# when evaluating the derived "long_document" capability (see
+# routing_engine._capability_satisfied). A model "satisfies" an explicit
+# required_capabilities=["long_document"] request only when its
+# max_context_window can hold total_context_needed PLUS this margin — not
+# merely equal it — so a request landing exactly at a model's limit doesn't
+# get treated as safely long-document-capable.
+# How to tune: raise for more headroom against token-estimation error; lower
+# to admit more models for borderline-sized documents.
+LONG_DOCUMENT_CONTEXT_SAFETY_MARGIN: int = int(
+    os.environ.get("FLUX_LONG_DOCUMENT_SAFETY_MARGIN", "2000")
+)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # BUDGET LIMITS (USD)

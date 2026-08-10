@@ -97,6 +97,13 @@ class GradedResult:
     question_type: str = ""
     complexity: float = 0.0
     quality_rating: float = 0.0
+    # Item 3: resolved agent step_type ("plan"/"tool_select"/.../"unknown")
+    # for samples that carry one (currently only the "agentic" dataset via
+    # sample.metadata["step_type"]) — "" for every non-agentic sample, not
+    # "unknown", so report.py can tell "no step concept applies here" apart
+    # from "step_type resolved to unknown". Used for the "quality by agent
+    # step type" eval rollup — see report.py::_print_by_step_type().
+    step_type: str = ""
 
 
 @dataclass

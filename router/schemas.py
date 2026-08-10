@@ -79,6 +79,19 @@ class RoutingExplanation:
     candidates_considered: int = 0
     candidates_filtered: int = 0
     filter_reasons: dict[str, str] = field(default_factory=dict)
+    # Human-readable minimum-tier floors that applied to this decision, e.g.
+    # "agent_step:plan → mid", "domain:medical → premium",
+    # "complexity:0.91 → premium". Populated by
+    # routing_engine._composed_min_tier() in Step 4; empty when no floor
+    # applied. Each entry is a floor that was IN EFFECT, not just the winning
+    # (strongest) one — see tier_selected for the model's actual tier.
+    floors_applied: list[str] = field(default_factory=list)
+    # scoring_breakdown entries carry an optional "quality_source" key
+    # describing where each candidate's quality figure came from:
+    # "step:<step_type>" (ModelOption.step_quality_ratings hit),
+    # "task:<task_type>" (ModelOption.quality_ratings[task_type]), or
+    # "fallback:general" (ModelOption.quality_ratings["general"] / 0.5
+    # default). See routing_engine._resolve_quality().
     scoring_breakdown: list[dict] = field(default_factory=list)
     winner: str = ""
     runner_up: str = ""
@@ -97,6 +110,8 @@ class RoutingExplanation:
             f"Candidates: {self.candidates_considered} considered, "
             f"{self.candidates_filtered} filtered",
         ]
+        if self.floors_applied:
+            lines.append(f"Floors applied: {', '.join(self.floors_applied)}")
         if self.filter_reasons:
             reason_summary: dict[str, int] = {}
             for reason in self.filter_reasons.values():
@@ -389,6 +404,21 @@ class ModelOption(BaseModel):
     capabilities: list[str]
     supports_streaming: bool = True
     quality_ratings: dict[str, float] = Field(default_factory=dict)
+
+    # ── Item 3: Agent-step-specific quality data ─────────────────────────────
+    # Optional, keyed by agent step_type ("plan", "tool_select",
+    # "tool_result_summarize", "reflect", "extract", "format",
+    # "final_answer"). When a request's resolved step_type is known and this
+    # model has a rating for it, routing_engine._resolve_quality() uses it in
+    # place of the flat per-task-type quality_ratings figure for scoring
+    # (balanced/quality-first/cost-optimized/quality_max/cascade ordering all
+    # go through the same resolver). Absent by default on every catalog
+    # entry — when empty or missing a key, resolution falls back to
+    # quality_ratings[task_type], then quality_ratings["general"], then 0.5.
+    # Populate only with real, documented empirical values; an absent key is
+    # the honest default, not an error.
+    step_quality_ratings: dict[str, float] = Field(default_factory=dict)
+
     avg_latency_ms: int = 1000
     rate_limit_rpm: int = 100
     current_load_rpm: int = 0
