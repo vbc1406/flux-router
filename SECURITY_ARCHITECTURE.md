@@ -8,9 +8,13 @@ If you're evaluating Flux for your stack and want to verify our claims, see the 
 
 ## TL;DR
 
-- **Your API keys never leave your infrastructure.** They live in your environment variables and pass directly to provider APIs.
-- **Your prompts and responses never leave your infrastructure.** Flux makes routing decisions on metadata only.
-- **No telemetry by default.** Flux runs entirely locally unless you explicitly configure it otherwise.
+- **Flux control-plane data stays in your infrastructure by default.** Routing
+  policy, budgets, attribution, and operational telemetry are processed locally.
+- **Model traffic goes only to providers you configure.** Provider credentials,
+  prompts, and conversation context are sent directly from Flux to the selected
+  provider over HTTPS; responses return directly to Flux.
+- **No Flux-hosted telemetry by default.** Flux does not send routing telemetry
+  to a Flux service unless you explicitly configure an external destination.
 
 ---
 
@@ -18,10 +22,10 @@ If you're evaluating Flux for your stack and want to verify our claims, see the 
 
 | Data Type | Where It Lives | Leaves Your Infrastructure? |
 |-----------|---------------|----------------------------|
-| Provider API keys (OpenAI, Anthropic, etc.) | Your environment, in memory only | Never |
-| User prompts | Your application memory | Never |
-| Model responses | Your application memory | Never |
-| Conversation history | Your application memory | Never |
+| Provider API keys (OpenAI, Anthropic, etc.) | Your environment and request headers in memory | Sent only to the selected configured provider |
+| User prompts | Your application and Flux process memory | Sent to the selected configured provider |
+| Model responses | Selected provider, then Flux/application memory | Returned from the selected configured provider |
+| Conversation history | Your application and Flux process memory | Sent when included in the selected provider request |
 | Customer/user IDs | Your application memory | Never (default) |
 | Routing decisions | Local logs | Never (default) |
 | Cost estimates | Local logs | Never (default) |

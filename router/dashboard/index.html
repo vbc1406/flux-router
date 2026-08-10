@@ -4,9 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Flux — Router Console</title>
-<!-- No external requests of any kind: no CDN, no webfont, no analytics. The
-     whole premise of a self-hosted router is that nothing leaves the machine,
-     and that has to be true of its dashboard too. Everything is local. -->
+<!-- The dashboard itself loads no CDN assets, webfonts, or analytics. Provider
+     requests made by Flux are separate from this local operator UI. -->
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -16,7 +15,7 @@
     <span class="mark" aria-hidden="true"></span>
     <div>
       <h1>Flux</h1>
-      <p class="tagline">Local router console — your keys and prompts never leave this machine</p>
+      <p class="tagline">Local router console — routing policy and telemetry stay under your control</p>
     </div>
   </div>
   <div class="controls">
