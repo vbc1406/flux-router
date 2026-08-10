@@ -38,8 +38,9 @@ company would *normally* call per provider (ChatGPT / Claude / Gemini defaults).
 | `default_anthropic` (claude-sonnet-4-6) | **89.3%** | **98.8%** |
 | `default_google` (gemini-2.5-pro) | **82.2%** | **101.7%** |
 
-flux delivers **equal-or-better rated quality at roughly ⅕–⅙ the cost** of calling
-any single provider's default flagship.
+In this simulated snapshot, Flux retained **98.8–106.6% of catalog-rated
+quality** while costing **10.7–17.8% of the compared provider defaults**. These
+are registry-derived estimates, not live answer-quality measurements.
 
 ### Overall totals
 
