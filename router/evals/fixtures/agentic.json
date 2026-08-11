@@ -72,5 +72,21 @@
     "step_type": "plan",
     "prompt": "You are an agent helping a company assess a new vendor contract. Before taking any action, write a short numbered plan for evaluating whether this indemnification clause exposes the company to excessive liability risk.",
     "task_type": "legal"
+  },
+  {
+    "step_type": "budget_degradation",
+    "prompt": "(deterministic system check — no model call: verifies router.run_budget.RunBudget.check_before_dispatch() returns 'degraded' once a run has spent between RUN_DEGRADE_THRESHOLD and RUN_WARN_THRESHOLD of its cost ceiling.)",
+    "task_type": "budget",
+    "max_cost_usd": 1.0,
+    "pre_spent_cost_usd": 0.75,
+    "expected_result": "degraded"
+  },
+  {
+    "step_type": "budget_stop",
+    "prompt": "(deterministic system check — no model call: verifies router.run_budget.RunBudget.check_before_dispatch() raises RunBudgetExceeded once a run has met/exceeded its cost ceiling, so dispatch is actually refused.)",
+    "task_type": "budget",
+    "max_cost_usd": 1.0,
+    "pre_spent_cost_usd": 1.0,
+    "expected_result": "exceeded"
   }
 ]

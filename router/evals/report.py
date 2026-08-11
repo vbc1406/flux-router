@@ -136,6 +136,117 @@ def _print_per_dataset(reports: dict[str, StrategyReport]) -> None:
     console.print(tbl)
 
 
+def _percentile(values: list[float], pct: float) -> float | None:
+    if not values:
+        return None
+    s = sorted(values)
+    idx = min(len(s) - 1, max(0, int(round(pct / 100 * (len(s) - 1)))))
+    return s[idx]
+
+
+def quality_metrics(out: RunOutput) -> dict[str, Any]:
+    """Task 3 deliverables not covered by the per-strategy StrategyReport:
+    tool-call success rate, structured-output validity rate, fallback
+    success rate, high-stakes routing recall, and p50/p95 latency — all
+    computed for strategy="flux" (the system under test), plus a list of
+    launch blockers derived from them.
+    """
+    flux_rows = [r for r in out.results if r.strategy == "flux"]
+
+    def _rate(vals: list[bool]) -> float | None:
+        return round(sum(1 for v in vals if v) / len(vals), 4) if vals else None
+
+    tool_call_vals = [r.tool_call_valid for r in flux_rows if r.tool_call_valid is not None]
+    structured_vals = [
+        r.structured_output_valid for r in flux_rows if r.structured_output_valid is not None
+    ]
+    safety_vals = [r.safety_escalated for r in flux_rows if r.safety_escalated is not None]
+    budget_rows = [r for r in flux_rows if r.step_type in ("budget_degradation", "budget_stop")]
+    budget_ok = _rate([bool(r.correct) for r in budget_rows])
+
+    e2e_latencies = [float(r.latency_ms) for r in flux_rows if r.latency_ms is not None]
+    routing_latencies = [
+        r.routing_latency_ms for r in flux_rows if r.routing_latency_ms is not None
+    ]
+
+    tool_call_rate = _rate([bool(v) for v in tool_call_vals])
+    structured_rate = _rate([bool(v) for v in structured_vals])
+    high_stakes_recall = _rate([bool(v) for v in safety_vals])
+    fallback_ok = out.system_checks.get("fallback_recovery_ok")
+
+    blockers: list[str] = []
+    if tool_call_rate is not None and tool_call_rate < 1.0:
+        blockers.append(f"tool-call success rate {tool_call_rate:.0%} < 100%")
+    if structured_rate is not None and structured_rate < 1.0:
+        blockers.append(f"structured-output validity rate {structured_rate:.0%} < 100%")
+    if high_stakes_recall is not None and high_stakes_recall < 1.0:
+        blockers.append(
+            f"high-stakes routing recall {high_stakes_recall:.0%} < 100% — a high-stakes "
+            "legal/medical sample was NOT floored to the required tier"
+        )
+    if budget_ok is not None and budget_ok < 1.0:
+        blockers.append("RunBudget ladder system check failed (budget_degradation/budget_stop)")
+    if fallback_ok is False:
+        blockers.append("fallback recovery system check failed")
+
+    return {
+        "tool_call_success_rate": tool_call_rate,
+        "structured_output_validity_rate": structured_rate,
+        "high_stakes_routing_recall": high_stakes_recall,
+        "budget_ladder_pass_rate": budget_ok,
+        "fallback_recovery_ok": fallback_ok,
+        "routing_latency_ms_p50": _percentile(routing_latencies, 50),
+        "routing_latency_ms_p95": _percentile(routing_latencies, 95),
+        "e2e_latency_ms_p50": _percentile(e2e_latencies, 50),
+        "e2e_latency_ms_p95": _percentile(e2e_latencies, 95),
+        "launch_blockers": blockers,
+    }
+
+
+def _print_quality_metrics(metrics: dict[str, Any]) -> None:
+    console.rule("[bold cyan]Tool calls · structured output · safety · latency (flux)[/bold cyan]")
+    tbl = Table(box=box.SIMPLE)
+    tbl.add_column("Metric", style="bold")
+    tbl.add_column("Value", justify="right")
+
+    def fmt_pct(v: float | None) -> str:
+        return "—" if v is None else f"{v:.0%}"
+
+    def fmt_ms(v: float | None) -> str:
+        return "—" if v is None else f"{v:.0f}ms"
+
+    tbl.add_row("Tool-call success rate", fmt_pct(metrics["tool_call_success_rate"]))
+    tbl.add_row(
+        "Structured-output validity rate", fmt_pct(metrics["structured_output_validity_rate"])
+    )
+    tbl.add_row("High-stakes routing recall", fmt_pct(metrics["high_stakes_routing_recall"]))
+    tbl.add_row("Budget-ladder system check", fmt_pct(metrics["budget_ladder_pass_rate"]))
+    fb = metrics["fallback_recovery_ok"]
+    tbl.add_row(
+        "Fallback-recovery system check", "—" if fb is None else ("pass" if fb else "FAIL")
+    )
+    routing_p50 = fmt_ms(metrics["routing_latency_ms_p50"])
+    routing_p95 = fmt_ms(metrics["routing_latency_ms_p95"])
+    tbl.add_row("Routing latency p50 / p95", f"{routing_p50} / {routing_p95}")
+    e2e_p50 = fmt_ms(metrics["e2e_latency_ms_p50"])
+    e2e_p95 = fmt_ms(metrics["e2e_latency_ms_p95"])
+    tbl.add_row("End-to-end latency p50 / p95", f"{e2e_p50} / {e2e_p95}")
+    console.print(tbl)
+
+    if metrics["launch_blockers"]:
+        console.print()
+        console.print(
+            Panel(
+                "\n".join(f"- {b}" for b in metrics["launch_blockers"]),
+                title="[bold red]Launch blockers[/bold red]",
+                border_style="red",
+            )
+        )
+    else:
+        console.print()
+        console.print("[green]No launch blockers from this eval run.[/green]")
+
+
 def _print_headline(reports: dict[str, StrategyReport], simulated: bool) -> None:
     flux = reports.get("flux")
     premium = reports.get("premium")
@@ -168,6 +279,8 @@ def print_report(out: RunOutput, reports: dict[str, StrategyReport]) -> None:
     _print_overview(reports)
     console.print()
     _print_per_dataset(reports)
+    console.print()
+    _print_quality_metrics(quality_metrics(out))
     console.print()
     _print_headline(reports, simulated)
     console.print()
@@ -289,10 +402,35 @@ def per_question_payload(out: RunOutput) -> dict[str, Any]:
         }
         for step, by_strat in by_step_groups.items()
     }
+
+    # Task 3: results by provider and by model tier, flux strategy only —
+    # these two dimensions are per-decision (which model got picked), not
+    # per-baseline, so mixing in premium/cheapest/default_* would just show
+    # each baseline's fixed pin rather than anything about flux's routing.
+    flux_rows = [r for r in out.results if r.strategy == "flux"]
+    by_provider_groups: dict[str, list[GradedResult]] = defaultdict(list)
+    by_tier_groups: dict[str, list[GradedResult]] = defaultdict(list)
+    for r in flux_rows:
+        if r.provider:
+            by_provider_groups[r.provider].append(r)
+        if r.tier:
+            by_tier_groups[r.tier].append(r)
+    by_provider = {
+        p: {"n": len(rs), "quality": round(mean(x.quality for x in rs), 4),
+            "cost": round(sum(x.cost for x in rs), 6)}
+        for p, rs in by_provider_groups.items()
+    }
+    by_tier = {
+        t: {"n": len(rs), "quality": round(mean(x.quality for x in rs), 4),
+            "cost": round(sum(x.cost for x in rs), 6)}
+        for t, rs in by_tier_groups.items()
+    }
     return {
         "mode": mode,
         "strategies": strategies,
         "questions": questions,
+        "by_provider": by_provider,
+        "by_tier": by_tier,
         "by_question_type": by_type,
         "by_step_type": by_step_type,
     }
@@ -487,6 +625,7 @@ def _snapshot(
         "n_samples": out.n_samples,
         "n_skipped": out.n_skipped,
         "strategies": {s: asdict(rep) for s, rep in reports.items()},
+        "quality_metrics": quality_metrics(out),
     }
     if per_question is not None:
         snap["per_question"] = per_question

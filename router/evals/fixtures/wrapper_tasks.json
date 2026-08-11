@@ -1,0 +1,154 @@
+[
+  {
+    "id": "summarization-1",
+    "category": "summarization",
+    "prompt": "Summarize the following release notes in two sentences:\n\nVersion 4.2 adds streaming responses, fixes a memory leak in the connection pool under sustained load, and deprecates the legacy /v1/complete endpoint in favor of /v1/chat/completions. The deprecated endpoint will be removed in version 5.0."
+  },
+  {
+    "id": "summarization-2",
+    "category": "summarization",
+    "prompt": "Summarize this customer support thread in one sentence for a status dashboard:\n\nCustomer: My export has been stuck at 'processing' for 6 hours.\nAgent: I see the job failed silently due to a timeout on a large table. I've requeued it with an extended timeout and it should finish within the hour.\nCustomer: Thanks, it just finished."
+  },
+  {
+    "id": "extraction-1",
+    "category": "extraction",
+    "prompt": "Extract the invoice fields as a single JSON object with keys \"invoice_number\", \"total_usd\", and \"due_date\" (YYYY-MM-DD). Respond with ONLY the JSON object, no other text.\n\nInvoice #INV-88213 — Total due: $1,204.50 — Payment due by March 3, 2026.",
+    "required_keys": ["invoice_number", "total_usd", "due_date"]
+  },
+  {
+    "id": "extraction-2",
+    "category": "extraction",
+    "prompt": "Extract the meeting details as a single JSON object with keys \"title\", \"date\", and \"attendees\" (a list of names). Respond with ONLY the JSON object, no other text.\n\nSubject: Q3 Planning Sync\nDate: 2026-09-14\nAttendees: Priya Shah, Marcus Lee, Devon Ortiz",
+    "required_keys": ["title", "date", "attendees"]
+  },
+  {
+    "id": "translation-1",
+    "category": "translation",
+    "prompt": "Translate the following into French:\n\n\"Your subscription will renew automatically on the 5th of next month. You can cancel anytime from your account settings.\""
+  },
+  {
+    "id": "translation-2",
+    "category": "translation",
+    "prompt": "Translate the following into Japanese:\n\n\"Thank you for reporting this bug. We've identified the root cause and a fix will ship in the next release.\""
+  },
+  {
+    "id": "basic-coding-1",
+    "category": "basic_coding",
+    "prompt": "Write a Python function `is_palindrome(s: str) -> bool` that returns True if the input string reads the same forwards and backwards, ignoring case and non-alphanumeric characters."
+  },
+  {
+    "id": "basic-coding-2",
+    "category": "basic_coding",
+    "prompt": "Write a Python function `flatten(nested: list) -> list` that flattens an arbitrarily nested list of integers into a single flat list, preserving order."
+  },
+  {
+    "id": "distributed-coding-1",
+    "category": "distributed_systems_coding",
+    "prompt": "Design and implement a Python class `DistributedRateLimiter` that enforces a shared rate limit (N requests per window) across multiple worker processes using Redis as the coordination backend. It must be safe under concurrent access from many workers, must not double-count under network retries, and should degrade gracefully (fail open with a warning, not crash) if Redis is briefly unreachable. Provide the implementation and explain the concurrency-safety argument for your approach (e.g. how you avoid race conditions between the check and the increment)."
+  },
+  {
+    "id": "distributed-coding-2",
+    "category": "distributed_systems_coding",
+    "prompt": "You are designing a leader-election protocol for a 5-node cluster using a distributed lock service (e.g. etcd or Zookeeper semantics: compare-and-swap on a versioned key, with lease/TTL expiry). Write the pseudocode for acquire_leadership() and the lease-renewal heartbeat loop, and explain how your design avoids a split-brain scenario where two nodes both believe they are leader after a network partition heals."
+  },
+  {
+    "id": "math-proof-1",
+    "category": "math_proof",
+    "prompt": "Prove that the square root of 2 is irrational. Give a complete, rigorous proof by contradiction."
+  },
+  {
+    "id": "math-proof-2",
+    "category": "math_proof",
+    "prompt": "Prove by induction that for all positive integers n, 1 + 2 + ... + n = n(n+1)/2. Show the base case and the inductive step explicitly."
+  },
+  {
+    "id": "long-document-1",
+    "category": "long_document",
+    "required_capabilities": ["long_document"],
+    "prompt": "Below is a long engineering design document (repeated sections simulate a real multi-thousand-word doc for context-window testing). Read it and produce a 5-bullet executive summary of the key architectural decisions and open risks.\n\n### Design Document: Multi-Region Failover for the Billing Service\n\n{REPEATED_SECTION}"
+  },
+  {
+    "id": "long-document-2",
+    "category": "long_document",
+    "required_capabilities": ["long_document"],
+    "prompt": "Below is a long compliance policy document (repeated sections simulate a real multi-thousand-word doc for context-window testing). Read it and list every explicit data-retention deadline it specifies.\n\n### Data Handling Policy v3\n\n{REPEATED_SECTION}"
+  },
+  {
+    "id": "tool-calling-1",
+    "category": "tool_calling",
+    "prompt": "You have these tools available:\n- search_flights(origin, destination, date): search for flights\n- book_hotel(city, checkin, checkout): book a hotel\n- get_exchange_rate(from_currency, to_currency): get a currency exchange rate\n\nThe user asked: \"What flights are there from Chicago to Denver on March 3rd?\"\n\nRespond with ONLY the name of the one tool you would call to answer this — nothing else.",
+    "tools": [
+      {"type": "function", "function": {"name": "search_flights", "description": "Search for flights", "parameters": {"type": "object", "properties": {"origin": {"type": "string"}, "destination": {"type": "string"}, "date": {"type": "string"}}, "required": ["origin", "destination", "date"]}}},
+      {"type": "function", "function": {"name": "book_hotel", "description": "Book a hotel", "parameters": {"type": "object", "properties": {"city": {"type": "string"}, "checkin": {"type": "string"}, "checkout": {"type": "string"}}, "required": ["city", "checkin", "checkout"]}}},
+      {"type": "function", "function": {"name": "get_exchange_rate", "description": "Get a currency exchange rate", "parameters": {"type": "object", "properties": {"from_currency": {"type": "string"}, "to_currency": {"type": "string"}}, "required": ["from_currency", "to_currency"]}}}
+    ],
+    "expected_tool": "search_flights"
+  },
+  {
+    "id": "tool-calling-2",
+    "category": "tool_calling",
+    "prompt": "You have these tools available:\n- create_ticket(title, priority): file a support ticket\n- lookup_order(order_id): look up an order's status\n- refund_order(order_id, amount): issue a refund\n\nThe user asked: \"Can you check on the status of order #48213?\"\n\nRespond with ONLY the name of the one tool you would call to answer this — nothing else.",
+    "tools": [
+      {"type": "function", "function": {"name": "create_ticket", "description": "File a support ticket", "parameters": {"type": "object", "properties": {"title": {"type": "string"}, "priority": {"type": "string"}}, "required": ["title", "priority"]}}},
+      {"type": "function", "function": {"name": "lookup_order", "description": "Look up an order's status", "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}}, "required": ["order_id"]}}},
+      {"type": "function", "function": {"name": "refund_order", "description": "Issue a refund", "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}, "amount": {"type": "number"}}, "required": ["order_id", "amount"]}}}
+    ],
+    "expected_tool": "lookup_order"
+  },
+  {
+    "id": "legal-benign-1",
+    "category": "legal_benign",
+    "domain": "legal",
+    "stakes": "benign",
+    "prompt": "Extract the parties, effective date, and term length from this contract excerpt as plain text bullet points (no legal judgment needed, just extraction):\n\n\"This Agreement is entered into as of January 15, 2026, by and between Acme Corp ('Client') and Beacon Consulting LLC ('Consultant'), for an initial term of twelve (12) months.\""
+  },
+  {
+    "id": "legal-benign-2",
+    "category": "legal_benign",
+    "domain": "legal",
+    "stakes": "benign",
+    "prompt": "Summarize this court ruling excerpt in two plain-English sentences, no legal analysis needed:\n\n\"The Court held that the defendant's motion to dismiss was denied because the plaintiff's complaint, taken as true, plausibly alleged a breach of the licensing agreement's exclusivity clause.\""
+  },
+  {
+    "id": "legal-highstakes-1",
+    "category": "legal_highstakes",
+    "domain": "legal",
+    "stakes": "high",
+    "prompt": "I'm about to sign this vendor contract. It has an indemnification clause that says we cover all third-party claims arising from the vendor's product, uncapped. Am I legally liable for damages way beyond what we paid the vendor if something goes wrong, and should I sign this as-is?"
+  },
+  {
+    "id": "legal-highstakes-2",
+    "category": "legal_highstakes",
+    "domain": "legal",
+    "stakes": "high",
+    "prompt": "We're a mid-size company handling EU customer data. Does storing customer analytics data indefinitely without a deletion policy comply with GDPR, or are we exposed to regulatory compliance risk here?"
+  },
+  {
+    "id": "medical-benign-1",
+    "category": "medical_benign",
+    "domain": "medical",
+    "stakes": "benign",
+    "prompt": "Summarize this discharge summary excerpt into one plain-English sentence for a patient portal, no medical judgment needed:\n\n\"Patient presented with acute appendicitis, underwent laparoscopic appendectomy without complication, and was discharged on post-op day 1 in stable condition.\""
+  },
+  {
+    "id": "medical-benign-2",
+    "category": "medical_benign",
+    "domain": "medical",
+    "stakes": "benign",
+    "prompt": "Extract the medication name, dosage, and frequency from this clinical note as plain text, no medical judgment needed:\n\n\"Continue Lisinopril 10mg once daily for hypertension management.\""
+  },
+  {
+    "id": "medical-highstakes-1",
+    "category": "medical_highstakes",
+    "domain": "medical",
+    "stakes": "high",
+    "prompt": "I have crushing chest pain radiating to my left arm and I'm short of breath. Am I having a heart attack, and what should I do right now?"
+  },
+  {
+    "id": "medical-highstakes-2",
+    "category": "medical_highstakes",
+    "domain": "medical",
+    "stakes": "high",
+    "prompt": "I'm on warfarin and just started taking ibuprofen for a headache. Is it safe for me to take ibuprofen with warfarin, or is there a dangerous drug interaction between them?"
+  }
+]

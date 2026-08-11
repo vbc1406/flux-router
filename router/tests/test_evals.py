@@ -80,7 +80,7 @@ class TestDatasets:
         samples = load_datasets(list(DATASETS), n=50)
         assert len(samples) == sum(len(load_dataset(n, n=50)) for n in DATASETS)
 
-    def test_agentic_covers_all_five_step_types(self):
+    def test_agentic_covers_all_seven_step_types(self):
         samples = load_dataset("agentic", n=50)
         step_types = {s.metadata["step_type"] for s in samples}
         assert step_types == {
@@ -89,6 +89,8 @@ class TestDatasets:
             "tool_result_summarize",
             "reflect",
             "final_answer",
+            "budget_degradation",
+            "budget_stop",
         }
 
     def test_agentic_tool_select_is_objectively_graded(self):
@@ -97,11 +99,66 @@ class TestDatasets:
         assert tool_select.grader == "agentic_tool_select"
         assert tool_select.reference == tool_select.metadata["expected_tool"]
 
+    def test_agentic_budget_steps_are_deterministically_graded(self):
+        samples = load_dataset("agentic", n=50)
+        for step in ("budget_degradation", "budget_stop"):
+            s = next(sm for sm in samples if sm.metadata["step_type"] == step)
+            assert s.grader == "budget_ladder"
+            assert "max_cost_usd" in s.metadata
+            assert "expected_result" in s.metadata
+
     def test_agentic_other_step_types_are_judge_graded(self):
         samples = load_dataset("agentic", n=50)
         for s in samples:
-            if s.metadata["step_type"] != "tool_select":
+            if s.metadata["step_type"] not in ("tool_select", "budget_degradation", "budget_stop"):
                 assert s.grader == "llm_judge"
+
+    def test_wrapper_tasks_cover_required_categories(self):
+        samples = load_dataset("wrapper_tasks", n=50)
+        categories = {s.metadata["category"] for s in samples}
+        assert categories == {
+            "summarization",
+            "extraction",
+            "translation",
+            "basic_coding",
+            "distributed_systems_coding",
+            "math_proof",
+            "long_document",
+            "tool_calling",
+            "legal_benign",
+            "legal_highstakes",
+            "medical_benign",
+            "medical_highstakes",
+        }
+
+    def test_wrapper_tasks_extraction_uses_json_schema_grader(self):
+        samples = load_dataset("wrapper_tasks", n=50)
+        s = next(sm for sm in samples if sm.metadata["category"] == "extraction")
+        assert s.grader == "json_schema"
+        assert s.metadata["required_keys"]
+
+    def test_wrapper_tasks_high_stakes_trips_classifier_domain_regex(self):
+        """legal_highstakes/medical_highstakes prompts must actually match the
+        classifier's substantive regexes — otherwise the domain tier floor
+        never engages and the "high-stakes" label would be a no-op."""
+        from router.classifier import _LEGAL_SUBSTANTIVE_RE, _MEDICAL_SUBSTANTIVE_RE
+
+        samples = load_dataset("wrapper_tasks", n=50)
+        for s in samples:
+            if s.metadata.get("domain") == "legal" and s.metadata.get("stakes") == "high":
+                assert _LEGAL_SUBSTANTIVE_RE.search(s.prompt), s.prompt
+            if s.metadata.get("domain") == "medical" and s.metadata.get("stakes") == "high":
+                assert _MEDICAL_SUBSTANTIVE_RE.search(s.prompt), s.prompt
+
+    def test_wrapper_tasks_benign_legal_medical_do_not_trip_domain_regex(self):
+        from router.classifier import _LEGAL_SUBSTANTIVE_RE, _MEDICAL_SUBSTANTIVE_RE
+
+        samples = load_dataset("wrapper_tasks", n=50)
+        for s in samples:
+            if s.metadata.get("domain") == "legal" and s.metadata.get("stakes") == "benign":
+                assert not _LEGAL_SUBSTANTIVE_RE.search(s.prompt), s.prompt
+            if s.metadata.get("domain") == "medical" and s.metadata.get("stakes") == "benign":
+                assert not _MEDICAL_SUBSTANTIVE_RE.search(s.prompt), s.prompt
 
 
 # ── Objective graders ──────────────────────────────────────────────────────
@@ -171,6 +228,68 @@ class TestObjectiveGraders:
         live_like = _completion(s.metadata["prompt_header"] + s.reference, simulated=False)
         q, correct = _run(grade(s, live_like, allow_code_exec=False))
         assert q is None and correct is None
+
+    def test_json_schema_grader_accepts_valid_json_with_required_keys(self):
+        s = load_dataset("wrapper_tasks", n=50)
+        s = next(x for x in s if x.metadata["category"] == "extraction")
+        import json as _json
+
+        body = _json.dumps(dict.fromkeys(s.metadata["required_keys"], "x"))
+        assert _run(grade(s, _completion(body))) == (1.0, True)
+
+    def test_json_schema_grader_rejects_missing_key(self):
+        s = load_dataset("wrapper_tasks", n=50)
+        s = next(x for x in s if x.metadata["category"] == "extraction")
+        import json as _json
+
+        body = _json.dumps({s.metadata["required_keys"][0]: "x"})
+        assert _run(grade(s, _completion(body))) == (0.0, False)
+
+    def test_json_schema_grader_rejects_non_json(self):
+        s = load_dataset("wrapper_tasks", n=50)
+        s = next(x for x in s if x.metadata["category"] == "extraction")
+        assert _run(grade(s, _completion("not json at all"))) == (0.0, False)
+
+    def test_json_schema_grader_unwraps_markdown_fence(self):
+        s = load_dataset("wrapper_tasks", n=50)
+        s = next(x for x in s if x.metadata["category"] == "extraction")
+        import json as _json
+
+        body = _json.dumps(dict.fromkeys(s.metadata["required_keys"], "x"))
+        fenced = f"Here you go:\n```json\n{body}\n```"
+        assert _run(grade(s, _completion(fenced))) == (1.0, True)
+
+    def test_budget_ladder_degradation_case(self):
+        samples = load_dataset("agentic", n=50)
+        s = next(x for x in samples if x.metadata["step_type"] == "budget_degradation")
+        q, correct = _run(grade(s, _completion("")))
+        assert (q, correct) == (1.0, True)
+
+    def test_budget_ladder_stop_case(self):
+        samples = load_dataset("agentic", n=50)
+        s = next(x for x in samples if x.metadata["step_type"] == "budget_stop")
+        q, correct = _run(grade(s, _completion("")))
+        assert (q, correct) == (1.0, True)
+
+    def test_budget_ladder_detects_wrong_expected_result(self):
+        """If the ladder's real behavior ever regressed, this grader must
+        fail loudly rather than always reporting success."""
+        from router.evals.schemas import EvalSample
+
+        bad = EvalSample(
+            id="budget-bad",
+            dataset="agentic",
+            task_type="budget",
+            grader="budget_ladder",
+            prompt="",
+            metadata={
+                "max_cost_usd": 1.0,
+                "pre_spent_cost_usd": 0.75,
+                "expected_result": "exceeded",  # wrong: 0.75/1.0 is "degraded", not "exceeded"
+            },
+        )
+        q, correct = _run(grade(bad, _completion("")))
+        assert (q, correct) == (0.0, False)
 
 
 # ── LLM judge (mock path) ──────────────────────────────────────────────────
@@ -313,6 +432,43 @@ class TestEndToEnd:
         a = aggregate(_run(run_eval(config)).results)["flux"]
         b = aggregate(_run(run_eval(config)).results)["flux"]
         assert a.mean_quality == b.mean_quality and a.total_cost == b.total_cost
+
+    def test_full_default_dataset_run_covers_new_categories(self):
+        """Task 3 wiring check: agentic budget steps and wrapper_tasks run
+        end-to-end through the real runner (not just the grader unit tests
+        above), against every default strategy."""
+        config = RunConfig(
+            datasets=list(DATASETS),
+            strategies=["flux", "premium", "cheapest"],
+            n=50,
+            mode="mock",
+            source="fixture",
+            cache_dir=None,
+        )
+        out = _run(run_eval(config))
+        assert out.results
+
+        budget_rows = [
+            r for r in out.results if r.step_type in ("budget_degradation", "budget_stop")
+        ]
+        assert budget_rows
+        assert all(r.correct is True for r in budget_rows)
+        assert all(r.cost == 0.0 for r in budget_rows)
+
+        json_rows = [r for r in out.results if r.structured_output_valid is not None]
+        assert json_rows
+
+        tool_rows = [r for r in out.results if r.tool_call_valid is not None]
+        assert tool_rows
+
+        high_stakes_rows = [r for r in out.results if r.safety_escalated is not None]
+        assert high_stakes_rows
+        # The domain tier floor is enforced regardless of routing_priority, so
+        # flux must always escalate these — a real regression signal.
+        assert all(r.safety_escalated for r in high_stakes_rows if r.strategy == "flux")
+
+        assert "fallback_recovery_ok" in out.system_checks
+        assert out.system_checks["fallback_recovery_ok"] is True
 
 
 # ── Provider-default baselines + per-question drill-down ─────────────────────

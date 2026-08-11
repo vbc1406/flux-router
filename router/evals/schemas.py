@@ -22,8 +22,25 @@ from typing import Any
 #                         (tool_select) with a verifiable right answer; the
 #                         other four (plan/tool_result_summarize/reflect/
 #                         final_answer) are inherently open-ended and use
-#                         llm_judge like mtbench.
-GRADERS = ("gsm8k", "mmlu", "humaneval", "llm_judge", "agentic_tool_select")
+#                         llm_judge like mtbench. Also reused by the
+#                         wrapper-level "tool_calling" category.
+#   json_schema        — objective: does the completion parse as JSON and
+#                         contain every key in sample.metadata["required_keys"]?
+#                         Used by the "extraction" wrapper category.
+#   budget_ladder       — deterministic, no model call: exercises the real
+#                         router.run_budget.RunBudget ladder directly and
+#                         checks it returns/raises what
+#                         sample.metadata["expected_result"] says. Used by the
+#                         budget_degradation/budget_stop agent steps.
+GRADERS = (
+    "gsm8k",
+    "mmlu",
+    "humaneval",
+    "llm_judge",
+    "agentic_tool_select",
+    "json_schema",
+    "budget_ladder",
+)
 
 # Strategy names understood by strategies.py.
 #   flux/premium/cheapest/mid  — the routing engine and the synthetic baselines.
@@ -104,6 +121,29 @@ class GradedResult:
     # from "step_type resolved to unknown". Used for the "quality by agent
     # step type" eval rollup — see report.py::_print_by_step_type().
     step_type: str = ""
+
+    # ── Task 3 (live quality evaluation) per-sample recording fields ────────
+    provider: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    # Provider-call latency (Completion.latency_ms) — end-to-end for the
+    # completion itself. None when the sample used no completion (budget_ladder).
+    latency_ms: int | None = None
+    # Wall-clock time of the routing decision alone (pick_model()), separate
+    # from the provider call above. Only meaningful for strategy="flux" — the
+    # other strategies are a lookup, not a routing decision.
+    routing_latency_ms: float | None = None
+    # "legal" / "medical" for samples tagged with a domain in wrapper_tasks.json
+    # metadata; "" otherwise.
+    domain: str = ""
+    # True/False when `domain` is set and stakes="high" and strategy="flux":
+    # did the chosen model's tier meet config.DOMAIN_TIER_FLOORS[domain]? None
+    # when not applicable (benign samples, non-flux strategies, no domain).
+    safety_escalated: bool | None = None
+    # Mirrors `correct` but only populated for the grader it names, so
+    # report.py can compute a rate without re-checking sample.grader.
+    tool_call_valid: bool | None = None
+    structured_output_valid: bool | None = None
 
 
 @dataclass

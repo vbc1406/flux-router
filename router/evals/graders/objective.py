@@ -11,6 +11,7 @@ item could not be graded) and correct is the bool outcome (or None).
 
 from __future__ import annotations
 
+import json
 import re
 
 from ..schemas import Completion, EvalSample
@@ -94,3 +95,63 @@ def grade_tool_select(
     mentioned = set(_TOOL_NAME_RE.findall(completion.text)) & offered
     correct = mentioned == {expected}
     return (1.0 if correct else 0.0, correct)
+
+
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)```", re.DOTALL)
+
+
+def grade_json_schema(
+    sample: EvalSample, completion: Completion
+) -> tuple[float | None, bool | None]:
+    """Extraction wrapper category: does the completion parse as JSON and
+    contain every key in sample.metadata["required_keys"]? Deliberately not
+    full JSON Schema validation (no value-type/format checks) — the thing
+    being verified is "did structured extraction actually produce usable
+    structured output", not schema conformance of the extracted values."""
+    required = sample.metadata.get("required_keys", [])
+    if not required:
+        return (None, None)
+    fence = _JSON_FENCE_RE.search(completion.text)
+    raw = fence.group(1) if fence else completion.text
+    try:
+        obj = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return (0.0, False)
+    if not isinstance(obj, dict):
+        return (0.0, False)
+    correct = all(k in obj for k in required)
+    return (1.0 if correct else 0.0, correct)
+
+
+def grade_budget_ladder(sample: EvalSample) -> tuple[float | None, bool | None]:
+    """Deterministic system check (no completion, no model call): exercise the
+    real router.run_budget.RunBudget ladder and confirm check_before_dispatch()
+    returns/raises what sample.metadata["expected_result"] says for a run that
+    has already spent metadata["pre_spent_cost_usd"] of metadata["max_cost_usd"].
+
+    Forces an in-memory store regardless of FLUX_RUN_STORE so this check is
+    self-contained and doesn't require Redis to run in CI/mock mode.
+    """
+    from ...run_budget import InMemoryRunStore, RunBudget, RunBudgetExceeded, RunLimits
+
+    max_cost = sample.metadata["max_cost_usd"]
+    pre_spent = sample.metadata["pre_spent_cost_usd"]
+    expected = sample.metadata["expected_result"]
+
+    budget = RunBudget(store=InMemoryRunStore())
+    run_id = f"eval-{sample.id}"
+    limits = RunLimits(
+        max_cost_usd=max_cost, max_steps=1000, max_tokens=10_000_000, max_duration_seconds=10_000
+    )
+    budget.start(run_id, limits=limits)
+    try:
+        if pre_spent > 0:
+            budget.record_step(run_id, model_id="eval-seed", cost_usd=pre_spent, tokens=100)
+        try:
+            actual: str = budget.check_before_dispatch(run_id)
+        except RunBudgetExceeded:
+            actual = "exceeded"
+        correct = actual == expected
+        return (1.0 if correct else 0.0, correct)
+    finally:
+        budget.finish(run_id)

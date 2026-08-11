@@ -24,7 +24,43 @@ from .schemas import EvalSample
 
 _FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
-DATASETS = ("gsm8k", "mmlu", "humaneval", "mtbench", "agentic")
+DATASETS = ("gsm8k", "mmlu", "humaneval", "mtbench", "agentic", "wrapper_tasks")
+
+# wrapper_tasks.json "category" -> router task_type. legal_benign/medical_benign
+# stay on their transformation task_type (extraction/summarization) so they do
+# NOT trip the domain tier floor; legal_highstakes/medical_highstakes carry
+# prompt text that trips classifier._LEGAL_SUBSTANTIVE_RE /
+# _MEDICAL_SUBSTANTIVE_RE for real, so the *actual* classifier (not this map)
+# assigns task_type "legal"/"medical" at routing time — this map only sets the
+# EvalSample.task_type used for reporting/mock-quality lookup, matching what
+# the real classifier is expected to produce.
+_WRAPPER_TASK_TYPE = {
+    "summarization": "summarization",
+    "extraction": "extraction",
+    "translation": "translation",
+    "basic_coding": "code_generation",
+    "distributed_systems_coding": "code_generation",
+    "math_proof": "reasoning",
+    "long_document": "summarization",
+    "tool_calling": "function_calling",
+    "legal_benign": "extraction",
+    "legal_highstakes": "legal",
+    "medical_benign": "extraction",
+    "medical_highstakes": "medical",
+}
+
+# Filler paragraph repeated to build a genuinely long prompt for the
+# long_document category, so required_capabilities=["long_document"] actually
+# exercises the router's context-window filtering (routing_engine._capability_
+# satisfied), not just a short prompt tagged with the capability.
+_LONG_DOC_FILLER = (
+    "Section {n}: This section restates the service's failover invariants — "
+    "every region must be able to serve reads within 200ms of a primary "
+    "outage, writes fail closed rather than risking a split-brain, and the "
+    "on-call runbook must be re-verified quarterly against the current "
+    "topology. No action is required for this section beyond acknowledging "
+    "the invariant holds.\n\n"
+)
 
 # Answer-format instructions appended to objective prompts so extraction is
 # reliable across providers. Applied identically to fixture and hub items.
@@ -134,12 +170,23 @@ def _build_agentic(rec: dict[str, Any], idx: int) -> EvalSample:
     these cases too (see config.STEP_TYPE_FLOORS).
     """
     step_type = rec["step_type"]
-    grader = "agentic_tool_select" if step_type == "tool_select" else "llm_judge"
+    if step_type == "tool_select":
+        grader = "agentic_tool_select"
+    elif step_type in ("budget_degradation", "budget_stop"):
+        # Deterministic system check against the real RunBudget ladder —
+        # no model call, no LLM judge. See graders.objective.grade_budget_ladder.
+        grader = "budget_ladder"
+    else:
+        grader = "llm_judge"
     metadata: dict[str, Any] = {"step_type": step_type}
     if "tools" in rec:
         metadata["tools"] = rec["tools"]
     if "expected_tool" in rec:
         metadata["expected_tool"] = rec["expected_tool"]
+    if grader == "budget_ladder":
+        metadata["max_cost_usd"] = rec["max_cost_usd"]
+        metadata["pre_spent_cost_usd"] = rec["pre_spent_cost_usd"]
+        metadata["expected_result"] = rec["expected_result"]
     return EvalSample(
         id=f"agentic-{step_type}-{idx}",
         dataset="agentic",
@@ -151,12 +198,55 @@ def _build_agentic(rec: dict[str, Any], idx: int) -> EvalSample:
     )
 
 
+def _build_wrapper_task(rec: dict[str, Any], idx: int) -> EvalSample:
+    """Item (Task 3): ordinary wrapper-request categories not covered by the
+    public benchmarks above — summarization, extraction, translation, basic
+    vs. complex-distributed-systems coding, math proofs, long-document,
+    wrapper-level tool calling, and benign vs. high-stakes legal/medical
+    transformations. Fixture-only (Flux-original set, like "agentic")."""
+    category = rec["category"]
+    task_type = rec.get("task_type", _WRAPPER_TASK_TYPE.get(category, "analysis"))
+    grader = "llm_judge"
+    metadata: dict[str, Any] = {"category": category}
+    if "domain" in rec:
+        metadata["domain"] = rec["domain"]
+    if "stakes" in rec:
+        metadata["stakes"] = rec["stakes"]
+    if "required_capabilities" in rec:
+        metadata["required_capabilities"] = rec["required_capabilities"]
+
+    prompt = rec["prompt"]
+    reference = None
+    if category == "extraction" and "required_keys" in rec:
+        grader = "json_schema"
+        metadata["required_keys"] = rec["required_keys"]
+    elif category == "tool_calling" and "expected_tool" in rec:
+        grader = "agentic_tool_select"
+        metadata["tools"] = rec["tools"]
+        metadata["expected_tool"] = rec["expected_tool"]
+        reference = rec["expected_tool"]
+    elif category == "long_document":
+        filler = "".join(_LONG_DOC_FILLER.format(n=n) for n in range(1, 400))
+        prompt = prompt.replace("{REPEATED_SECTION}", filler)
+
+    return EvalSample(
+        id=rec.get("id", f"wrapper-{category}-{idx}"),
+        dataset="wrapper_tasks",
+        task_type=task_type,
+        grader=grader,
+        prompt=prompt.strip(),
+        reference=reference,
+        metadata=metadata,
+    )
+
+
 _BUILDERS = {
     "gsm8k": _build_gsm8k,
     "mmlu": _build_mmlu,
     "humaneval": _build_humaneval,
     "mtbench": _build_mtbench,
     "agentic": _build_agentic,
+    "wrapper_tasks": _build_wrapper_task,
 }
 
 

@@ -17,6 +17,7 @@ estimate_tokens() heuristic so mock and live accounting match.
 
 from __future__ import annotations
 
+import json
 import random
 import time
 from typing import Any
@@ -36,7 +37,7 @@ class LiveCompletionError(Exception):
 # Fallback quality by tier when a model has no rating for the task type.
 _TIER_DEFAULT_QUALITY = {"free": 0.55, "cheap": 0.70, "mid": 0.82, "premium": 0.92}
 
-_OBJECTIVE_GRADERS = {"gsm8k", "mmlu", "humaneval", "agentic_tool_select"}
+_OBJECTIVE_GRADERS = {"gsm8k", "mmlu", "humaneval", "agentic_tool_select", "json_schema"}
 
 
 def _sim_quality(model: ModelOption, task_type: str) -> float:
@@ -97,6 +98,11 @@ def _simulated_text(sample: EvalSample, correct: bool, rng: random.Random) -> st
         else:
             body = "    raise NotImplementedError\n"
         return header + body
+    if sample.grader == "json_schema":
+        required: list[str] = sample.metadata.get("required_keys", [])
+        keys = required if correct else required[:-1]
+        obj = {k: f"sample_{k}_value" for k in keys}
+        return json.dumps(obj)
     if sample.grader == "agentic_tool_select":
         expected: str = sample.metadata.get("expected_tool", "")
         offered = [

@@ -59,6 +59,46 @@ includes a `medical` (`final_answer`) and a `legal` (`plan`) case exercising
 the high-stakes domain floor (`config.DOMAIN_TIER_FLOORS`) composed with an
 agent-step floor in the same request.
 
+Two more agent steps, `budget_degradation` and `budget_stop`
+(`router/evals/fixtures/agentic.json`), are **not** model-quality questions —
+they're deterministic system checks (`grader="budget_ladder"`) that call
+`router.run_budget.RunBudget.check_before_dispatch()` directly against a
+seeded run (75%/100% of a $1.00 ceiling) and assert it returns `"degraded"` /
+raises `RunBudgetExceeded`. No model call, no cost, `simulated=False` — this
+is exercising real production code, not mocking it.
+
+The `wrapper_tasks` dataset (`router/evals/fixtures/wrapper_tasks.json`,
+fixture-only) covers the ordinary-request categories the public benchmarks
+above don't: summarization, JSON extraction (`grader="json_schema"` — parses
+the completion and checks every required key is present), translation, basic
+vs. complex-distributed-systems coding, math proofs, long-document requests
+(`required_capabilities=["long_document"]`, a genuinely long prompt so the
+router's context-window filtering is actually exercised), wrapper-level tool
+calling (reuses `agentic_tool_select`), and benign vs. high-stakes
+legal/medical transformations. The benign/high-stakes split is load-bearing:
+benign samples ("extract the parties from this contract") deliberately avoid
+`classifier._LEGAL_SUBSTANTIVE_RE` / `_MEDICAL_SUBSTANTIVE_RE` so they keep
+their normal (cheap) task_type, while high-stakes samples ("am I legally
+liable...") are written to trip those regexes for real, so the *actual*
+classifier — not a hand-set label — assigns `task_type="legal"/"medical"` and
+the domain tier floor engages. `GradedResult.safety_escalated` records
+whether the chosen model's tier actually met the floor
+(`config.DOMAIN_TIER_FLOORS`) for the flux strategy on these samples; the
+report's **high-stakes routing recall** metric is the fraction where it did —
+a launch blocker if it's ever below 100%.
+
+Every `GradedResult` also carries `provider`, `input_tokens`, `output_tokens`,
+`latency_ms` (the completion), `routing_latency_ms` (routing decision alone,
+`flux` strategy only), `tool_call_valid` / `structured_output_valid` (mirror
+`correct` for the matching grader), and `domain`. `report.quality_metrics()`
+rolls these up into tool-call success rate, structured-output validity rate,
+high-stakes routing recall, and p50/p95 routing + end-to-end latency, plus a
+`launch_blockers` list — all printed in the console report and written into
+the JSON snapshot under `"quality_metrics"`. A separate, one-shot
+**fallback-recovery system check** (`runner._check_fallback_recovery`)
+exercises the real `FallbackExecutor` end to end with a fake failing primary
+call (no network) and reports `system_checks.fallback_recovery_ok`.
+
 ## Modes
 
 - **mock (default)** — deterministic *simulated* completions whose correctness is
