@@ -41,6 +41,7 @@ def main() -> int:
     assert server["auth_mode"] == "bound-tokens", server
     assert server["workers"] >= 2, server
     assert server["run_store_backend"] == "redis", server
+    assert server["budget_store_backend"] == "redis", server
     assert server["usage_db_persistent"] is True, server
 
     status, models = request_json(f"{base}/v1/models", args.token)

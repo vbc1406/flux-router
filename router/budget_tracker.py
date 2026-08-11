@@ -33,10 +33,12 @@ reconcile_spend() or release_reservation().
 from __future__ import annotations
 
 import itertools
+import json
 import threading
 import time
 import uuid
 from collections import OrderedDict, defaultdict, deque
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any, Callable, NamedTuple, Reversible
 
@@ -46,7 +48,9 @@ from .config import (
     BUDGET_LEDGER_MAX_PER_USER,
     BUDGET_LIMITS,
     BUDGET_RESERVATION_MAX_AGE_SECONDS,
+    BUDGET_STORE_BACKEND,
     BUDGET_TRACKER_MAX_USERS,
+    REDIS_URL,
 )
 
 log = structlog.get_logger(__name__)
@@ -473,3 +477,349 @@ class DailyBudgetTracker:
             "total_spend": round(sum(r.amount for r in today_records), 6),
             "request_count": len(today_records),
         }
+
+
+# ── Redis-backed BudgetTracker (multi-worker deployments) ───────────────────
+
+
+@dataclass
+class _UserBudgetState:
+    """Everything RedisBudgetTracker needs about one user, stored as a single
+    JSON blob (mirrors run_budget._RunState's one-blob-per-run shape)."""
+
+    ledger: list[_SpendRecord] = field(default_factory=list)
+    plan: str | None = None
+    # reservation_id -> (amount, plan, created_at wall-clock seconds)
+    reservations: dict[str, tuple[float, str, float]] = field(default_factory=dict)
+
+
+def _serialize_budget_state(state: _UserBudgetState) -> str:
+    return json.dumps(
+        {
+            "ledger": [
+                [r.amount, r.model_id, r.task_type, r.correlation_id, r.timestamp.isoformat()]
+                for r in state.ledger
+            ],
+            "plan": state.plan,
+            "reservations": state.reservations,
+        }
+    )
+
+
+def _deserialize_budget_state(raw: str) -> _UserBudgetState:
+    d = json.loads(raw)
+    ledger = [
+        _SpendRecord(
+            amount=amount,
+            model_id=model_id,
+            task_type=task_type,
+            correlation_id=correlation_id,
+            timestamp=datetime.fromisoformat(ts),
+        )
+        for amount, model_id, task_type, correlation_id, ts in d["ledger"]
+    ]
+    reservations = {
+        rid: (float(v[0]), str(v[1]), float(v[2])) for rid, v in d.get("reservations", {}).items()
+    }
+    return _UserBudgetState(ledger=ledger, plan=d.get("plan"), reservations=reservations)
+
+
+class RedisBudgetTracker(BudgetTracker):
+    """
+    Redis-backed BudgetTracker for multi-worker/multi-instance deployments.
+
+    BudgetTracker's ledger/reservations are process-local, so under N server
+    workers each one enforces daily/monthly plan budgets against only the
+    spend IT personally handled — silently multiplying the effective budget
+    by the worker count once requests for the same user_id land on different
+    workers (the normal case behind a load balancer or `FLUX_SERVER_WORKERS`
+    &gt; 1). Select this with FLUX_BUDGET_STORE=redis (config.BUDGET_STORE_BACKEND)
+    via make_budget_tracker() rather than constructing it directly in most
+    cases.
+
+    Subclasses BudgetTracker (rather than implementing a separate Protocol)
+    purely so existing `budget: BudgetTracker` type hints (e.g.
+    routing_engine._budget_tier_walkdown) keep accepting it under mypy
+    --strict — every public method is overridden below; none of the parent's
+    in-memory attributes (_ledger, _plans, _reservations, _lock) are used or
+    initialized, and __init__ deliberately skips super().__init__().
+
+    Storage: one JSON blob per user at `{prefix}user:{user_id}`, updated via
+    an optimistic Redis WATCH/MULTI transaction — the same concurrency-safe
+    technique as run_budget.RedisRunStore.update(), so concurrent workers
+    reserving against the same user's budget can't both observe "ok" before
+    either commits. A separate short-lived key `{prefix}resv:{reservation_id}`
+    -> user_id lets reconcile_spend()/release_reservation() find which user's
+    blob to touch given only a reservation_id, since that's the public
+    contract BudgetTracker already has (matching it, not extending it).
+    """
+
+    def __init__(
+        self,
+        redis_client: Any | None = None,
+        url: str = REDIS_URL,
+        key_prefix: str = "flux:budget:",
+        reservation_ttl: float = BUDGET_RESERVATION_MAX_AGE_SECONDS,
+    ) -> None:
+        if redis_client is not None:
+            self._redis = redis_client
+        else:
+            try:
+                import redis
+            except ImportError as exc:
+                raise ImportError(
+                    "RedisBudgetTracker requires the 'redis' package. Install it with "
+                    "`pip install flux-router[redis]`, or pass an explicit "
+                    "redis_client= (e.g. a fakeredis instance in tests)."
+                ) from exc
+            self._redis = redis.Redis.from_url(url, decode_responses=True)
+        self._user_prefix = key_prefix + "user:"
+        self._resv_prefix = key_prefix + "resv:"
+        self._reservation_ttl = reservation_ttl
+        # Defense-in-depth backstop key TTL, mirroring RedisRunStore — not the
+        # source of truth for reservation staleness (the prune below is);
+        # just a bound on truly abandoned user keys.
+        self._user_key_ttl = max(int(reservation_ttl) * 4, 86400)
+
+    # ── Redis plumbing ────────────────────────────────────────────────────
+
+    def _get_state(self, user_id: str) -> _UserBudgetState | None:
+        raw = self._redis.get(self._user_prefix + user_id)
+        return _deserialize_budget_state(raw) if raw is not None else None
+
+    def _atomic_update(
+        self,
+        user_id: str,
+        updater: Callable[[_UserBudgetState | None], tuple[_UserBudgetState | None, Any]],
+    ) -> Any:
+        """Optimistic Redis transaction, safe across independent workers —
+        same retry-on-WatchError shape as RedisRunStore.update()."""
+        import redis as redis_lib
+
+        key = self._user_prefix + user_id
+        while True:
+            with self._redis.pipeline() as pipe:
+                try:
+                    pipe.watch(key)
+                    raw = pipe.get(key)
+                    state, result = updater(
+                        _deserialize_budget_state(raw) if raw is not None else None
+                    )
+                    if state is None:
+                        pipe.unwatch()
+                        return result
+                    pipe.multi()
+                    pipe.set(key, _serialize_budget_state(state), ex=self._user_key_ttl)
+                    pipe.execute()
+                    return result
+                except redis_lib.exceptions.WatchError:
+                    continue
+
+    def _prune_stale_reservations(self, state: _UserBudgetState) -> None:
+        cutoff = time.time() - self._reservation_ttl
+        stale = [rid for rid, (_, _, created) in state.reservations.items() if created < cutoff]
+        for rid in stale:
+            state.reservations.pop(rid, None)
+
+    # ── Public API (same signatures as BudgetTracker) ──────────────────────
+
+    def record_spend(
+        self,
+        user_id: str,
+        amount: float,
+        model_id: str,
+        correlation_id: str,
+        task_type: str = "unknown",
+        plan: str = "pro_plan",
+    ) -> None:
+        user_id = _validate_user_id(user_id)
+
+        def upd(
+            state: _UserBudgetState | None,
+        ) -> tuple[_UserBudgetState | None, None]:
+            if state is None:
+                state = _UserBudgetState()
+            state.plan = plan
+            state.ledger.append(
+                _SpendRecord(
+                    amount=amount,
+                    model_id=model_id,
+                    task_type=task_type,
+                    correlation_id=correlation_id,
+                    timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
+                )
+            )
+            if len(state.ledger) > BUDGET_LEDGER_MAX_PER_USER:
+                state.ledger = state.ledger[-BUDGET_LEDGER_MAX_PER_USER:]
+            return state, None
+
+        self._atomic_update(user_id, upd)
+
+    def get_daily_spend(self, user_id: str) -> float:
+        user_id = _validate_user_id(user_id)
+        today = datetime.now(timezone.utc).replace(tzinfo=None).date()
+        state = self._get_state(user_id)
+        records = state.ledger if state is not None else []
+        return _sum_while(records, lambda r: r.timestamp.date() == today)
+
+    def get_monthly_spend(self, user_id: str) -> float:
+        user_id = _validate_user_id(user_id)
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        state = self._get_state(user_id)
+        records = state.ledger if state is not None else []
+        return _sum_while(
+            records, lambda r: r.timestamp.year == now.year and r.timestamp.month == now.month
+        )
+
+    def get_remaining_budget(self, user_id: str, plan: str) -> float:
+        user_id = _validate_user_id(user_id)
+        limits = BUDGET_LIMITS.get(plan, BUDGET_LIMITS["pro_plan"])
+        daily_remaining = limits["daily"] - self.get_daily_spend(user_id)
+        monthly_remaining = limits["monthly"] - self.get_monthly_spend(user_id)
+        return min(daily_remaining, monthly_remaining)
+
+    def would_exceed_budget(
+        self, user_id: str, estimated_cost: float, plan: str | None = None
+    ) -> bool:
+        user_id = _validate_user_id(user_id)
+        state = self._get_state(user_id)
+        resolved_plan = plan or (state.plan if state is not None else None) or "free_plan"
+        limits = BUDGET_LIMITS.get(resolved_plan, BUDGET_LIMITS["free_plan"])
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        today = now.date()
+        records = state.ledger if state is not None else []
+        daily_spend = 0.0
+        monthly_spend = 0.0
+        for r in reversed(records):
+            if r.timestamp.year != now.year or r.timestamp.month != now.month:
+                break
+            monthly_spend += r.amount
+            if r.timestamp.date() == today:
+                daily_spend += r.amount
+        remaining = min(limits["daily"] - daily_spend, limits["monthly"] - monthly_spend)
+        return estimated_cost > remaining
+
+    def reserve_spend(
+        self, user_id: str, estimated_cost: float, plan: str | None = None
+    ) -> str | None:
+        user_id = _validate_user_id(user_id)
+        if estimated_cost < 0:
+            raise ValueError("estimated_cost must be non-negative")
+        reservation_id = uuid.uuid4().hex
+
+        def upd(
+            state: _UserBudgetState | None,
+        ) -> tuple[_UserBudgetState | None, str | None]:
+            if state is None:
+                state = _UserBudgetState()
+            self._prune_stale_reservations(state)
+            resolved_plan = plan or state.plan or "free_plan"
+            limits = BUDGET_LIMITS.get(resolved_plan, BUDGET_LIMITS["free_plan"])
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            daily_spend = monthly_spend = 0.0
+            for record in reversed(state.ledger):
+                if record.timestamp.year != now.year or record.timestamp.month != now.month:
+                    break
+                monthly_spend += record.amount
+                if record.timestamp.date() == now.date():
+                    daily_spend += record.amount
+            pending = sum(amount for amount, _, _ in state.reservations.values())
+            if daily_spend + pending + estimated_cost > limits["daily"] or (
+                monthly_spend + pending + estimated_cost > limits["monthly"]
+            ):
+                return None, None
+            state.reservations[reservation_id] = (estimated_cost, resolved_plan, time.time())
+            return state, reservation_id
+
+        result = self._atomic_update(user_id, upd)
+        if result is not None:
+            self._redis.set(
+                self._resv_prefix + reservation_id, user_id, ex=max(int(self._reservation_ttl), 1)
+            )
+        return result  # type: ignore[no-any-return]
+
+    def reconcile_spend(
+        self,
+        reservation_id: str,
+        actual_amount: float,
+        model_id: str,
+        correlation_id: str,
+        task_type: str = "unknown",
+    ) -> None:
+        if actual_amount < 0:
+            raise ValueError("actual_amount must be non-negative")
+        user_id = self._redis.get(self._resv_prefix + reservation_id)
+        if user_id is None:
+            raise KeyError(f"unknown budget reservation: {reservation_id}")
+
+        def upd(
+            state: _UserBudgetState | None,
+        ) -> tuple[_UserBudgetState | None, None]:
+            if state is None or reservation_id not in state.reservations:
+                raise KeyError(f"unknown budget reservation: {reservation_id}")
+            reservation = state.reservations.pop(reservation_id)
+            state.plan = reservation[1]
+            state.ledger.append(
+                _SpendRecord(
+                    amount=actual_amount,
+                    model_id=model_id,
+                    task_type=task_type,
+                    correlation_id=correlation_id,
+                    timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
+                )
+            )
+            if len(state.ledger) > BUDGET_LEDGER_MAX_PER_USER:
+                state.ledger = state.ledger[-BUDGET_LEDGER_MAX_PER_USER:]
+            return state, None
+
+        self._atomic_update(user_id, upd)
+        self._redis.delete(self._resv_prefix + reservation_id)
+
+    def release_reservation(self, reservation_id: str) -> bool:
+        user_id = self._redis.get(self._resv_prefix + reservation_id)
+        if user_id is None:
+            return False
+
+        def upd(
+            state: _UserBudgetState | None,
+        ) -> tuple[_UserBudgetState | None, bool]:
+            if state is None or reservation_id not in state.reservations:
+                return None, False
+            state.reservations.pop(reservation_id, None)
+            return state, True
+
+        existed = self._atomic_update(user_id, upd)
+        self._redis.delete(self._resv_prefix + reservation_id)
+        return existed  # type: ignore[no-any-return]
+
+    def check_daily_cap(self, customer_id: str, daily_cap: float) -> bool:
+        return self.get_daily_spend(customer_id) >= daily_cap
+
+    def get_savings_report(self, user_id: str) -> dict[str, Any]:
+        user_id = _validate_user_id(user_id)
+        state = self._get_state(user_id)
+        records = state.ledger if state is not None else []
+        total_spent = sum(r.amount for r in records)
+        by_model: dict[str, float] = defaultdict(float)
+        by_task: dict[str, float] = defaultdict(float)
+        for r in records:
+            by_model[r.model_id] += r.amount
+            by_task[r.task_type] += r.amount
+        return {
+            "total_spent": round(total_spent, 6),
+            "breakdown_by_model": dict(by_model),
+            "breakdown_by_task_type": dict(by_task),
+            "record_count": len(records),
+        }
+
+
+def make_budget_tracker() -> BudgetTracker:
+    """Construct the BudgetTracker backend selected by FLUX_BUDGET_STORE —
+    RedisBudgetTracker for "redis" (multi-worker deployments), the plain
+    process-local BudgetTracker otherwise. Mirrors run_budget's
+    _default_store() selection logic. Used by make_flux(); tests and
+    single-worker/library use should keep constructing BudgetTracker()
+    directly rather than going through this."""
+    if BUDGET_STORE_BACKEND == "redis":
+        return RedisBudgetTracker()
+    return BudgetTracker()

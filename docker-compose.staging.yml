@@ -20,9 +20,20 @@ services:
       FLUX_SERVER_TOKENS: "${FLUX_SERVER_TOKENS:?Set a JSON token-to-tenant map}"
       FLUX_SERVER_WORKERS: "2"
       FLUX_RUN_STORE: redis
+      # Two workers also need a shared BudgetTracker backend, not just a
+      # shared RunBudget backend above — these are independent systems
+      # (router/budget_tracker.py vs router/run_budget.py). Without this,
+      # each worker enforces daily/monthly plan budgets against only the
+      # spend it personally handled (see server.py's startup warning).
+      FLUX_BUDGET_STORE: redis
       FLUX_REDIS_URL: redis://redis:6379/0
       FLUX_ATTRIBUTION_DB: /data/flux.db
       FLUX_DASHBOARD: "1"
+      # Provider keys: fine as shell/`.env`-sourced env vars for this staging
+      # rehearsal (never committed — see .env.staging.example). For a real
+      # production deployment, source these from your platform's secret
+      # manager instead of a plaintext `.env` file, per OPERATIONS.md's key
+      # and token rotation guidance.
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       GOOGLE_API_KEY: "${GOOGLE_API_KEY:-}"

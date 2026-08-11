@@ -46,6 +46,7 @@ from .config import (
     ATTRIBUTION_DB_PATH,
     ATTRIBUTION_USAGE_PAGE_MAX,
     BUDGET_LIMITS,
+    BUDGET_STORE_BACKEND,
     DASHBOARD_ENABLED,
     DATA_DIR,
     RATE_LIMIT_BURST,
@@ -111,6 +112,33 @@ elif not SERVER_TOKENS:
         ),
     )
 
+def _warn_if_unsafe_budget_store(workers: int, budget_store_backend: str) -> None:
+    """Multiple workers + the process-local BudgetTracker is a silent
+    over-spend bug (see budget_tracker.RedisBudgetTracker's docstring): each
+    worker enforces daily/monthly plan budgets against only the spend IT
+    personally handled, so the effective ceiling is roughly workers x the
+    configured plan limit. Distinct from _warn_if_unsafe_run_store below —
+    plan-level budgets (budget_tracker.py) and run-scoped agent budgets
+    (run_budget.py) are independent systems with independent backends. We
+    still fall back to in-memory storage rather than refusing to start —
+    better a loud warning than a hard failure over a budget-accuracy
+    tradeoff."""
+    if workers > 1 and budget_store_backend != "redis":
+        log.warning(
+            "flux_multi_worker_no_redis_budget_store",
+            workers=workers,
+            budget_store_backend=budget_store_backend,
+            msg=(
+                f"FLUX_SERVER_WORKERS={workers} but FLUX_BUDGET_STORE is not 'redis' — each "
+                "worker enforces daily/monthly plan budgets against only the spend it "
+                "personally handles, so the effective budget ceiling is roughly "
+                f"{workers}x the configured plan limit. Falling back to in-memory budget "
+                "storage. Set FLUX_BUDGET_STORE=redis (+ FLUX_REDIS_URL) to share budget "
+                "state across workers."
+            ),
+        )
+
+
 def _warn_if_unsafe_run_store(workers: int, run_store_backend: str) -> None:
     """Multiple workers + the process-local InMemoryRunStore is a silent
     under-enforcement bug (see run_budget.RedisRunStore's docstring): each
@@ -152,6 +180,7 @@ def _warn_if_rate_limit_is_per_worker(workers: int, rpm: int) -> None:
 
 
 _warn_if_unsafe_run_store(SERVER_WORKERS, RUN_STORE_BACKEND)
+_warn_if_unsafe_budget_store(SERVER_WORKERS, BUDGET_STORE_BACKEND)
 _warn_if_rate_limit_is_per_worker(SERVER_WORKERS, RATE_LIMIT_RPM)
 
 app = FastAPI(title="Flux Router", version="1.0.0")
@@ -816,6 +845,7 @@ async def stats_config(
             "tenant_count": len({b.tenant_id for b in SERVER_TOKENS.values()}),
             "max_body_bytes": SERVER_MAX_BODY_BYTES,
             "run_store_backend": RUN_STORE_BACKEND,
+            "budget_store_backend": BUDGET_STORE_BACKEND,
             "data_dir": DATA_DIR,
             "usage_db": ATTRIBUTION_DB_PATH,
             "usage_db_persistent": ATTRIBUTION_DB_PATH != ":memory:",

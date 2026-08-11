@@ -563,6 +563,34 @@ class TestRunStoreStartupWarning:
         assert not any(ev == "flux_multi_worker_no_redis_run_store" for ev, _ in events)
 
 
+class TestBudgetStoreStartupWarning:
+    """Same shape as TestRunStoreStartupWarning above, but for
+    _warn_if_unsafe_budget_store() — a separate warning for a separate
+    backend (budget_tracker.py's plan-level daily/monthly budgets, not
+    run_budget.py's run-scoped agent budgets)."""
+
+    def test_warns_when_multi_worker_without_redis(self, monkeypatch):
+        events: list[tuple[str, dict]] = []
+        monkeypatch.setattr(server.log, "warning", lambda ev, **kw: events.append((ev, kw)))
+        server._warn_if_unsafe_budget_store(3, "memory")
+        assert any(ev == "flux_multi_worker_no_redis_budget_store" for ev, _ in events)
+        matching = [kw for ev, kw in events if ev == "flux_multi_worker_no_redis_budget_store"][0]
+        assert matching["workers"] == 3
+        assert matching["budget_store_backend"] == "memory"
+
+    def test_no_warning_for_single_worker(self, monkeypatch):
+        events: list[tuple[str, dict]] = []
+        monkeypatch.setattr(server.log, "warning", lambda ev, **kw: events.append((ev, kw)))
+        server._warn_if_unsafe_budget_store(1, "memory")
+        assert not any(ev == "flux_multi_worker_no_redis_budget_store" for ev, _ in events)
+
+    def test_no_warning_for_multi_worker_with_redis(self, monkeypatch):
+        events: list[tuple[str, dict]] = []
+        monkeypatch.setattr(server.log, "warning", lambda ev, **kw: events.append((ev, kw)))
+        server._warn_if_unsafe_budget_store(4, "redis")
+        assert not any(ev == "flux_multi_worker_no_redis_budget_store" for ev, _ in events)
+
+
 class TestRunBudget:
     def test_run_id_auto_generated_and_echoed(self, client):
         resp = client.post("/v1/chat/completions", json=_body())
@@ -896,10 +924,29 @@ class TestFallbackChain:
         assert "403" not in detail
 
     def test_streaming_provider_auth_error_does_not_leak_provider_detail(
-        self, client, _mock_call_model
+        self, client, _mock_call_model, monkeypatch
     ):
+        """Regression: `flux-auto` routing is non-deterministic across
+        environments/catalog updates, and a native-streaming-provider pick
+        (openai/groq/mistral) bypasses the mocked `_call_model` entirely —
+        `_stream_completion` dispatches those through
+        `stream_openai_compat_lines` instead (see its STREAMING_NATIVE_PROVIDERS
+        branch). Relying on `_mock_call_model.side_effect` alone silently made
+        a real, unmocked network call whenever routing picked a native
+        provider, leaking a real error instead of testing the sanitization
+        path at all. Force the native-streaming path deterministically (a
+        literal model, like the sibling tests in this file already do) and
+        mock the function that path actually calls."""
+
+        async def failing_stream(model, request, api_key):
+            raise AuthenticationError("HTTP 403 from google")
+            yield b""  # pragma: no cover - unreachable; keeps this an async generator
+
+        monkeypatch.setattr(server, "stream_openai_compat_lines", failing_stream)
         _mock_call_model.side_effect = AuthenticationError("HTTP 403 from google")
-        resp = client.post("/v1/chat/completions", json=_body(stream=True))
+
+        body = _body("gpt-5-mini", stream=True)  # native streaming path
+        resp = client.post("/v1/chat/completions", json=body)
         assert resp.status_code == 200  # SSE errors ride in-band, not in the status
         assert "google" not in resp.text.lower()
         assert "403" not in resp.text

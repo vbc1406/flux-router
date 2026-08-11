@@ -702,6 +702,19 @@ BUDGET_TRACKER_MAX_USERS: int = 100_000
 # for longer than this without reconciling.
 BUDGET_RESERVATION_MAX_AGE_SECONDS: float = 600.0
 
+# Which BudgetTracker backend make_flux() constructs by default. "memory"
+# (plain BudgetTracker) is process-local — safe for a single worker, WRONG
+# for a multi-worker/multi-instance deployment, where each worker would
+# enforce daily/monthly plan budgets against only the spend IT personally
+# handled, silently multiplying the effective budget by the worker count.
+# Set FLUX_BUDGET_STORE=redis (+ FLUX_REDIS_URL, shared with RunBudget) to
+# share plan-budget state across workers via RedisBudgetTracker. This is a
+# separate concern from FLUX_RUN_STORE/RUN_STORE_BACKEND above: run-scoped
+# per-agent-run budgets (run_budget.py) and plan-level daily/monthly budgets
+# (budget_tracker.py) are independent systems with independent backends. See
+# router/budget_tracker.py.
+BUDGET_STORE_BACKEND: str = os.environ.get("FLUX_BUDGET_STORE", "memory").lower()
+
 # ══════════════════════════════════════════════════════════════════════════════
 # HTTP PROXY SERVER (router/server.py)
 # ══════════════════════════════════════════════════════════════════════════════

@@ -8,6 +8,14 @@ on:
     paths:
       - "router/models.json"
       - "scripts/validate_model_catalog.py"
+  # A direct push to main touching the catalog (bypassing a path-filtered PR
+  # entirely, e.g. a maintainer pushing straight to main) was previously only
+  # caught by the Monday cron, not at push time.
+  push:
+    branches: [main]
+    paths:
+      - "router/models.json"
+      - "scripts/validate_model_catalog.py"
 
 permissions:
   contents: read

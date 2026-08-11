@@ -18,8 +18,12 @@ Never store provider keys or bearer tokens in the deployment record.
 ## Production-like staging stack
 
 `docker-compose.staging.yml` exercises the deployment shape that matters in
-production: two authenticated Flux workers, Redis-backed shared run budgets,
-persistent attribution storage, and a persistent Redis append-only log.
+production: two authenticated Flux workers, Redis-backed shared run budgets
+AND Redis-backed shared plan-level (daily/monthly) budgets — two independent
+systems (`router/run_budget.py` and `router/budget_tracker.py` respectively;
+`FLUX_RUN_STORE=redis` and `FLUX_BUDGET_STORE=redis` must both be set for a
+multi-worker deployment) — persistent attribution storage, and a persistent
+Redis append-only log.
 
 ```bash
 cp .env.staging.example .env.staging
@@ -84,7 +88,7 @@ Alert on at least:
 - Premium-tier share and sudden model-distribution changes.
 - P50/P95/P99 routing and end-to-end latency.
 - Dropped attribution records and persistence failures.
-- Redis availability when multiple workers share run budgets.
+- Redis availability when multiple workers share run budgets and/or plan-level daily/monthly budgets.
 
 Set absolute spend caps at the provider as a final backstop; Flux budgets should not be the only financial control.
 

@@ -36,7 +36,7 @@ from pydantic import SecretStr
 from . import errors as err
 from .adaptive_weights import AdaptiveWeights
 from .analytics import RoutingAnalytics
-from .budget_tracker import BudgetTracker
+from .budget_tracker import make_budget_tracker
 from .cache import ResponseCache
 from .cascade import Verifier, estimate_step_cost, verify_response
 from .classifier import RequestClassifier
@@ -916,7 +916,7 @@ def make_flux(
     cache = ResponseCache(enabled=engine_kwargs.pop("cache_enabled", False))
     adaptive = AdaptiveWeights(state_file=engine_kwargs.pop("adaptive_state_file", None))
     analytics = RoutingAnalytics(log_path=engine_kwargs.pop("analytics_log_path", None))
-    budget = BudgetTracker()
+    budget = make_budget_tracker()
     compressor = ContextCompressor()
     classifier = RequestClassifier(cache)
     engine = RoutingEngine(
