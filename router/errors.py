@@ -22,6 +22,10 @@ class FluxAPIError(Exception):
     """Base class for all errors raised by the Flux API layer."""
 
 
+class BudgetExceededError(FluxAPIError):
+    """No eligible model fits within the caller's configured spend budget."""
+
+
 class RateLimitError(FluxAPIError):
     """
     Provider returned HTTP 429.  retry_after (seconds) may be set when the

@@ -49,7 +49,7 @@ RATINGS = {
         "analysis": 0.78, "reasoning": 0.70, "function_calling": 0.74,
         "vision": 0.76, "long_document": 0.86, "unknown": 0.76, "general": 0.78,
     },
-    "mistral-medium-3": {
+    "mistral-medium-3.5": {
         # No public bench; vendor claims ~90% of Sonnet 3.7
         "simple_qa": 0.84, "conversation": 0.83, "translation": 0.88,
         "classification": 0.84, "extraction": 0.82, "summarization": 0.82,

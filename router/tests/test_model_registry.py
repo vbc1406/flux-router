@@ -96,7 +96,7 @@ class TestRegistryLoadsFromJson:
     def test_mistral_marketing_names_resolve_to_documented_api_ids(self):
         reg = ModelRegistry()
         expected = {
-            "mistral-medium-3": "mistral-medium-2505",
+            "mistral-medium-3.5": "mistral-medium-3-5",
             "mistral-small-4": "mistral-small-2603",
             "mistral-large-3": "mistral-large-2512",
         }
@@ -104,6 +104,45 @@ class TestRegistryLoadsFromJson:
             model = reg.get_model(model_id)
             assert model is not None
             assert model.provider_model_id == provider_model_id
+
+    def test_official_catalog_limits_and_prices(self):
+        """Regression coverage for the 2026-08-11 official-doc audit."""
+        reg = ModelRegistry()
+        expected = {
+            # model_id: (input/1k, output/1k, context, max output)
+            "gpt-5": (0.00125, 0.01, 400_000, 128_000),
+            "gpt-5-mini": (0.00025, 0.002, 400_000, 128_000),
+            "o3": (0.002, 0.008, 200_000, 100_000),
+            "gemini-3.1-flash-lite": (0.00025, 0.0015, 1_048_576, 65_536),
+            "gemini-3.1-pro-preview": (0.002, 0.012, 1_048_576, 65_536),
+            "gemini-3-flash-preview": (0.0005, 0.003, 1_048_576, 65_536),
+            "gemini-2.5-pro": (0.00125, 0.01, 1_048_576, 65_536),
+            "claude-haiku-4-5-20251001": (0.001, 0.005, 200_000, 65_536),
+            "claude-sonnet-4-6": (0.003, 0.015, 1_000_000, 64_000),
+            "claude-opus-4-7": (0.005, 0.025, 1_000_000, 128_000),
+            "claude-fable-5": (0.01, 0.05, 1_000_000, 128_000),
+            "claude-sonnet-5": (0.003, 0.015, 1_000_000, 128_000),
+            "claude-opus-5": (0.005, 0.025, 1_000_000, 128_000),
+            "gpt-oss-20b": (0.000075, 0.0003, 131_072, 65_536),
+            "gpt-oss-120b": (0.00015, 0.0006, 131_072, 65_536),
+            "qwen-3.6-27b": (0.0006, 0.003, 131_072, 16_384),
+            "mistral-medium-3.5": (0.0015, 0.0075, 256_000, 65_536),
+        }
+        for model_id, values in expected.items():
+            model = reg.get_model(model_id)
+            assert model is not None
+            assert (
+                model.cost_per_1k_input,
+                model.cost_per_1k_output,
+                model.max_context_window,
+                model.max_output_tokens,
+            ) == values
+
+    def test_ambiguous_mistral_latest_alias_is_not_routable(self):
+        reg = ModelRegistry()
+        model = reg.get_model("mistral-small-latest")
+        assert model is not None
+        assert model.is_available is False
 
     def test_deprecated_llama_4_scout_is_excluded_from_routing(self):
         # Groq deprecated llama-4-scout on 2026-06-17 — it must no longer be

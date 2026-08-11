@@ -38,7 +38,7 @@ OFFICIAL_MODEL_SOURCES = {
 
 # Mistral exposes friendly Flux catalog names separately from versioned API IDs.
 DOCUMENTED_PROVIDER_IDS = {
-    "mistral-medium-3": "mistral-medium-2505",
+    "mistral-medium-3.5": "mistral-medium-3-5",
     "mistral-small-4": "mistral-small-2603",
     "mistral-large-3": "mistral-large-2512",
     "gpt-oss-20b": "openai/gpt-oss-20b",

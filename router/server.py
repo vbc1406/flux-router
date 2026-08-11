@@ -67,7 +67,7 @@ from .config import (
     TENANT_DAILY_CAP_USD,
     ServerTokenBinding,
 )
-from .errors import AuthenticationError, FluxAPIError, UnsupportedFeatureError
+from .errors import AuthenticationError, BudgetExceededError, FluxAPIError, UnsupportedFeatureError
 from .flux import _PROVIDER_ENV_VARS, Flux, _routing_telemetry, make_flux
 from .provider_caller import (
     STREAMING_NATIVE_PROVIDERS,
@@ -1042,6 +1042,8 @@ async def chat_completions(
         # bridge (e.g. response_format routed to Anthropic) — a caller error,
         # not an upstream failure, so 400 rather than the 502 below.
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BudgetExceededError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     except FluxAPIError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 

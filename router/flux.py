@@ -542,6 +542,15 @@ class Flux:
                 self._engine._budget.release_reservation(reservation_id)
                 raise
 
+            # Typed chains optimize the first retry for the failure mode, but
+            # they must not be the only retries. A lowest-tier model can have
+            # no same-tier rate-limit alternative; append the generic chain so
+            # it can still fail over to the next affordable tier/provider.
+            for fallback_model in decision.fallback_chain:
+                if fallback_model.model_id not in seen_ids:
+                    models_to_try.append(fallback_model)
+                    seen_ids.add(fallback_model.model_id)
+
             self._engine._circuit_breaker.record_failure(model.provider)
             log.warning(
                 "flux_complete_failed_trying_fallback",
@@ -552,6 +561,10 @@ class Flux:
             )
             attempts += 1
 
+        if last_error in {"budget_exceeded", "daily_cap_exceeded"}:
+            raise err.BudgetExceededError(
+                "No eligible model fits within the configured spend budget"
+            )
         raise err.FluxAPIError(
             f"All models failed after {attempts} attempt(s). Last error: {last_error}"
         )

@@ -817,23 +817,20 @@ class TestPlanBudgetEnforcement:
         report = budget.get_savings_report(user)
         assert report["record_count"] == 3
 
-    def test_budget_pressure_degrades_to_cheapest_tier(self, client, monkeypatch):
+    def test_budget_pressure_stops_before_paid_dispatch(self, client, monkeypatch):
         from router import budget_tracker as bt
 
         # Shrink pro_plan's cap to near-zero so any real request cost blows
-        # through it immediately — forces route()'s tier walk-down to the
-        # cheapest (free-tier) model on the very first call.
+        # through it immediately. No provider is literally zero-cost, so the
+        # request must stop before dispatch instead of pretending a paid call
+        # is free or surfacing the failure as an upstream 502.
         monkeypatch.setitem(bt.BUDGET_LIMITS, "pro_plan", {"daily": 1e-9, "monthly": 1e-9})
 
         body = _body()
         body["user"] = "plan-budget-pressured-user"
         resp = client.post("/v1/chat/completions", json=body)
-        assert resp.status_code == 200
-
-        registry = server._flux._engine._registry
-        chosen = registry.get_model(resp.headers["x-flux-model"])
-        assert chosen is not None
-        assert chosen.tier == "free"
+        assert resp.status_code == 429
+        assert "spend budget" in resp.json()["detail"]
 
 
 class TestFallbackChain:

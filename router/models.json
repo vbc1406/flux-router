@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-08-08",
+  "last_updated": "2026-08-11",
   "models": [
     {
       "provider": "groq",
@@ -44,14 +44,14 @@
     },
     {
       "provider": "mistral",
-      "model_id": "mistral-medium-3",
-      "provider_model_id": "mistral-medium-2505",
-      "display_name": "Mistral Medium 3",
+      "model_id": "mistral-medium-3.5",
+      "provider_model_id": "mistral-medium-3-5",
+      "display_name": "Mistral Medium 3.5",
       "tier": "mid",
-      "cost_per_1k_input": 0.0004,
-      "cost_per_1k_output": 0.002,
-      "max_context_window": 128000,
-      "max_output_tokens": 32768,
+      "cost_per_1k_input": 0.0015,
+      "cost_per_1k_output": 0.0075,
+      "max_context_window": 256000,
+      "max_output_tokens": 65536,
       "capabilities": [
         "function_calling"
       ],
@@ -89,8 +89,9 @@
       "model_id": "mistral-small-latest",
       "display_name": "Mistral Small (free)",
       "tier": "free",
-      "cost_per_1k_input": 0.0,
-      "cost_per_1k_output": 0.0,
+      "is_available": false,
+      "cost_per_1k_input": 0.00015,
+      "cost_per_1k_output": 0.0006,
       "max_context_window": 128000,
       "max_output_tokens": 32768,
       "capabilities": [],
@@ -128,10 +129,10 @@
       "provider_model_id": "openai/gpt-oss-20b",
       "display_name": "GPT-OSS 20B (Groq free)",
       "tier": "free",
-      "cost_per_1k_input": 0.0,
-      "cost_per_1k_output": 0.0,
+      "cost_per_1k_input": 0.000075,
+      "cost_per_1k_output": 0.0003,
       "max_context_window": 131072,
-      "max_output_tokens": 32768,
+      "max_output_tokens": 65536,
       "capabilities": [],
       "supports_streaming": true,
       "avg_latency_ms": 300,
@@ -169,7 +170,7 @@
       "cost_per_1k_input": 0.001,
       "cost_per_1k_output": 0.005,
       "max_context_window": 200000,
-      "max_output_tokens": 8192,
+      "max_output_tokens": 65536,
       "capabilities": [
         "vision",
         "function_calling"
@@ -216,7 +217,7 @@
       "cost_per_1k_input": 0.00025,
       "cost_per_1k_output": 0.002,
       "max_context_window": 400000,
-      "max_output_tokens": 16384,
+      "max_output_tokens": 128000,
       "capabilities": [
         "vision",
         "function_calling"
@@ -310,7 +311,7 @@
       "cost_per_1k_input": 0.00025,
       "cost_per_1k_output": 0.0015,
       "max_context_window": 1048576,
-      "max_output_tokens": 8192,
+      "max_output_tokens": 65536,
       "capabilities": [
         "vision"
       ],
@@ -351,7 +352,7 @@
       "cost_per_1k_input": 0.003,
       "cost_per_1k_output": 0.015,
       "max_context_window": 1000000,
-      "max_output_tokens": 8192,
+      "max_output_tokens": 64000,
       "capabilities": [
         "vision",
         "function_calling"
@@ -398,7 +399,7 @@
       "cost_per_1k_input": 0.00125,
       "cost_per_1k_output": 0.01,
       "max_context_window": 400000,
-      "max_output_tokens": 16384,
+      "max_output_tokens": 128000,
       "capabilities": [
         "vision",
         "function_calling"
@@ -492,7 +493,7 @@
       "cost_per_1k_input": 0.0005,
       "cost_per_1k_output": 0.003,
       "max_context_window": 1048576,
-      "max_output_tokens": 8192,
+      "max_output_tokens": 65536,
       "capabilities": [
         "vision",
         "function_calling"
@@ -534,7 +535,7 @@
       "cost_per_1k_input": 0.00125,
       "cost_per_1k_output": 0.01,
       "max_context_window": 1048576,
-      "max_output_tokens": 8192,
+      "max_output_tokens": 65536,
       "capabilities": [
         "vision",
         "function_calling"
@@ -575,8 +576,8 @@
       "tier": "premium",
       "cost_per_1k_input": 0.005,
       "cost_per_1k_output": 0.025,
-      "max_context_window": 200000,
-      "max_output_tokens": 16000,
+      "max_context_window": 1000000,
+      "max_output_tokens": 128000,
       "capabilities": [
         "vision",
         "function_calling"
@@ -717,8 +718,8 @@
       "tier": "premium",
       "cost_per_1k_input": 0.002,
       "cost_per_1k_output": 0.012,
-      "max_context_window": 2000000,
-      "max_output_tokens": 16384,
+      "max_context_window": 1048576,
+      "max_output_tokens": 65536,
       "capabilities": [
         "vision",
         "function_calling"
@@ -757,8 +758,8 @@
       "model_id": "o3",
       "display_name": "o3",
       "tier": "premium",
-      "cost_per_1k_input": 0.01,
-      "cost_per_1k_output": 0.04,
+      "cost_per_1k_input": 0.002,
+      "cost_per_1k_output": 0.008,
       "max_context_window": 200000,
       "max_output_tokens": 100000,
       "capabilities": [
@@ -853,8 +854,8 @@
       "tier": "premium",
       "cost_per_1k_input": 0.01,
       "cost_per_1k_output": 0.05,
-      "max_context_window": 200000,
-      "max_output_tokens": 8192,
+      "max_context_window": 1000000,
+      "max_output_tokens": 128000,
       "capabilities": [
         "vision",
         "function_calling"
@@ -901,7 +902,7 @@
       "cost_per_1k_input": 0.003,
       "cost_per_1k_output": 0.015,
       "max_context_window": 1000000,
-      "max_output_tokens": 16384,
+      "max_output_tokens": 128000,
       "capabilities": [
         "vision",
         "function_calling"
@@ -947,8 +948,8 @@
       "tier": "premium",
       "cost_per_1k_input": 0.005,
       "cost_per_1k_output": 0.025,
-      "max_context_window": 200000,
-      "max_output_tokens": 16000,
+      "max_context_window": 1000000,
+      "max_output_tokens": 128000,
       "capabilities": [
         "vision",
         "function_calling"
@@ -996,7 +997,7 @@
       "cost_per_1k_input": 0.00015,
       "cost_per_1k_output": 0.0006,
       "max_context_window": 131072,
-      "max_output_tokens": 32768,
+      "max_output_tokens": 65536,
       "capabilities": [],
       "supports_streaming": true,
       "avg_latency_ms": 350,
@@ -1035,7 +1036,7 @@
       "cost_per_1k_input": 0.0006,
       "cost_per_1k_output": 0.003,
       "max_context_window": 131072,
-      "max_output_tokens": 8192,
+      "max_output_tokens": 16384,
       "capabilities": [],
       "supports_streaming": true,
       "avg_latency_ms": 300,
