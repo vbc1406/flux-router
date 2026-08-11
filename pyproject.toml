@@ -39,7 +39,7 @@ Changelog = "https://github.com/vbc1406/flux/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.0,<9.0",
+    "pytest>=9.0.3,<10.0",
     "pytest-cov>=4.0,<6.0",
     "pytest-timeout>=2.0,<3.0",
     "mypy>=1.0,<2.0",
