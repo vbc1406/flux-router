@@ -1125,6 +1125,22 @@ async def chat_completions(
     return JSONResponse(content=response_body, headers=headers)
 
 
+def _is_provider_auth_failure(exc: BaseException) -> bool:
+    """True for upstream provider auth failures, however they reach us.
+
+    Flux._call_model() translates a ProviderCallError with status_code in
+    (401, 403) into AuthenticationError before it ever reaches server.py —
+    but _stream_completion()'s native-streaming branch calls
+    stream_openai_compat_lines() directly, bypassing that translation, so a
+    raw ProviderCallError(401/403) can also show up here. Both shapes must be
+    recognized so the streaming and non-streaming client-visible errors stay
+    equivalent (see the non-streaming AuthenticationError handler above).
+    """
+    return isinstance(exc, AuthenticationError) or (
+        isinstance(exc, ProviderCallError) and exc.status_code in (401, 403)
+    )
+
+
 async def _stream_completion(
     routing_request: RoutingRequest,
     decision: RoutingDecision,
@@ -1341,7 +1357,7 @@ async def _stream_completion(
         # a rejected upstream API key is our misconfiguration, so it's logged
         # with the provider detail and reported generically here rather than
         # echoing "HTTP 403 from <provider>" into the client's stream.
-        if isinstance(exc, AuthenticationError):
+        if _is_provider_auth_failure(exc):
             log.error(
                 "provider_authentication_failed",
                 cid=routing_request.correlation_id,

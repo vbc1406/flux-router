@@ -144,6 +144,164 @@ class TestStreaming:
         assert body.strip().endswith("data: [DONE]")
 
 
+class TestStreamingProviderAuthSanitization:
+    """Regression coverage for vuln-0001: the native-streaming branch of
+    _stream_completion() calls stream_openai_compat_lines() directly, which
+    raises a raw ProviderCallError on an upstream 401/403 instead of the
+    AuthenticationError that Flux._call_model() would translate it into. That
+    raw exception used to be serialized straight into the SSE stream via
+    str(exc), leaking the upstream provider name and status (e.g. "HTTP 401
+    from openai") to the client even though the non-streaming path sanitizes
+    the same failure. See server._is_provider_auth_failure()."""
+
+    def _failing_stream(self, exc: BaseException):
+        async def _stream(model, request, api_key):
+            raise exc
+            yield b""  # pragma: no cover - unreachable; keeps this an async generator
+
+        return _stream
+
+    @pytest.mark.parametrize("status", [401, 403])
+    def test_provider_call_error_401_403_sanitized(self, client, monkeypatch, status):
+        from router.provider_caller import ProviderCallError
+
+        monkeypatch.setattr(
+            server,
+            "stream_openai_compat_lines",
+            self._failing_stream(ProviderCallError(f"HTTP {status} from openai", status)),
+        )
+        resp = client.post("/v1/chat/completions", json=_body("gpt-5-mini", stream=True))
+        assert resp.status_code == 200
+        assert "Upstream provider authentication failed" in resp.text
+        lowered = resp.text.lower()
+        assert "openai" not in lowered
+        assert "401" not in resp.text
+        assert "403" not in resp.text
+
+    def test_authentication_error_still_sanitized_in_streaming_path(self, client, monkeypatch):
+        monkeypatch.setattr(
+            server,
+            "stream_openai_compat_lines",
+            self._failing_stream(AuthenticationError("HTTP 403 from google")),
+        )
+        resp = client.post("/v1/chat/completions", json=_body("gpt-5-mini", stream=True))
+        assert resp.status_code == 200
+        assert "Upstream provider authentication failed" in resp.text
+        assert "google" not in resp.text.lower()
+        assert "403" not in resp.text
+
+    def test_streaming_and_non_streaming_auth_messages_match(
+        self, client, monkeypatch, _mock_call_model
+    ):
+        from router.provider_caller import ProviderCallError
+
+        monkeypatch.setattr(
+            server,
+            "stream_openai_compat_lines",
+            self._failing_stream(ProviderCallError("HTTP 401 from openai", 401)),
+        )
+        stream_resp = client.post("/v1/chat/completions", json=_body("gpt-5-mini", stream=True))
+        stream_error = None
+        for line in stream_resp.text.splitlines():
+            if line.startswith("data: ") and '"error"' in line:
+                import json as _json
+
+                stream_error = _json.loads(line[len("data: ") :])["error"]
+                break
+        assert stream_error is not None
+
+        _mock_call_model.side_effect = AuthenticationError("HTTP 401 from openai")
+        non_stream_resp = client.post("/v1/chat/completions", json=_body("gpt-4o", stream=False))
+        assert non_stream_resp.status_code == 502
+        non_stream_error = non_stream_resp.json()["detail"]
+
+        assert stream_error == non_stream_error == "Upstream provider authentication failed"
+
+    def test_reservation_release_and_circuit_breaker_failure_recorded_once(
+        self, client, monkeypatch
+    ):
+        from router.provider_caller import ProviderCallError
+
+        monkeypatch.setattr(
+            server,
+            "stream_openai_compat_lines",
+            self._failing_stream(ProviderCallError("HTTP 401 from openai", 401)),
+        )
+
+        release_calls = []
+        real_release = server._flux._engine._budget.release_reservation
+
+        def counting_release(reservation_id):
+            release_calls.append(reservation_id)
+            return real_release(reservation_id)
+
+        monkeypatch.setattr(server._flux._engine._budget, "release_reservation", counting_release)
+
+        cb = server._flux._engine._circuit_breaker
+        before_failures = cb.get_failure_count("openai")
+
+        resp = client.post("/v1/chat/completions", json=_body("gpt-5-mini", stream=True))
+        assert resp.status_code == 200
+
+        assert len(release_calls) == 1
+        assert cb.get_failure_count("openai") == before_failures + 1
+
+    def test_run_budget_reservation_released_exactly_once(self, client, monkeypatch):
+        from router.provider_caller import ProviderCallError
+
+        monkeypatch.setattr(
+            server,
+            "stream_openai_compat_lines",
+            self._failing_stream(ProviderCallError("HTTP 401 from openai", 401)),
+        )
+
+        rb = server._flux._engine._run_budget
+        release_calls = []
+        real_release = rb.release_reservation
+
+        def counting_release(run_id, tenant_id=None):
+            release_calls.append(run_id)
+            return real_release(run_id, tenant_id=tenant_id)
+
+        monkeypatch.setattr(rb, "release_reservation", counting_release)
+
+        run_id = "auth-fail-run"
+        resp = client.post(
+            "/v1/chat/completions",
+            json=_body("gpt-5-mini", stream=True),
+            headers={"X-Flux-Run-Id": run_id},
+        )
+        assert resp.status_code == 200
+        assert release_calls.count(run_id) == 1
+
+    def test_stream_terminates_after_sanitized_auth_error(self, client, monkeypatch):
+        from router.provider_caller import ProviderCallError
+
+        monkeypatch.setattr(
+            server,
+            "stream_openai_compat_lines",
+            self._failing_stream(ProviderCallError("HTTP 401 from openai", 401)),
+        )
+        resp = client.post("/v1/chat/completions", json=_body("gpt-5-mini", stream=True))
+        assert resp.status_code == 200
+        frames = [f for f in resp.text.split("\n\n") if f.strip()]
+        assert frames[-1] == "data: [DONE]"
+        assert sum(1 for f in frames if f == "data: [DONE]") == 1
+
+    def test_unrelated_provider_error_not_misclassified_as_auth_failure(self, client, monkeypatch):
+        from router.provider_caller import ProviderCallError
+
+        monkeypatch.setattr(
+            server,
+            "stream_openai_compat_lines",
+            self._failing_stream(ProviderCallError("HTTP 500 from openai", 500)),
+        )
+        resp = client.post("/v1/chat/completions", json=_body("gpt-5-mini", stream=True))
+        assert resp.status_code == 200
+        assert "Upstream provider authentication failed" not in resp.text
+        assert "HTTP 500 from openai" in resp.text
+
+
 class TestAuth:
     def test_no_token_configured_allows_request(self, client):
         assert server.SERVER_REQUIRE_AUTH is False
