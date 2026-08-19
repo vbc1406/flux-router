@@ -8,6 +8,7 @@ to expect `max_tokens`.
 
 from __future__ import annotations
 
+import asyncio
 import io
 
 import pytest
@@ -108,6 +109,58 @@ def test_mistral_uses_max_tokens(captured):
     body = captured["body"]
     assert body["max_tokens"] == 256
     assert "max_completion_tokens" not in body
+
+
+def test_post_json_sends_a_user_agent(monkeypatch):
+    """Regression test: _post_json used to send no User-Agent header, which
+    left every outbound call using urllib's default ("Python-urllib/3.x").
+    Groq's edge (Cloudflare bot-fight mode) blocks that default with a flat
+    403 ("error code: 1010") regardless of key validity — reproduced live
+    and confirmed fixed by adding a real User-Agent. Assert it's present and
+    not the urllib default on every call, not just Groq's, since this is a
+    general robustness fix."""
+    captured_request: dict = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured_request["headers"] = dict(req.header_items())
+        return io.BytesIO(b'{"ok": true}')
+
+    monkeypatch.setattr(provider_caller.urllib.request, "urlopen", fake_urlopen)
+    provider_caller._post_json(
+        "https://provider.test/v1/chat/completions",
+        {"Authorization": "Bearer test"},
+        {"model": "test"},
+        "test-provider",
+    )
+    ua = captured_request["headers"].get("User-agent")
+    assert ua is not None
+    assert "python-urllib" not in ua.lower()
+
+
+def test_streaming_call_sends_a_user_agent(monkeypatch):
+    """Same regression as above, for the separate header dict built in
+    stream_openai_compat_lines — it doesn't go through _post_json, so it
+    needed (and now has) its own User-Agent."""
+    captured_request: dict = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured_request["headers"] = dict(req.header_items())
+        return io.BytesIO(b"data: [DONE]\n")
+
+    monkeypatch.setattr(provider_caller.urllib.request, "urlopen", fake_urlopen)
+    model = _model("groq", "gpt-oss-20b")
+
+    async def _consume():
+        gen = provider_caller.stream_openai_compat_lines(model, _request(), "test-key")
+        try:
+            await gen.__anext__()
+        finally:
+            await gen.aclose()
+
+    asyncio.run(_consume())
+    ua = captured_request["headers"].get("User-agent")
+    assert ua is not None
+    assert "python-urllib" not in ua.lower()
 
 
 @pytest.mark.parametrize("payload", [b"\xff\xfe", b"not-json", b"[]"])

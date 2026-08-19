@@ -81,3 +81,4 @@ _internal_reviews/
 *.db
 *.db-shm
 *.db-wal
+.flux_test_token

@@ -344,6 +344,14 @@ class ProviderCallError(Exception):
 
 # ── Low-level urllib helper ──────────────────────────────────────────────────
 
+# Bugfix: urllib's default User-Agent ("Python-urllib/3.x") gets a blanket
+# 403 from Groq's edge (Cloudflare bot-fight mode, error code 1010) — every
+# real Flux->Groq call failed with this, misread as a key/permissions problem
+# during live evaluation until isolated by comparing identical requests with
+# and without a UA header. Anthropic/OpenAI/Google/Mistral don't enforce this,
+# but a real UA is good practice for all providers, not just a Groq patch.
+_USER_AGENT = "flux-router/1.0.0"
+
 
 def _post_json(
     url: str,
@@ -366,6 +374,7 @@ def _post_json(
     # 🔒 SECURITY-CRITICAL: defense-in-depth against B310 / scheme injection
     if not url.startswith("https://"):
         raise ProviderCallError("Invalid URL scheme; only https allowed", http_status=None)
+    headers = {**headers, "User-Agent": _USER_AGENT}
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
@@ -682,6 +691,7 @@ def _open_openai_compat_stream(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
+        "User-Agent": _USER_AGENT,
     }
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")

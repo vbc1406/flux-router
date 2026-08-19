@@ -51,7 +51,14 @@ class RunConfig:
     n: int = 50
     mode: str = "mock"  # "mock" | "live"
     source: str = "fixture"  # "fixture" | "hub"
-    judge_model: str = "claude-opus-4-7"
+    # Was "claude-opus-4-7" — that model is real and callable; the actual bug
+    # was Judge.score() hardcoding temperature=0.0, which that (and other
+    # reasoning-enabled) Anthropic models reject live (see llm_judge.py's
+    # Judge.score for the full diagnosis and fix). Left pinned at
+    # claude-sonnet-4-6 (also the default_anthropic baseline in
+    # strategies.py) since it's a proven-good judge and there's no reason to
+    # re-churn the default now that the general temperature bug is fixed.
+    judge_model: str = "claude-sonnet-4-6"
     allow_code_exec: bool = False
     seed: str = "flux-eval"
     cache_dir: str | None = ".eval_cache"

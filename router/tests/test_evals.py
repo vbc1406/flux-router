@@ -335,6 +335,90 @@ class TestJudge:
         score = _run(judge.score(sample, _completion("some answer")))
         assert score == 0.7
 
+    def test_judge_call_failure_returns_none_not_zero(self, monkeypatch):
+        """Regression test: a failed judge *call* (bad request params, auth,
+        network — anything raising ProviderCallError) used to be scored as
+        0.0, indistinguishable from a genuine low-quality answer. A live run
+        with the (real, callable) claude-opus-4-7 judge model silently
+        produced a uniform 0.00 across every judge-graded sample because
+        Judge.score() hardcoded temperature=0.0, which that model's live API
+        rejects with a 400 (see the fix comment in llm_judge.py's
+        Judge.score) — masking the real error as a fake low quality score.
+        Per this module's own contract (graders/__init__.py docstring),
+        "could not be graded" is None, not 0.0 — Judge.score() and
+        grade_llm_judge() must surface call failures as None so callers skip
+        them instead of averaging in a fake zero."""
+        from router.evals.graders.llm_judge import Judge, grade_llm_judge
+        from router.provider_caller import ProviderCallError
+
+        async def fake_call_provider(model, request, api_key):
+            raise ProviderCallError("HTTP 400 from anthropic", http_status=400)
+
+        monkeypatch.setattr("router.provider_caller.call_provider", fake_call_provider)
+        sample = load_dataset("mtbench", n=1)[0]
+        model = ModelRegistry().most_expensive_model()
+        judge = Judge(model, api_key="fake-key")
+
+        score = _run(judge.score(sample, _completion("some answer")))
+        assert score is None
+
+        quality, correct = _run(
+            grade_llm_judge(sample, _completion("some answer", simulated=False), judge=judge)
+        )
+        assert quality is None and correct is None
+
+    def test_judge_call_failure_not_cached_as_a_false_zero(self, monkeypatch, tmp_path):
+        """A cached failure must replay as None on a later run too — not get
+        frozen in as a permanent fake 0.0 score."""
+        from router.evals.cache import DiskCache
+        from router.evals.graders.llm_judge import Judge
+        from router.provider_caller import ProviderCallError
+
+        calls = {"n": 0}
+
+        async def failing_call_provider(model, request, api_key):
+            calls["n"] += 1
+            raise ProviderCallError("HTTP 400 from anthropic", http_status=400)
+
+        monkeypatch.setattr("router.provider_caller.call_provider", failing_call_provider)
+        sample = load_dataset("mtbench", n=1)[0]
+        model = ModelRegistry().most_expensive_model()
+        cache = DiskCache(str(tmp_path / "cache"))
+        judge = Judge(model, api_key="fake-key", cache=cache)
+        completion = _completion("some answer")
+
+        first = _run(judge.score(sample, completion))
+        second = _run(judge.score(sample, completion))
+        assert first is None and second is None
+        assert calls["n"] == 1  # second call served from cache, not re-dispatched
+
+    def test_judge_does_not_set_temperature(self, monkeypatch):
+        """Regression test for the actual root cause of the uniform-0.00 bug:
+        Judge.score() used to hardcode temperature=0.0 on its RoutingRequest.
+        Several real Anthropic models (any with extended thinking on by
+        default, e.g. claude-opus-4-7/claude-opus-5/claude-sonnet-5) reject
+        any explicit non-default temperature live with a 400
+        ("`temperature` is deprecated for this model"), while omitting the
+        field works everywhere. Assert the judge never sets it, so this
+        can't silently regress for any --judge-model choice."""
+        from router.evals.graders.llm_judge import Judge
+        from router.provider_caller import ProviderResult
+
+        captured = {}
+
+        async def fake_call_provider(model, request, api_key):
+            captured["temperature"] = request.temperature
+            return ProviderResult(
+                text="9", input_tokens=10, output_tokens=1, usage_source="provider"
+            )
+
+        monkeypatch.setattr("router.provider_caller.call_provider", fake_call_provider)
+        sample = load_dataset("mtbench", n=1)[0]
+        model = ModelRegistry().most_expensive_model()
+        judge = Judge(model, api_key="fake-key")
+        _run(judge.score(sample, _completion("some answer")))
+        assert captured["temperature"] is None
+
 
 # ── Mock completion determinism ────────────────────────────────────────────
 
