@@ -52,7 +52,9 @@ class Judge:
             cache_key = make_key("judge", self._model.model_id, sample.id, completion.text)
             hit = self._cache.get(cache_key)
             if hit is not None:
-                return hit["score"]  # None (call failed) or a float, never cast blindly
+                # None (call failed) or a float, never cast blindly
+                cached_score: float | None = hit["score"]
+                return cached_score
 
         prompt = _RUBRIC.format(prompt=sample.prompt, answer=completion.text)
         # Bugfix: previously hardcoded temperature=0.0 for deterministic
