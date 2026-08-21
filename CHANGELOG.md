@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.1.0-beta.1] - 2026-08-22
+## [1.1.0b1] - 2026-08-22
 
 ### Security
 - The loopback gate on spend and configuration data now checks the `Host` header as well as the peer address, closing a DNS-rebinding path. A page the operator visits could re-point its own hostname at `127.0.0.1` and have the operator's browser fetch `/v1/stats/*` and `/dashboard`: the peer address was loopback so the gate passed, and because the page's origin *was* that host and port the responses were same-origin and fully readable, with no CORS step involved. The `Host` header is the part the attacker cannot forge. `FLUX_ALLOWED_HOSTS` (comma-separated) names extra hosts for a same-host reverse proxy running deliberately without a token.
