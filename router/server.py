@@ -252,12 +252,22 @@ def _tokens_equal(presented: str, expected: str) -> bool:
     return hmac.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
 
 
+# The one binding handed to every holder of the legacy single shared token.
+# A module-level singleton so read paths can recognize it by identity (`is`):
+# write paths treat it as a real immutable tenant (a caller can't rotate
+# budget buckets or forge identities by sending X-Flux-Tenant-Id), while
+# _read_tenant_scope() below leaves reads unscoped for it. Recognizing it by
+# tenant_id string instead would let a FLUX_SERVER_TOKENS entry that happens
+# to name its tenant "shared-token" read every tenant's data.
+_SHARED_TOKEN_BINDING = ServerTokenBinding(tenant_id="shared-token", plan="pro_plan")
+
+
 def _check_auth(authorization: str | None) -> ServerTokenBinding | None:
     """Validate the bearer token and return the ServerTokenBinding (tenant_id
     + plan) it's bound to, if any (FLUX_SERVER_TOKENS multi-tenant mode).
     None means authentication is disabled. A legacy single shared token is
-    bound to one immutable synthetic tenant so callers cannot forge tenant
-    identities, enumerate another tenant's usage, or rotate budget buckets.
+    bound to one immutable synthetic tenant (_SHARED_TOKEN_BINDING) so callers
+    cannot forge tenant identities or rotate budget buckets.
     """
     if not SERVER_REQUIRE_AUTH:
         return None
@@ -290,7 +300,26 @@ def _check_auth(authorization: str | None) -> ServerTokenBinding | None:
     # so this fails closed rather than raising TypeError inside compare_digest.
     if _SERVER_TOKEN is None or not _tokens_equal(token, _SERVER_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid bearer token")
-    return ServerTokenBinding(tenant_id="shared-token", plan="pro_plan")
+    return _SHARED_TOKEN_BINDING
+
+
+def _read_tenant_scope(binding: ServerTokenBinding | None) -> str | None:
+    """Tenant filter for the read/reporting surface (/v1/usage, /v1/stats/*,
+    /metrics): the bound tenant in FLUX_SERVER_TOKENS multi-tenant mode, None
+    (unscoped) otherwise.
+
+    The shared-token binding is deliberately NOT a read scope. It exists to
+    pin the *write* side — budget buckets and recorded identity — to one
+    synthetic tenant; rows recorded before that hardening (or by the library
+    sharing the db) carry real tenant_ids, and the single operator holding
+    the shared token is documented as "authenticated as every tenant".
+    Scoping reads to "shared-token" blanked the dashboard and /v1/usage for
+    exactly that operator, which is how the docker CI restart-persistence
+    check caught it.
+    """
+    if binding is None or binding is _SHARED_TOKEN_BINDING:
+        return None
+    return binding.tenant_id
 
 
 async def _read_bounded_body(request: Request) -> bytes:
@@ -582,8 +611,9 @@ async def get_usage(
     """
     _refuse_remote_spend_data(request)
     binding = _check_auth(authorization)
-    if binding is not None:
-        tenant_id = binding.tenant_id
+    bound_tenant = _read_tenant_scope(binding)
+    if bound_tenant is not None:
+        tenant_id = bound_tenant
     limit = max(1, min(limit, ATTRIBUTION_USAGE_PAGE_MAX))
     offset = max(0, offset)
     records, total = await asyncio.to_thread(
@@ -675,7 +705,7 @@ def _stats_scope(request: Request, authorization: str | None) -> str | None:
                 "These endpoints require the built-in SqliteUsageStore."
             ),
         )
-    return binding.tenant_id if binding is not None else None
+    return _read_tenant_scope(binding)
 
 
 @app.get("/v1/stats/summary")
@@ -895,7 +925,7 @@ async def metrics(
     _refuse_remote_spend_data(request)
     binding = _check_auth(authorization)
     body = _flux._engine._attribution.render_prometheus(
-        tenant_filter=binding.tenant_id if binding is not None else None
+        tenant_filter=_read_tenant_scope(binding)
     )
     return Response(content=body, media_type="text/plain; version=0.0.4")
 

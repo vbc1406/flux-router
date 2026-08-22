@@ -312,6 +312,77 @@ class TestTenantScoping:
         assert stats_client.get("/v1/stats/summary").status_code == 401
 
 
+class TestSharedTokenReadsAreUnscoped:
+    """The legacy single shared token pins the WRITE side to one synthetic
+    tenant ("shared-token") so budget buckets can't be rotated — but its
+    holder is the single operator, documented as authenticated as every
+    tenant. Reads must span all tenants: scoping them to the synthetic
+    tenant blanked the dashboard, /v1/usage, and /metrics for every row
+    carrying a real tenant_id (caught by the docker restart-persistence CI
+    step, which seeds tenant "ci" and reads back with the shared token)."""
+
+    @pytest.fixture
+    def shared_token(self, monkeypatch):
+        monkeypatch.setattr(server, "SERVER_TOKENS", {})
+        monkeypatch.setattr(server, "SERVER_REQUIRE_AUTH", True)
+        monkeypatch.setattr(server, "_SERVER_TOKEN", "tok-shared")
+        return {"Authorization": "Bearer tok-shared"}
+
+    def test_summary_spans_every_tenant(self, stats_client, store, shared_token):
+        store.record(_rec(tenant="acme", cost=0.01))
+        store.record(_rec(tenant="ci", cost=0.05, run_id="run-2"))
+
+        resp = stats_client.get("/v1/stats/summary?window=all", headers=shared_token)
+        assert resp.status_code == 200
+        assert resp.json()["requests"] == 2
+        assert resp.json()["total_cost_usd"] == pytest.approx(0.06)
+
+    def test_usage_lists_every_tenant_and_honors_the_filter_param(
+        self, stats_client, store, shared_token
+    ):
+        store.record(_rec(tenant="acme", cost=0.01))
+        store.record(_rec(tenant="ci", cost=0.05, run_id="run-2"))
+
+        body = stats_client.get("/v1/usage", headers=shared_token).json()
+        assert body["total"] == 2
+
+        # The operator can still narrow to one tenant on the query string —
+        # only FLUX_SERVER_TOKENS mode overrides ?tenant_id=.
+        body = stats_client.get("/v1/usage?tenant_id=ci", headers=shared_token).json()
+        assert body["total"] == 1
+        assert body["data"][0]["tenant_id"] == "ci"
+
+    def test_metrics_render_every_tenant(self, stats_client, store, shared_token, monkeypatch):
+        attribution = CostAttribution(store=store)
+        monkeypatch.setattr(server._flux._engine, "_attribution", attribution)
+        attribution.record(
+            tenant_id="acme", run_id="r1", task_type="t", step_type="s",
+            model_id="m1", cost_usd=0.01,
+        )
+
+        body = stats_client.get("/metrics", headers=shared_token).text
+        assert 'tenant_id="acme"' in body
+
+    def test_multi_tenant_mode_still_scopes(self, stats_client, store, monkeypatch):
+        # Guard against the fix over-reaching: a FLUX_SERVER_TOKENS binding —
+        # even one whose tenant is literally named "shared-token" — stays
+        # scoped to its own tenant.
+        monkeypatch.setattr(
+            server,
+            "SERVER_TOKENS",
+            {"tok-st": ServerTokenBinding(tenant_id="shared-token", plan="pro_plan")},
+        )
+        monkeypatch.setattr(server, "SERVER_REQUIRE_AUTH", True)
+        store.record(_rec(tenant="acme", cost=0.01))
+        store.record(_rec(tenant="shared-token", cost=0.05, run_id="run-2"))
+
+        resp = stats_client.get(
+            "/v1/stats/summary?window=all", headers={"Authorization": "Bearer tok-st"}
+        )
+        assert resp.json()["requests"] == 1
+        assert resp.json()["total_cost_usd"] == pytest.approx(0.05)
+
+
 class TestConfigEndpointLeaksNoSecrets:
     """GET /v1/stats/config renders on the dashboard — it must never echo a
     secret. See the SECURITY note on server.stats_config()."""
