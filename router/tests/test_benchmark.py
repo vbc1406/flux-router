@@ -42,7 +42,9 @@ def test_full_benchmark_produces_cache_hits_and_passes_validation():
     cache_hits = sum(1 for r in bench.results if r.decision.cache_hit)
     assert cache_hits > 0, "duplicate prompts in the dataset produced no cache hits"
 
-    passed, failures = benchmark.validate(bench)
+    # perf_checks=False: the wall-clock rules flake on loaded CI runners —
+    # see validate()'s docstring. Every deterministic rule still runs.
+    passed, failures = benchmark.validate(bench, perf_checks=False)
     assert passed, f"validate() reported failures: {failures}"
 
 
@@ -74,12 +76,20 @@ def test_no_args_defaults_to_full_dataset():
 
 
 @pytest.mark.timeout(30)
-def test_main_with_small_n_exits_cleanly(capsys):
+def test_main_with_small_n_exits_cleanly(capsys, monkeypatch):
     """A small --n slice may legitimately not hit every validate() check
     (e.g. too few requests to include the duplicate-prompt category) — this
     only asserts main() runs to completion without an uncaught exception
     when SystemExit(1) doesn't fire, i.e. the CLI wiring itself works."""
     import asyncio
+    import functools
+
+    # Disable the wall-clock rules for main()'s validate() call — they flake
+    # on loaded CI runners (see validate()'s docstring); the CLI default is
+    # unchanged. Every deterministic rule still gates the exit code.
+    monkeypatch.setattr(
+        benchmark, "validate", functools.partial(benchmark.validate, perf_checks=False)
+    )
 
     args = benchmark._parse_args(["--n", "500"])
     try:

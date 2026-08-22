@@ -161,6 +161,26 @@ class TestStreamingProviderAuthSanitization:
 
         return _stream
 
+    @staticmethod
+    def _stream_errors(text: str) -> list[str]:
+        """The serialized error payloads in an SSE body.
+
+        The status-code assertions must run against these, never against the
+        whole body: ordinary chunks carry random-hex ids (chatcmpl-<uuid>)
+        and epoch `created` timestamps, either of which can contain "401" or
+        "403" by chance — `assert "403" not in resp.text` flaked on CI
+        exactly that way.
+        """
+        import json as _json
+
+        errors = []
+        for line in text.splitlines():
+            if line.startswith("data: ") and line != "data: [DONE]":
+                chunk = _json.loads(line[len("data: ") :])
+                if "error" in chunk:
+                    errors.append(_json.dumps(chunk["error"]))
+        return errors
+
     @pytest.mark.parametrize("status", [401, 403])
     def test_provider_call_error_401_403_sanitized(self, client, monkeypatch, status):
         from router.provider_caller import ProviderCallError
@@ -172,11 +192,16 @@ class TestStreamingProviderAuthSanitization:
         )
         resp = client.post("/v1/chat/completions", json=_body("gpt-5-mini", stream=True))
         assert resp.status_code == 200
-        assert "Upstream provider authentication failed" in resp.text
-        lowered = resp.text.lower()
-        assert "openai" not in lowered
-        assert "401" not in resp.text
-        assert "403" not in resp.text
+        errors = self._stream_errors(resp.text)
+        assert errors, "stream contained no error payload"
+        for err in errors:
+            assert "Upstream provider authentication failed" in err
+            assert "openai" not in err.lower()
+            assert "401" not in err
+            assert "403" not in err
+        # The raw upstream detail must not appear anywhere in the body either
+        # (word-bounded, so it can't collide with hex ids or timestamps).
+        assert f"HTTP {status} from" not in resp.text
 
     def test_authentication_error_still_sanitized_in_streaming_path(self, client, monkeypatch):
         monkeypatch.setattr(
@@ -186,9 +211,13 @@ class TestStreamingProviderAuthSanitization:
         )
         resp = client.post("/v1/chat/completions", json=_body("gpt-5-mini", stream=True))
         assert resp.status_code == 200
-        assert "Upstream provider authentication failed" in resp.text
-        assert "google" not in resp.text.lower()
-        assert "403" not in resp.text
+        errors = self._stream_errors(resp.text)
+        assert errors, "stream contained no error payload"
+        for err in errors:
+            assert "Upstream provider authentication failed" in err
+            assert "google" not in err.lower()
+            assert "403" not in err
+        assert "HTTP 403 from" not in resp.text
 
     def test_streaming_and_non_streaming_auth_messages_match(
         self, client, monkeypatch, _mock_call_model
