@@ -65,8 +65,14 @@ jobs:
         run: mypy --strict router/ --exclude '^router/tests/' || true
         continue-on-error: true
 
+      # -q -ra, not -v: with -v this step printed a line per test (1431 of
+      # them), so a failure was buried in thousands of lines of PASSED and
+      # the most eye-catching red text in the whole log belonged to the
+      # non-blocking mypy step above — which got misread as the cause of the
+      # job failure repeatedly. -q keeps the log short; -ra prints an
+      # explicit summary of every non-passing test at the end.
       - name: Run pytest
-        run: pytest router/tests/ -v --timeout=30
+        run: pytest router/tests/ -q -ra --timeout=30
 
       - name: Run eval harness smoke (mock, offline)
         run: python -m router.evals --n 5
