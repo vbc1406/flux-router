@@ -185,12 +185,34 @@ jobs:
           assert store.count() == 1, store.count()
           PY
 
+          # DEBUG: prove the row is actually on disk before we restart anything.
+          echo "--- /data before restart ---"
+          docker exec flux-persist ls -la /data
+          docker exec flux-persist python3 -c "
+          import sqlite3
+          conn = sqlite3.connect('/data/flux.db')
+          print('pre-restart row count:', conn.execute('SELECT COUNT(*) FROM usage').fetchone())
+          print('journal_mode:', conn.execute('PRAGMA journal_mode').fetchone())
+          "
+
           docker restart flux-persist
           for i in $(seq 1 30); do
             if curl -fsS localhost:8002/health >/dev/null 2>&1; then break; fi
             if [ "$i" = 30 ]; then docker logs flux-persist; exit 1; fi
             sleep 1
           done
+
+          # DEBUG: check the file on disk directly, bypassing the HTTP/app layer
+          # entirely, to tell a storage-layer loss apart from an app-layer bug.
+          echo "--- /data after restart ---"
+          docker exec flux-persist ls -la /data
+          docker exec flux-persist python3 -c "
+          import sqlite3
+          conn = sqlite3.connect('/data/flux.db')
+          print('post-restart row count (raw sqlite):', conn.execute('SELECT COUNT(*) FROM usage').fetchone())
+          print('post-restart rows:', conn.execute('SELECT * FROM usage').fetchall())
+          "
+          docker logs flux-persist
 
           REQUESTS="$(curl -fsS -H 'Authorization: Bearer ci-persist-token' \
             'localhost:8002/v1/stats/summary?window=all' \
