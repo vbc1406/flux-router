@@ -75,9 +75,20 @@ def validate_local(models: list[dict]) -> list[str]:
     return errors
 
 
-def validate_online(models: list[dict]) -> list[str]:
+def validate_online(models: list[dict]) -> tuple[list[str], list[str]]:
+    """Check catalog ids against provider docs. Returns (errors, warnings).
+
+    The split matters because this runs on a weekly cron. A model id that is
+    genuinely absent from a page we successfully read is a real catalog defect
+    and belongs in `errors` (exit 1). Failing to *fetch* someone else's website
+    -- timeout, 403, TLS hiccup, a docs URL that moved -- says nothing about our
+    catalog, and failing the build on it trains everyone to ignore a red run.
+    Those go in `warnings` and the job still passes; the affected provider is
+    simply reported as unchecked rather than silently treated as verified.
+    """
     pages: dict[str, str] = {}
     errors: list[str] = []
+    warnings: list[str] = []
     headers = {"User-Agent": "FluxCatalogValidator/1.0"}
     for provider, url in OFFICIAL_SOURCES.items():
         try:
@@ -85,7 +96,7 @@ def validate_online(models: list[dict]) -> list[str]:
             with urllib.request.urlopen(request, timeout=30) as response:
                 pages[provider] = response.read().decode("utf-8", errors="replace").lower()
         except Exception as exc:  # noqa: BLE001 - aggregate every provider failure
-            errors.append(f"{provider}: could not read official source: {exc}")
+            warnings.append(f"{provider}: could not read official source, not checked: {exc}")
 
     for model in models:
         if model.get("is_available") is False:
@@ -106,13 +117,19 @@ def validate_online(models: list[dict]) -> list[str]:
                 if documented_id.lower() in detail:
                     continue
             except Exception as exc:  # noqa: BLE001 - report aggregate result
-                errors.append(f"{provider}/{model['model_id']}: {model_url}: {exc}")
+                # Same reasoning as above: unreachable != wrong. The id was not
+                # on the index page and we could not read the detail page, so
+                # this model is unverified, not proven bad.
+                warnings.append(
+                    f"{provider}/{model['model_id']}: could not read {model_url}, "
+                    f"not checked: {exc}"
+                )
                 continue
         errors.append(
             f"{provider}/{model['model_id']}: {documented_id!r} not found on "
             f"{model_url or OFFICIAL_SOURCES[provider]}"
         )
-    return errors
+    return errors, warnings
 
 
 def main() -> int:
@@ -121,8 +138,12 @@ def main() -> int:
     args = parser.parse_args()
     models = load_models()
     errors = validate_local(models)
+    warnings: list[str] = []
     if args.online:
-        errors.extend(validate_online(models))
+        online_errors, warnings = validate_online(models)
+        errors.extend(online_errors)
+    for warning in warnings:
+        print(f"warning: {warning}", file=sys.stderr)
     if errors:
         print("Catalog validation failed:", file=sys.stderr)
         for error in errors:
@@ -130,7 +151,11 @@ def main() -> int:
         return 1
     available = sum(model.get("is_available") is not False for model in models)
     mode = "local + official-source" if args.online else "local"
-    print(f"Catalog validation passed ({mode}): {available}/{len(models)} models available")
+    suffix = f" ({len(warnings)} source(s) unreachable, not checked)" if warnings else ""
+    print(
+        f"Catalog validation passed ({mode}): "
+        f"{available}/{len(models)} models available{suffix}"
+    )
     return 0
 
 
