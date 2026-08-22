@@ -8,7 +8,7 @@ New engineer? Do this in order:
 2. Read `router/config.py` — every tunable value lives there (10 min)
 3. Read `router/schemas.py` — understand the data contracts (10 min)
 4. Read the `routing_engine.py` header comment, then skim the 13-step `route()` method (15 min)
-5. Run the tests: `pytest -v` (2 min)
+5. Run the tests: `pytest -q` (2 min)
 6. Try the keyless demo: `python -m router.demo` (5 min)
 7. Read `DEBUG.md` so you know how to diagnose problems (5 min)
 
@@ -22,6 +22,7 @@ Total: ~50 minutes before writing your first line of code.
 flux/
 ├── router/                        ← Main package (all production logic lives here)
 │   ├── __init__.py                ← Public API surface: RoutingEngine, RoutingRequest, RoutingDecision
+│   ├── __main__.py                ← `python -m router serve` entry point (delegates to cli.py)
 │   ├── config.py                  ← ALL tunable constants — the single source of truth
 │   ├── schemas.py                 ← Pydantic data models (RoutingRequest, RoutingDecision, ModelOption, …)
 │   ├── routing_engine.py          ← The brain: 13-step routing algorithm
@@ -32,45 +33,60 @@ flux/
 │   ├── flux.py                    ← High-level facade: route → call → retry → return
 │   ├── fallback_chain.py          ← Fallback chain construction + FallbackExecutor
 │   ├── cache.py                   ← LRU response cache with prompt fingerprinting
-│   ├── budget_tracker.py          ← Per-user daily/monthly spend tracking
+│   ├── budget_tracker.py          ← Per-user daily/monthly spend tracking (in-memory or Redis)
 │   ├── analytics.py               ← Append-only JSONL decision log with query API
 │   ├── circuit_breaker.py         ← Per-provider circuit breaker (open/closed/half-open)
 │   ├── context_compressor.py      ← Trim conversation history when context window is full
 │   ├── quality_scorer.py          ← Post-response heuristic quality scorer (feeds AdaptiveWeights)
 │   ├── provider_caller.py         ← HTTP callers for Anthropic / OpenAI / Google / Groq / Mistral
+│   ├── rate_limit.py              ← Per-tenant request rate limiting
 │   ├── errors.py                  ← Typed exception hierarchy (FluxAPIError and subtypes)
 │   ├── benchmark.py               ← Routing decision benchmarks
-│   ├── demo.py                    ← Standalone demo script
+│   ├── demo.py                    ← Standalone keyless demo script
+│   ├── cli.py                     ← `flux` command line entry point (`flux serve`, `flux version`)
+│   ├── _serve.py                  ← Runs in the interpreter cli.py exec's into; starts uvicorn
+│   ├── paths.py                   ← FLUX_DATA_DIR resolution and data-file naming
+│   ├── _io_utils.py               ← Atomic file writes (temp file + fsync + rename)
 │   ├── server.py                  ← OpenAI-compatible HTTP proxy (POST /v1/chat/completions); optional `[server]` extra
-│   ├── run_budget.py              ← Run-scoped budget enforcement for agent loops (Task 3)
-│   ├── prompt_cache.py            ← Cache-aware routing: tracks which provider holds a warm prefix (Task 5)
-│   ├── cascade.py                 ← Local response verifiers + cost accounting for cascade routing (Task 8)
-│   ├── attribution.py             ← Per-run/per-tenant cost attribution: SQLite usage log + Prometheus counters (Task 7)
-│   └── tests/
-│       ├── test_routing.py        ← End-to-end routing engine tests (13 change areas)
-│       ├── test_server.py         ← HTTP proxy tests (directives, passthrough, streaming, auth, body cap)
-│       ├── test_run_budget.py     ← Run-budget ladder, eviction at scale, agent-loop integration
-│       ├── test_step_type.py      ← step_type inference, STEP_TYPE_FLOORS, tool-capability filter
-│       ├── test_cache_aware_routing.py ← PromptCacheTracker + cache-stickiness routing behavior
-│       ├── test_cascade.py        ← Cascade escalation ladder, verifiers, net-savings accounting
-│       ├── test_attribution.py    ← UsageStore, cardinality-capped Prometheus counters, wiring
-│       ├── test_adaptive_guardrails.py  ← AdaptiveWeights guardrail tests (6 issue areas)
-│       ├── test_adaptive_weights.py     ← AdaptiveWeights unit tests with metrics
-│       ├── test_cache.py          ← ResponseCache + fingerprinting tests
-│       ├── test_classifier.py     ← RequestClassifier unit tests
-│       ├── test_circuit_breaker.py      ← CircuitBreaker state machine tests
-│       ├── test_context_penalty.py      ← Context window penalty tests
-│       ├── test_explainability.py       ← Verbose routing explanation tests
-│       ├── test_model_registry.py       ← ModelRegistry tests
-│       ├── test_priority_tags.py        ← routing_priority parameter tests
-│       ├── test_smart_retry.py          ← Retry and fallback tests
-│       └── test_sticky_model.py         ← Conversation sticky bias tests
+│   ├── run_budget.py              ← Run-scoped budget enforcement for agent loops
+│   ├── prompt_cache.py            ← Cache-aware routing: tracks which provider holds a warm prefix
+│   ├── cascade.py                 ← Local response verifiers + cost accounting for cascade routing
+│   ├── attribution.py             ← Per-run/per-tenant cost attribution: SQLite usage log + Prometheus counters
+│   ├── dashboard/                 ← Local operator console served at /dashboard (plain HTML/CSS/JS, no build step)
+│   ├── evals/                     ← Cost-vs-quality eval harness (`python -m router.evals`) — see EVALS.md
+│   │   ├── runner.py              ← Executes a dataset across strategies
+│   │   ├── strategies.py          ← flux / premium / cheapest / mid comparison arms
+│   │   ├── datasets.py            ← GSM8K / MMLU / HumanEval / MT-Bench loaders (pinned revisions)
+│   │   ├── completions.py         ← Simulated (default) and --live completion paths
+│   │   ├── report.py              ← Cost-savings % and quality-retention % rollups
+│   │   └── fixtures/              ← Offline sample data, incl. the hand-authored agentic set
+│   └── tests/                     ← One module per feature area; `conftest.py` holds shared fixtures
+│                                     and the per-test global-state resets (RPM window, circuit breaker).
+│                                     Notable: test_routing.py (engine end-to-end), test_server.py (proxy:
+│                                     directives, streaming, auth, body cap), test_stats.py (/v1/stats +
+│                                     tenant scoping), test_attribution.py (usage store), test_cli.py,
+│                                     test_provider_smoke.py (opt-in, real keys — skipped when unset).
+│
+├── scripts/
+│   ├── which_model.py             ← Interactive: type a prompt, see which model the router picks (no key needed)
+│   ├── validate_model_catalog.py  ← models.json schema + official-source id validation (CI: catalog.yml)
+│   ├── update_quality_ratings.py  ← Regenerate catalog quality ratings from benchmark data
+│   └── staging_smoke.py           ← Post-deploy checks against the staging compose stack
+│
+├── examples/
+│   ├── chat.py                    ← Interactive terminal chat through the router
+│   └── agent_loop.py              ← Multi-step agent showing run budgets + step-type routing
 │
 ├── CODEBASE_MAP.md                ← This file
+├── README.md                      ← Project overview + quick start
+├── SELF_HOSTING.md                ← Running the server: install, flags, Docker, upgrades
+├── SECURITY_ARCHITECTURE.md       ← Trust boundaries and the reasoning behind the controls
+├── OPERATIONS.md                  ← Day-2 operations: key rotation, backups, monitoring
+├── EVALS.md                       ← The cost-vs-quality harness and how to read its output
 ├── FEATURES.md                    ← How to add new features
 ├── DEBUG.md                       ← How to diagnose common problems
 ├── MIGRATIONS.md                  ← How to handle schema and config migrations
-└── README.md                      ← Project overview + quick start
+└── CHANGELOG.md                   ← Release history
 ```
 
 ---
@@ -99,8 +115,10 @@ Every value has a comment explaining what it does, why it exists, and how to tun
 
 ### Tests
 Unit and integration tests → `router/tests/test_*.py`
-Run all tests: `pytest -v`
-Run one file: `pytest -v router/tests/test_routing.py`
+Run all tests: `pytest -q`
+Run one file: `pytest -q router/tests/test_routing.py`
+(`-q` on purpose: the suite is 1400+ tests, and `-v` buries a real failure
+under a screenful of PASSED lines. CI uses `-q -ra` for the same reason.)
 
 ### Model Definitions
 Static model catalog → `router/models.json`
@@ -166,7 +184,9 @@ Quality is fed back via `AdaptiveWeights.record()` after each response.
 
 ### Analytics / Decision Logging
 → `router/analytics.py` (`RoutingAnalytics` class)
-Writes to `router/routing_analytics.jsonl` (append-only JSONL).
+Append-only JSONL, one line per decision. Constructed with `log_path=None`
+it is **in-memory only** and never touches the disk — that is the default;
+pass an explicit path to persist.
 
 ### Provider Integrations
 HTTP callers → `router/provider_caller.py`
@@ -174,11 +194,20 @@ Error types → `router/errors.py`
 Supported: Anthropic, OpenAI, Google (Gemini), Groq, Mistral
 
 ### HTTP Proxy (OpenAI-compatible)
-→ `router/server.py` — `POST /v1/chat/completions`, `GET /v1/models`, `GET /health`.
+→ `router/server.py` — `POST /v1/chat/completions`, `GET /v1/models`, `GET /health`,
+plus the reporting surface: `GET /v1/usage`, `GET /v1/stats/*`, `GET /metrics`,
+and the operator console at `/dashboard`.
 `model` in the request body is a routing directive (`flux-auto` / `flux-cheap` /
 `flux-quality`) unless it names a real registered model, in which case routing is
 bypassed and that model is called verbatim. Requires the `[server]` extra
-(fastapi/uvicorn) — not a core dependency. Run with `make serve`.
+(fastapi/uvicorn) — not a core dependency.
+
+Run it with `flux serve`, **not** by invoking uvicorn directly: `config.SERVER_HOST`
+binds to loopback unless `FLUX_SERVER_TOKEN`/`FLUX_SERVER_TOKENS` is set, and passing
+`--host` to uvicorn yourself bypasses that decision entirely. The reporting surface
+is additionally gated — served to loopback callers only when no auth is configured,
+and the `Host` header is checked alongside the peer address to close a DNS-rebinding
+path. See SECURITY_ARCHITECTURE.md.
 
 ### Run-Scoped Budgets (agent loops)
 → `router/run_budget.py` (`RunBudget`, `RunLimits`, `RunBudgetExceeded`).
@@ -201,7 +230,7 @@ workers. For any deployment with more than one worker process, set
 `FLUX_RUN_STORE=redis` (`config.RUN_STORE_BACKEND`, + `FLUX_REDIS_URL`) to
 use `RedisRunStore` instead, which shares state across workers with the same
 LRU/TTL eviction semantics. Requires the `[redis]` extra
-(`pip install flux-router[redis]`).
+(`pip install -e '.[redis]'`).
 
 ### Fallback and Retry Logic
 Chain construction → `router/fallback_chain.py` (`build_fallback_chain`, `build_typed_fallback_chains`)

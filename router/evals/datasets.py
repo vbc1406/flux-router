@@ -272,7 +272,7 @@ def _load_hub_records(name: str, n: int) -> list[dict[str, Any]]:
     except ImportError as exc:  # pragma: no cover - exercised only with --source hub
         raise RuntimeError(
             "The 'datasets' package is required for --source hub. "
-            "Install it with:  pip install 'flux-router[evals]'"
+            "Install it with:  pip install -e '.[evals]'"
         ) from exc
 
     # Pinned to each dataset's current `main` commit rather than a mutable

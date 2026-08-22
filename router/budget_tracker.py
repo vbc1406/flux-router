@@ -569,7 +569,7 @@ class RedisBudgetTracker(BudgetTracker):
             except ImportError as exc:
                 raise ImportError(
                     "RedisBudgetTracker requires the 'redis' package. Install it with "
-                    "`pip install flux-router[redis]`, or pass an explicit "
+                    "`pip install -e '.[redis]'`, or pass an explicit "
                     "redis_client= (e.g. a fakeredis instance in tests)."
                 ) from exc
             self._redis = redis.Redis.from_url(url, decode_responses=True)

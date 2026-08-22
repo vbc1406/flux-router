@@ -122,7 +122,7 @@ python -m router.evals
 python -m router.evals --datasets gsm8k,mmlu --n 100
 
 # Real numbers (needs API keys + the optional 'datasets' extra; costs money):
-pip install 'flux-router[evals]'
+pip install -e '.[evals]'
 export ANTHROPIC_API_KEY=...   # plus keys for every provider the strategies touch
 python -m router.evals --live --n 30
 ```
