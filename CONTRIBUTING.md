@@ -43,13 +43,3 @@ make lint                  # ruff
 
 See [CODEBASE_MAP.md](./CODEBASE_MAP.md) for the directory layout and
 [FEATURES.md](./FEATURES.md) for extension points.
-
-## Releasing (maintainers)
-
-1. Bump `version` in `pyproject.toml`.
-2. Tag the commit `vX.Y.Z` (must match the pyproject version exactly) and push the tag.
-3. `.github/workflows/publish.yml` builds the sdist/wheel, smoke-tests the
-   built wheel on Python 3.10–3.12, then publishes to PyPI via trusted
-   publishing (OIDC) — no API token involved. Requires a one-time trusted
-   publisher registration on the `flux-router` PyPI project pointing at this
-   repo/workflow.
