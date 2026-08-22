@@ -24,6 +24,14 @@ The model registry includes current-generation models from OpenAI, Anthropic, Go
 
 ## Quickstart
 
+Requires Python 3.10, 3.11, or 3.12. Flux is not published on PyPI — install it
+from a checkout of this repository:
+
+```bash
+git clone https://github.com/vbc1406/flux.git
+cd flux
+```
+
 ### Option 1: `base_url` swap (no code changes)
 
 Run Flux as a local HTTP proxy and point your existing OpenAI SDK client at it —

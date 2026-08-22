@@ -22,7 +22,8 @@ import sys
 from .paths import DATA_DB_FILENAME, resolve_data_dir
 
 _SERVER_EXTRA_HINT = (
-    "`flux serve` requires the 'server' extra. Install with: pip install flux-router[server]"
+    "`flux serve` requires the 'server' extra. From a source checkout, install with: "
+    "pip install -e '.[server]'"
 )
 
 

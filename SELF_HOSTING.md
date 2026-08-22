@@ -14,10 +14,14 @@ This document covers the server. For the Python library, see the
 ## Install and run
 
 ```bash
-pip install 'flux-router[server]'
+git clone https://github.com/vbc1406/flux.git
+cd flux
+pip install -e '.[server]'
 export OPENAI_API_KEY=sk-...        # + whichever other providers you use
 flux serve
 ```
+
+Flux is not on PyPI; install it from the repository. Python 3.10, 3.11, or 3.12.
 
 That prints where everything lives and starts serving:
 
@@ -231,15 +235,19 @@ startup rather than silently accepting:
   roughly N times the configured RPM globally. Divide the setting by the worker
   count, or rate limit at your ingress.
 
-The usage database is fine across workers — SQLite in WAL mode handles the
-concurrent writers.
+The usage database is fine across workers. It runs in SQLite's default
+rollback-journal mode rather than WAL — writes go through a single writer
+thread per process, so WAL's concurrent-writer throughput would buy nothing
+here, and skipping it keeps the database a single file with no `-wal`/`-shm`
+sidecars to lose when copying it.
 
 ---
 
 ## Upgrading
 
 ```bash
-pip install --upgrade 'flux-router[server]'
+git pull
+pip install -e '.[server]'
 flux serve
 ```
 

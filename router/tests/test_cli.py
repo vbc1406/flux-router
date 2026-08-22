@@ -252,7 +252,12 @@ class TestServeHandoff:
         monkeypatch.setattr(cli, "_missing_server_extra", lambda: True)
 
         assert cli.main(["serve", "--data-dir", str(tmp_path / "d")]) == 1
-        assert "flux-router[server]" in capsys.readouterr().err
+        err = capsys.readouterr().err
+        # The hint has to be a command that actually works. Flux is not on PyPI,
+        # so `pip install flux-router[server]` — what this used to say — sends
+        # the reader to a package that does not exist.
+        assert "pip install -e '.[server]'" in err
+        assert "flux-router[server]" not in err
         assert execv_calls == []
 
 

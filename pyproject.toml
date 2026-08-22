@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flux-router"
-version = "1.1.0b1"
-description = "Intelligent LLM routing engine. Save 30-50% on AI costs automatically."
+version = "1.1.0b2"
+description = "Fast, cost-aware heuristic LLM router. Picks a low-cost model that satisfies each request's quality and capability constraints."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 license = {text = "AGPL-3.0-or-later"}
@@ -84,7 +84,7 @@ exclude = ["testing*", "tests*", "router.tests*"]
 
 [tool.setuptools.package-data]
 # The dashboard is plain HTML/CSS/JS with no build step, so the sources ship
-# as-is and `pip install flux-router[server]` is the whole install — no Node,
+# as-is and `pip install -e '.[server]'` is the whole install — no Node,
 # no bundler, nothing fetched at runtime.
 #
 # evals/fixtures/*.json: bugfix — these were never listed here, so `python

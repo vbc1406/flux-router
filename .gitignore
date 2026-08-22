@@ -82,3 +82,6 @@ _internal_reviews/
 *.db-shm
 *.db-wal
 .flux_test_token
+
+# Internal launch tracking (not shipped publicly)
+LAUNCH_CHECKLIST.md

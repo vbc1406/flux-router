@@ -10,8 +10,13 @@ a routing directive, not a literal:
     "flux-quality" → route with quality-first priority
     "gpt-4o" (etc) → bypass routing; call that exact model verbatim
 
-Run with `make serve` or `uvicorn router.server:app`. Requires the optional
-`server` extra: `pip install flux-router[server]`.
+Run with `flux serve` (or `make serve`), which is what applies this
+deployment's safe defaults: `config.SERVER_HOST` binds to loopback unless
+`FLUX_SERVER_TOKEN`/`FLUX_SERVER_TOKENS` is set. Invoking uvicorn directly and
+passing `--host` on the command line bypasses that decision entirely — uvicorn
+never consults `SERVER_HOST` — which is how an unauthenticated proxy ends up
+reachable off-box. Requires the optional `server` extra; from a source
+checkout: `pip install -e '.[server]'`.
 
 Not a hard dependency of the core package — importing this module without
 fastapi/uvicorn installed raises ImportError with a clear message, not a
@@ -39,7 +44,8 @@ try:
     from fastapi.staticfiles import StaticFiles
 except ImportError as exc:  # pragma: no cover - exercised only without the extra installed
     raise ImportError(
-        "router.server requires the 'server' extra. Install with: pip install flux-router[server]"
+        "router.server requires the 'server' extra. From a source checkout, "
+        "install with: pip install -e '.[server]'"
     ) from exc
 
 from .config import (
