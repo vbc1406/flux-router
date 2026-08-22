@@ -244,6 +244,19 @@ Redis URL (which can embed credentials) appears in the response.
 `router/tests/test_stats.py` asserts that no configured secret's value appears
 anywhere in the body.
 
+**Not a secret is not the same as not sensitive.** In `FLUX_SERVER_TOKENS`
+mode a bearer token belongs to one customer, so `/v1/stats/config` withholds
+the operator-only half of the payload from it: the bind address and port, the
+worker count, the data directory and usage-database path, how many tenants are
+bound, the run/budget store backends, and every plan's budget but the caller's
+own. That is the operator's deployment shape, and a customer holding a tenant
+token has no business reading it. The caller still gets what it needs to reason
+about its own requests — auth mode, body cap, configured providers, its own
+plan's budget, and the run and rate limits that apply to it. Loopback callers
+and the shared-token operator see the full payload, so the dashboard is
+unchanged for the operator; the dashboard omits the operator sections when the
+fields are absent rather than rendering blanks.
+
 **Who can reach it.** This data is *every* tenant's spend and the deployment's
 configuration — correct for the single-operator case it is built for, wrong the
 moment the port is reachable from elsewhere. When no auth is configured, it is

@@ -520,20 +520,29 @@
     var providers = Object.keys(c.providers)
       .filter(function (p) { return c.providers[p]; });
 
-    host.appendChild(group("Server", [
-      ["Bind", c.server.host + ":" + c.server.port, "FLUX_SERVER_HOST"],
-      ["Auth mode", c.server.auth_mode, "FLUX_SERVER_TOKENS"],
-      ["Bound tenants", num(c.server.tenant_count)],
-      ["Workers", num(c.server.workers), "FLUX_SERVER_WORKERS"],
-      ["Run store", c.server.run_store_backend, "FLUX_RUN_STORE"]
-    ]));
+    // /v1/stats/config withholds the operator-only fields from a token bound
+    // to a single tenant (see server.py::stats_config). Render what we were
+    // given rather than printing "undefined" for the rest.
+    var operatorView = c.server.host !== undefined;
 
-    host.appendChild(group("Storage", [
-      ["Usage database", c.server.usage_db_persistent ? "on disk" : "in memory (not persisted)",
-        "FLUX_ATTRIBUTION_DB"],
-      ["Data directory", c.server.data_dir, "FLUX_DATA_DIR"],
-      ["Configured providers", providers.length ? providers.join(", ") : "none"]
-    ]));
+    var serverRows = [["Auth mode", c.server.auth_mode, "FLUX_SERVER_TOKENS"]];
+    if (operatorView) {
+      serverRows.unshift(["Bind", c.server.host + ":" + c.server.port, "FLUX_SERVER_HOST"]);
+      serverRows.push(["Bound tenants", num(c.server.tenant_count)]);
+      serverRows.push(["Workers", num(c.server.workers), "FLUX_SERVER_WORKERS"]);
+      serverRows.push(["Run store", c.server.run_store_backend, "FLUX_RUN_STORE"]);
+    }
+    host.appendChild(group("Server", serverRows));
+
+    var storageRows = [];
+    if (operatorView) {
+      storageRows.push(["Usage database",
+        c.server.usage_db_persistent ? "on disk" : "in memory (not persisted)",
+        "FLUX_ATTRIBUTION_DB"]);
+      storageRows.push(["Data directory", c.server.data_dir, "FLUX_DATA_DIR"]);
+    }
+    storageRows.push(["Configured providers", providers.length ? providers.join(", ") : "none"]);
+    host.appendChild(group("Storage", storageRows));
 
     host.appendChild(group("Run budget", [
       ["Max cost", money(c.run_limits.max_cost_usd), "FLUX_RUN_MAX_COST_USD"],
@@ -555,7 +564,9 @@
       "FLUX_RATE_LIMIT_RPM"]);
     host.appendChild(group("Budgets & limits", plans));
 
-    el("foot-db").textContent = c.server.usage_db_persistent
+    el("foot-db").textContent = !operatorView
+      ? ""
+      : c.server.usage_db_persistent
       ? "Usage database: " + c.server.usage_db
       // FLUX_DATA_DIR alone does NOT enable persistence: nothing in the library
       // reads it, and only router/cli.py translates it into FLUX_ATTRIBUTION_DB

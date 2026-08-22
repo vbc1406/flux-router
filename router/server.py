@@ -863,35 +863,69 @@ async def stats_config(
     from the environment at import time, so there is nothing to write back to;
     making budgets runtime-mutable needs a config file and a reload path,
     which is its own piece of work rather than a dashboard side effect.
+
+    SCOPING: in FLUX_SERVER_TOKENS multi-tenant mode a bearer token belongs to
+    one customer, not to the operator, so the operator-only half of this
+    payload is withheld from it — where the server binds, how many workers it
+    runs, where its data directory and usage database live, how many other
+    tenants exist, which run/budget store backends are deployed, and every
+    plan's limits but the caller's own. None of that is a secret (the docstring
+    above still holds), but it is the operator's deployment shape and a
+    customer has no business reading it. What remains is what a caller needs to
+    understand its own requests: the auth mode, the body cap, the providers
+    that are configured, its own plan's budget, and the run/rate limits that
+    apply to it. Loopback and shared-token callers -- the documented operator
+    paths -- see everything, so the dashboard is unaffected for the operator.
     """
     _refuse_remote_spend_data(request)
-    _check_auth(authorization)
+    binding = _check_auth(authorization)
     if SERVER_TOKENS:
         auth_mode = "bound-tokens"
     elif SERVER_REQUIRE_AUTH:
         auth_mode = "shared-token"
     else:
         auth_mode = "none"
+
+    # Non-None exactly when the caller is a token bound to one tenant; the
+    # shared-token binding is deliberately not a read scope (see
+    # _read_tenant_scope) and so keeps the full operator view.
+    scoped_tenant = _read_tenant_scope(binding)
+
+    server: dict[str, Any] = {
+        "auth_mode": auth_mode,
+        "max_body_bytes": SERVER_MAX_BODY_BYTES,
+    }
+    if scoped_tenant is None:
+        server.update(
+            {
+                "host": SERVER_HOST,
+                "port": SERVER_PORT,
+                "workers": SERVER_WORKERS,
+                "tenant_count": len({b.tenant_id for b in SERVER_TOKENS.values()}),
+                "run_store_backend": RUN_STORE_BACKEND,
+                "budget_store_backend": BUDGET_STORE_BACKEND,
+                "data_dir": DATA_DIR,
+                "usage_db": ATTRIBUTION_DB_PATH,
+                "usage_db_persistent": ATTRIBUTION_DB_PATH != ":memory:",
+            }
+        )
+
+    if scoped_tenant is None:
+        plans: dict[str, Any] = BUDGET_LIMITS
+    else:
+        # The caller's own plan only. binding is non-None whenever
+        # scoped_tenant is.
+        assert binding is not None
+        plans = {binding.plan: BUDGET_LIMITS[binding.plan]} if binding.plan in BUDGET_LIMITS else {}
+
     return {
-        "server": {
-            "host": SERVER_HOST,
-            "port": SERVER_PORT,
-            "workers": SERVER_WORKERS,
-            "auth_mode": auth_mode,
-            "tenant_count": len({b.tenant_id for b in SERVER_TOKENS.values()}),
-            "max_body_bytes": SERVER_MAX_BODY_BYTES,
-            "run_store_backend": RUN_STORE_BACKEND,
-            "budget_store_backend": BUDGET_STORE_BACKEND,
-            "data_dir": DATA_DIR,
-            "usage_db": ATTRIBUTION_DB_PATH,
-            "usage_db_persistent": ATTRIBUTION_DB_PATH != ":memory:",
-        },
+        "server": server,
         "providers": {
             provider: bool(_flux._provider_keys.get(provider) or _flux._api_key)
             for provider in sorted(_PROVIDER_ENV_VARS)
         },
         "budgets": {
-            "plans": BUDGET_LIMITS,
+            "plans": plans,
             "tenant_daily_cap_usd": TENANT_DAILY_CAP_USD,
             "env_var": "FLUX_TENANT_DAILY_CAP_USD",
         },

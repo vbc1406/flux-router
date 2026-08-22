@@ -16,6 +16,7 @@ How to run:
 
 from __future__ import annotations
 
+import json
 import time
 
 import pytest
@@ -641,3 +642,90 @@ class TestUsageEndpointProjection:
 
         row = stats_client.get("/v1/usage?limit=1").json()["data"][0]
         assert row["latency_ms"] is None
+
+
+class TestConfigWithholdsOperatorFieldsFromTenantTokens:
+    """A FLUX_SERVER_TOKENS bearer token belongs to one customer, not to the
+    operator. /v1/stats/config still answers it, but without the deployment
+    shape: bind address, worker count, data dir, usage db, how many other
+    tenants exist, the store backends, and other plans' budgets."""
+
+    OPERATOR_ONLY = (
+        "host",
+        "port",
+        "workers",
+        "tenant_count",
+        "run_store_backend",
+        "budget_store_backend",
+        "data_dir",
+        "usage_db",
+        "usage_db_persistent",
+    )
+
+    @pytest.fixture
+    def bound(self, monkeypatch):
+        tokens = {
+            "tok-acme": ServerTokenBinding(tenant_id="acme", plan="free_plan"),
+            "tok-globex": ServerTokenBinding(tenant_id="globex", plan="pro_plan"),
+        }
+        monkeypatch.setattr(server, "SERVER_TOKENS", tokens)
+        monkeypatch.setattr(server, "SERVER_REQUIRE_AUTH", True)
+        return tokens
+
+    def test_bound_tenant_gets_no_operator_fields(self, stats_client, bound):
+        body = stats_client.get(
+            "/v1/stats/config", headers={"Authorization": "Bearer tok-acme"}
+        ).json()
+
+        for field in self.OPERATOR_ONLY:
+            assert field not in body["server"], f"{field} leaked to a tenant token"
+        # What a caller legitimately needs is still there.
+        assert body["server"]["auth_mode"] == "bound-tokens"
+        assert body["server"]["max_body_bytes"] > 0
+        assert "providers" in body and "run_limits" in body and "rate_limit" in body
+
+    def test_bound_tenant_sees_only_its_own_plan(self, stats_client, bound):
+        acme = stats_client.get(
+            "/v1/stats/config", headers={"Authorization": "Bearer tok-acme"}
+        ).json()
+        globex = stats_client.get(
+            "/v1/stats/config", headers={"Authorization": "Bearer tok-globex"}
+        ).json()
+
+        assert list(acme["budgets"]["plans"]) == ["free_plan"]
+        assert list(globex["budgets"]["plans"]) == ["pro_plan"]
+
+    def test_tenant_count_cannot_be_used_to_enumerate_other_tenants(self, stats_client, bound):
+        body = stats_client.get(
+            "/v1/stats/config", headers={"Authorization": "Bearer tok-acme"}
+        ).json()
+
+        assert "tenant_count" not in body["server"]
+        assert "globex" not in json.dumps(body)
+
+    def test_loopback_operator_still_sees_everything(self, stats_client, monkeypatch):
+        """No auth configured + loopback peer = the operator's own box."""
+        monkeypatch.setattr(server, "SERVER_TOKENS", {})
+        monkeypatch.setattr(server, "SERVER_REQUIRE_AUTH", False)
+
+        body = stats_client.get("/v1/stats/config").json()
+
+        for field in self.OPERATOR_ONLY:
+            assert field in body["server"], f"{field} missing from the operator view"
+        assert body["budgets"]["plans"] == server.BUDGET_LIMITS
+
+    def test_shared_token_still_sees_everything(self, stats_client, monkeypatch):
+        """Shared-token mode is documented as a single operator, and is
+        deliberately not a read scope -- same reasoning as
+        TestSharedTokenReadsAreUnscoped."""
+        monkeypatch.setattr(server, "SERVER_TOKENS", {})
+        monkeypatch.setattr(server, "SERVER_REQUIRE_AUTH", True)
+        monkeypatch.setattr(server, "_SERVER_TOKEN", "shared-secret")
+
+        body = stats_client.get(
+            "/v1/stats/config", headers={"Authorization": "Bearer shared-secret"}
+        ).json()
+
+        for field in self.OPERATOR_ONLY:
+            assert field in body["server"], f"{field} missing for the shared-token operator"
+        assert body["budgets"]["plans"] == server.BUDGET_LIMITS
