@@ -1515,12 +1515,28 @@ class TestLatencyRecorded:
 
     def test_decision_latency_is_recorded_separately(self, client, recorded):
         """Routing overhead, not the provider call — the number that answers
-        'is Flux itself slow?'."""
+        'is Flux itself slow?'.
+
+        Deliberately NOT a performance assertion. decision_latency_ms times
+        the routing decision (server.py: classification, scoring, budget
+        checks — real CPU work); latency_ms times only the provider call
+        (flux.py::_call_model), which is mocked here and so is ~0.03ms.
+        They measure different phases and no ordering invariant holds
+        between them, so the old `decision < latency_ms + 1` was really
+        asserting "routing finishes in under ~1ms" — true on a dev machine,
+        false on a loaded CI runner, which is where it failed at 1.73ms.
+        """
         client.post("/v1/chat/completions", json=_body())
 
         decision = recorded[0]["decision_latency_ms"]
         assert decision is not None
-        assert decision < recorded[0]["latency_ms"] + 1
+        assert decision >= 0
+        # Generous ceiling: still catches a real regression (routing that
+        # blocks on I/O, or spins for seconds) without encoding runner speed.
+        assert decision < 5000
+        # The actual claim in the test's name: it's its own measurement, not
+        # a copy of the provider-call latency.
+        assert decision != recorded[0]["latency_ms"]
 
     def test_decision_latency_header_is_exposed(self, client):
         resp = client.post("/v1/chat/completions", json=_body())
