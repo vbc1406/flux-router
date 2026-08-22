@@ -50,9 +50,19 @@ jobs:
             router/server.py \
             router/evals/
 
-      # Informational only: the rest of router/ isn't strict-clean yet.
-      - name: Run mypy (strict, informational — full tree)
-        run: mypy --strict router/ || true
+      # Informational only: the rest of router/ isn't strict-clean yet. This
+      # step CANNOT fail the job (`|| true` plus continue-on-error) — it is a
+      # progress signal for hardening more source files, nothing else.
+      #
+      # Tests are excluded deliberately. Unannotated test functions produced
+      # 1903 of the 1957 errors this step used to print, burying the 50 real
+      # source-file errors it exists to surface — and a red "Found 1957 errors
+      # in 52 files" in the log repeatedly got misread (by a human and by a
+      # log-summarizing tool) as the cause of an unrelated job failure, three
+      # times over. Annotating ~70 test functions to silence it would be pure
+      # churn: pytest, not mypy, is what guards the tests.
+      - name: Run mypy (strict, informational — source tree, non-blocking)
+        run: mypy --strict router/ --exclude '^router/tests/' || true
         continue-on-error: true
 
       - name: Run pytest

@@ -39,6 +39,7 @@ def _rec(
     task: str = "code_generation",
     cost: float = 0.01,
     age_seconds: float = 60.0,
+    timestamp: float | None = None,
     run_id: str | None = "run-1",
     latency: float | None = 100.0,
     savings: float | None = 0.09,
@@ -46,7 +47,12 @@ def _rec(
     cache_hit: bool = False,
     fallback_used: bool = False,
 ) -> UsageRecord:
-    """A usage row `age_seconds` in the past, with dashboard-relevant fields set."""
+    """A usage row `age_seconds` in the past, with dashboard-relevant fields set.
+
+    `timestamp` overrides `age_seconds` with an absolute epoch value, for
+    tests that must control where a row falls relative to an epoch-aligned
+    bucket boundary rather than relative to now.
+    """
     return UsageRecord(
         tenant_id=tenant,
         run_id=run_id,
@@ -54,7 +60,7 @@ def _rec(
         step_type="completion",
         model_id=model,
         cost_usd=cost,
-        timestamp=time.time() - age_seconds,
+        timestamp=timestamp if timestamp is not None else time.time() - age_seconds,
         usage_source=usage_source,
         latency_ms=latency,
         estimated_savings_usd=savings,
@@ -175,10 +181,17 @@ class TestWindowBoundaries:
         assert buckets[0]["bucket_start"] < buckets[1]["bucket_start"]
 
     def test_timeseries_groups_rows_in_the_same_bucket(self, store):
-        store.record(_rec(cost=0.01, age_seconds=10))
-        store.record(_rec(cost=0.02, age_seconds=20))
+        # Anchored to the middle of the current 86400s bucket, not to "now":
+        # with now-relative ages these two rows straddle the boundary and
+        # land in two buckets whenever the test executes within ~20s after
+        # UTC midnight, which is correct behavior but fails this assertion.
+        # (Found by running the suite under a faked clock at 00:00:01.)
+        day = 86400
+        mid_bucket = (time.time() // day) * day + day / 2
+        store.record(_rec(cost=0.01, timestamp=mid_bucket))
+        store.record(_rec(cost=0.02, timestamp=mid_bucket + 10))
 
-        buckets = store.timeseries(bucket_seconds=86400)
+        buckets = store.timeseries(bucket_seconds=day)
         assert len(buckets) == 1
         assert buckets[0]["requests"] == 2
         assert buckets[0]["cost_usd"] == pytest.approx(0.03)
