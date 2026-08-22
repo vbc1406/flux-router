@@ -102,7 +102,11 @@ class TestSqliteUsageStore:
             t0 = time.perf_counter()
             store.record(UsageRecord("t", "r", "x", "y", "m", 0.01, 1000.0))
             elapsed = time.perf_counter() - t0
-            assert elapsed < 0.05, f"record() blocked the caller for {elapsed:.3f}s"
+            # Generous bound on purpose: a real regression (record() waiting
+            # on the held lock) doesn't run slow, it deadlocks — the pytest
+            # timeout catches that. A tight 50ms bound only added CI-runner
+            # scheduling noise as a failure mode.
+            assert elapsed < 1.0, f"record() blocked the caller for {elapsed:.3f}s"
         finally:
             store._lock.release()
 

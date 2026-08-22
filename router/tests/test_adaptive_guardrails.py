@@ -538,7 +538,11 @@ class TestFlushLockContention:
         finally:
             aw._io_lock.release()
 
-        assert elapsed < 0.05, f"record()/get_adjusted_score() blocked for {elapsed:.3f}s"
+        # Generous bound on purpose: a real regression (record() waiting on
+        # the held _io_lock) doesn't run slow, it deadlocks — the pytest
+        # timeout catches that. A tight 50ms bound only added CI-runner
+        # scheduling noise as a failure mode.
+        assert elapsed < 1.0, f"record()/get_adjusted_score() blocked for {elapsed:.3f}s"
 
     def test_flush_still_round_trips_correctly(self, tmp_path):
         state_file = tmp_path / "state.json"

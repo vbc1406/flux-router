@@ -144,6 +144,28 @@ class TestStreaming:
         assert body.strip().endswith("data: [DONE]")
 
 
+def _sse_error_payloads(text: str) -> list[str]:
+    """The serialized error payloads in an SSE body.
+
+    Status-code assertions must run against these (or another specific
+    field), never against the whole body: ordinary chunks carry random-hex
+    ids (chatcmpl-<uuid>) and an epoch `created` timestamp, either of which
+    can contain "401" or "403" by chance — and when the epoch clock rolls
+    through a range containing "403", every run in that window fails, not
+    just an unlucky one. `assert "403" not in resp.text` flaked on CI
+    exactly this way.
+    """
+    import json as _json
+
+    errors = []
+    for line in text.splitlines():
+        if line.startswith("data: ") and line != "data: [DONE]":
+            chunk = _json.loads(line[len("data: ") :])
+            if "error" in chunk:
+                errors.append(_json.dumps(chunk["error"]))
+    return errors
+
+
 class TestStreamingProviderAuthSanitization:
     """Regression coverage for vuln-0001: the native-streaming branch of
     _stream_completion() calls stream_openai_compat_lines() directly, which
@@ -161,26 +183,6 @@ class TestStreamingProviderAuthSanitization:
 
         return _stream
 
-    @staticmethod
-    def _stream_errors(text: str) -> list[str]:
-        """The serialized error payloads in an SSE body.
-
-        The status-code assertions must run against these, never against the
-        whole body: ordinary chunks carry random-hex ids (chatcmpl-<uuid>)
-        and epoch `created` timestamps, either of which can contain "401" or
-        "403" by chance — `assert "403" not in resp.text` flaked on CI
-        exactly that way.
-        """
-        import json as _json
-
-        errors = []
-        for line in text.splitlines():
-            if line.startswith("data: ") and line != "data: [DONE]":
-                chunk = _json.loads(line[len("data: ") :])
-                if "error" in chunk:
-                    errors.append(_json.dumps(chunk["error"]))
-        return errors
-
     @pytest.mark.parametrize("status", [401, 403])
     def test_provider_call_error_401_403_sanitized(self, client, monkeypatch, status):
         from router.provider_caller import ProviderCallError
@@ -192,7 +194,7 @@ class TestStreamingProviderAuthSanitization:
         )
         resp = client.post("/v1/chat/completions", json=_body("gpt-5-mini", stream=True))
         assert resp.status_code == 200
-        errors = self._stream_errors(resp.text)
+        errors = _sse_error_payloads(resp.text)
         assert errors, "stream contained no error payload"
         for err in errors:
             assert "Upstream provider authentication failed" in err
@@ -211,7 +213,7 @@ class TestStreamingProviderAuthSanitization:
         )
         resp = client.post("/v1/chat/completions", json=_body("gpt-5-mini", stream=True))
         assert resp.status_code == 200
-        errors = self._stream_errors(resp.text)
+        errors = _sse_error_payloads(resp.text)
         assert errors, "stream contained no error payload"
         for err in errors:
             assert "Upstream provider authentication failed" in err
@@ -1136,7 +1138,11 @@ class TestFallbackChain:
         resp = client.post("/v1/chat/completions", json=body)
         assert resp.status_code == 200  # SSE errors ride in-band, not in the status
         assert "google" not in resp.text.lower()
-        assert "403" not in resp.text
+        errors = _sse_error_payloads(resp.text)
+        assert errors, "stream contained no error payload"
+        for err in errors:
+            assert "403" not in err
+        assert "HTTP 403 from" not in resp.text
 
     def test_fallback_records_dispatched_models_own_cost(self, client, _mock_call_model):
         """Regression: recording used decision.estimated_cost (the
