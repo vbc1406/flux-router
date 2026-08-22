@@ -1,5 +1,9 @@
 # syntax=docker/dockerfile:1.6
-FROM python:3.11-slim AS base
+# Pinned by digest so a rebuild produces the same base image every time. The
+# tag is kept alongside it for readability -- Docker resolves the digest, the
+# tag is ignored. To roll this forward:
+#   docker buildx imagetools inspect python:3.11-slim | awk '/^Digest:/{print $2}'
+FROM python:3.11-slim@sha256:9c900dea9e8fb7e16277c179b555cc72d29a352dbc33cff48ad5a0412fd5bfc7 AS base
 
 # Set up non-root user
 RUN groupadd --gid 1000 flux && \

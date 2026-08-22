@@ -1,6 +1,8 @@
 services:
   redis:
-    image: redis:7-alpine
+    # Pinned by digest; roll forward with:
+    #   docker buildx imagetools inspect redis:7-alpine | awk '/^Digest:/{print $2}'
+    image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - flux-staging-redis:/data
