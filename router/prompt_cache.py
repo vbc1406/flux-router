@@ -2,7 +2,7 @@
 File: router/prompt_cache.py
 
 Purpose:
-Cache-aware routing (Task 5). Provider-side prompt caching (a warm KV-cache
+Cache-aware routing. Provider-side prompt caching (a warm KV-cache
 for a shared prefix — typically the system prompt) commonly cuts cost more
 than model routing does, but it is provider-specific and prefix-specific:
 routing a request to a nominally "cheaper" model can destroy a warm cache on

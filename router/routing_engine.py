@@ -25,7 +25,7 @@ Key Entry Points:
   RoutingEngine.__init__(...)         — inject all collaborators here
 
 The 13 Steps (in execution order), plus Step 0 in the route() wrapper:
-  0  Run-budget gate  → RunBudget.check_before_dispatch() (Task 3; only if request.run_id
+  0  Run-budget gate  → RunBudget.check_before_dispatch() (only if request.run_id
                          is set). Raises RunBudgetExceeded before dispatch, or forces
                          cost-optimized routing_priority if degraded/warning.
   1  Classify         → RequestClassifier.analyze()
@@ -240,18 +240,18 @@ class RoutingEngine:
         self._user_free_rpm: dict[str, deque[float]] = defaultdict(deque)
         # Route call counter for periodic housekeeping (conversation expiry).
         self._route_count: int = 0
-        # Task 3: run-scoped budget enforcement (checked before Step 1).
+        # run-scoped budget enforcement (checked before Step 1).
         self._run_budget = RunBudget()
-        # Task 5: cache-aware routing (which provider holds a warm prefix).
+        # cache-aware routing (which provider holds a warm prefix).
         self._prompt_cache = PromptCacheTracker()
-        # Task 7: per-run/per-tenant cost attribution.
+        # per-run/per-tenant cost attribution.
         self._attribution = CostAttribution()
 
     # ── Public ──────────────────────────────────────────────────────────────
 
     async def route(self, request: RoutingRequest, verbose: bool = False) -> RoutingDecision:
         """
-        Task 3, Step 0: run-scoped budget gate, then delegate to the 13-step
+        Step 0: run-scoped budget gate, then delegate to the 13-step
         algorithm in _route_core(). Kept as a thin wrapper so every one of
         _route_core's early-return paths automatically gets the same
         run-budget bookkeeping without having to touch each of them.
@@ -421,7 +421,7 @@ class RoutingEngine:
             for m in all_models
             if passes_constraints[m.model_id] and circuit_ok.get(m.model_id, False)
         ]
-        # Items 1/2/Task 6: compute once for explainability and for the
+        # Items 1/2/compute once for explainability and for the
         # no-candidates reasoning message below — _passes_hard_constraints()/
         # _relaxed_filter() each recompute it per-model internally, this call
         # is purely for surfacing WHICH floors were in effect.
@@ -639,7 +639,7 @@ class RoutingEngine:
                 decision = await self._proxy_execute(decision, request)
             return decision
 
-        # Task 8: cascade shortcut — mirrors always-premium above but starts
+        # cascade shortcut — mirrors always-premium above but starts
         # at the cheapest capable tier instead of the most capable one. The
         # escalation walk itself happens in Flux.complete() / router/cascade.py,
         # using decision.fallback_chain (built below) as the tier ladder.
@@ -845,7 +845,7 @@ class RoutingEngine:
                     )
                     break
 
-        # Task 5: cache-aware routing. Only modeled when there's a key to
+        # cache-aware routing. Only modeled when there's a key to
         # correlate repeat calls (conversation_id, falling back to run_id)
         # and a system prompt long enough that provider caching would
         # plausibly engage at all.
@@ -982,7 +982,7 @@ class RoutingEngine:
             fallback_chain = build_fallback_chain(chosen, candidates, analysis)
             rl_chain, cs_chain, to_chain = build_typed_fallback_chains(chosen, candidates, analysis)
 
-        # Task 5: if budget walk-down (Step 12) moved `chosen` off the provider
+        # if budget walk-down (Step 12) moved `chosen` off the provider
         # cache-selection picked, the cache status no longer reflects reality —
         # budget is a harder constraint than cache stickiness. A warm prefix is
         # recorded only after a provider call succeeds (record_prompt_cache_success),
@@ -1232,7 +1232,7 @@ class RoutingEngine:
                         correlation_id=request.correlation_id,
                         task_type="unknown",
                     )
-                # Task 3: record this step against the run's cumulative budget so
+                # record this step against the run's cumulative budget so
                 # the NEXT step's check_before_dispatch() sees it. Tokens are the
                 # provider's own reported total when known, else the ~4-chars/
                 # token estimate.
@@ -1244,7 +1244,7 @@ class RoutingEngine:
                         billed_tokens,
                         tenant_id=request.tenant_id,
                     )
-                # Task 7: cost attribution — costs/token counts/metadata only,
+                # cost attribution — costs/token counts/metadata only,
                 # never the prompt or the `response` text itself.
                 self._attribution.record(
                     tenant_id=request.tenant_id,
@@ -1427,7 +1427,7 @@ def _route_cascade_initial(
     analysis: TaskAnalysis,
 ) -> tuple[ModelOption, str]:
     """
-    Task 8: pick the CHEAPEST capable tier to start a cascade — the mirror
+    pick the CHEAPEST capable tier to start a cascade — the mirror
     image of _route_always_premium(). CASCADE_ESCALATION_TIERS order
     (cheapest first) determines which tier is tried first; the caller
     (Flux.complete()) escalates through decision.fallback_chain — built by
@@ -1567,7 +1567,7 @@ def _cache_aware_cost(
     cache_hit: bool,
 ) -> float:
     """
-    Task 5: effective cost accounting for a warm provider-side prefix cache.
+    effective cost accounting for a warm provider-side prefix cache.
 
     Falls back to the plain _estimate_cost() (no cache modeled) whenever the
     model has no cache pricing, cache_hit is False, or the shared prefix is
@@ -1805,14 +1805,14 @@ def _passes_hard_constraints(
     # the model would likely truncate or fail even before output tokens are added.
     if analysis.estimated_input_tokens > model.max_context_window * CONTEXT_PENALTY_HARD_CUTOFF:
         return False
-    # Task 6: tools offered -> only models with verified tool-calling support
+    # tools offered -> only models with verified tool-calling support
     # are eligible, regardless of tier/cost. A model that can't reliably call
     # tools is not a "cheaper" option for a tool_select step, it's a broken one.
     if request.tools and not model.supports_tools:
         return False
     if request.response_format and not model.supports_structured_output:
         return False
-    # Items 1/2/Task 6: composed minimum-tier floor (agent step_type + domain
+    # Items 1/2/composed minimum-tier floor (agent step_type + domain
     # + hard-complexity) — applied BEFORE scoring so a cheap model can never
     # win a plan/tool_select/final_answer step, a substantive legal/medical
     # judgment call, or a very-hard-complexity request purely on cost.
@@ -1839,7 +1839,7 @@ def _relaxed_filter(
     Relaxed filter: drop rate-limit and streaming requirements.
     Called when the strict filter yields zero candidates.
 
-    Task 6 / Items 1/2 NOTE: tools/response_format/composed-min-tier-floor
+    NOTE: tools/response_format/composed-min-tier-floor
     constraints are NOT relaxed here — they gate actual capability (can this
     model call tools at all? is it qualified for this step/domain/
     complexity?), not a soft preference like streaming, so relaxing them

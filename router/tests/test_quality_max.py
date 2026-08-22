@@ -274,7 +274,7 @@ class TestQualityMaxRespectsHardConstraints:
 
 
 class TestQualityMaxWithStepTypeFloors:
-    """quality_max combined with STEP_TYPE_FLOORS (Task 6) should be a
+    """quality_max combined with STEP_TYPE_FLOORS should be a
     no-op relative to plain quality_max: the floor is enforced in Step 4
     (before quality_max's shortcut runs) and quality_max already picks the
     top-quality model, which for these floors is always at or above the

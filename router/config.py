@@ -551,7 +551,7 @@ SCORING_WEIGHTS: dict[str, dict[str, float]] = {
     # routing_priority overrides (Change 1) — these override the latency-mode entry
     "quality-first": {"quality": 0.70, "cost": 0.20, "latency": 0.10},
     "cost-optimized": {"quality": 0.30, "cost": 0.60, "latency": 0.10},
-    # Task 8: cascade is a shortcut priority (like always-premium) that
+    # cascade is a shortcut priority (like always-premium) that
     # bypasses Step 9 scoring entirely — see _route_cascade_initial(). This
     # entry exists for explainability/tooling consistency (every
     # VALID_ROUTING_PRIORITIES value should be describable in weight terms),
@@ -1003,7 +1003,7 @@ SERVER_WORKERS: int = int(
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP-TYPE CLASSIFICATION (Task 6: router/classifier.py, routing_engine.py)
+# STEP-TYPE CLASSIFICATION (router/classifier.py, routing_engine.py)
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Minimum tier (by TIER_ORDER index) a model must meet for a given step_type,
@@ -1036,7 +1036,7 @@ STEP_TYPE_FLOORS: dict[str, str] = {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CACHE-AWARE ROUTING (Task 5: router/prompt_cache.py, routing_engine.py)
+# CACHE-AWARE ROUTING (router/prompt_cache.py, routing_engine.py)
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Minimum shared-prefix token count before cache stickiness applies at all.
@@ -1071,7 +1071,7 @@ CACHE_DEFAULT_TTL_SECONDS: int = 300
 CACHE_TRACKER_MAX_ENTRIES: int = 50_000
 
 # ══════════════════════════════════════════════════════════════════════════════
-# COST ATTRIBUTION (Task 7: router/attribution.py, router/server.py)
+# COST ATTRIBUTION (router/attribution.py, router/server.py)
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Where a self-hosted `flux serve` keeps its local state (currently just the
@@ -1130,7 +1130,7 @@ ATTRIBUTION_WRITE_QUEUE_MAX_SIZE: int = 10_000
 ATTRIBUTION_WRITE_BATCH_SIZE: int = 100
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CASCADE / ESCALATION (Task 8: router/cascade.py, flux.py)
+# CASCADE / ESCALATION (router/cascade.py, flux.py)
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Escalation tiers tried in order for routing_priority="cascade", cheapest

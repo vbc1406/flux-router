@@ -183,7 +183,7 @@ Two limits worth being explicit about:
   `FLUX_RATE_LIMIT_RPM x workers` (the server warns about this at startup).
   Use an ingress limiter if you need an exact global bound.
 
-### Cost Attribution Stores Metadata Only (Task 7)
+### Cost Attribution Stores Metadata Only
 
 `router/attribution.py` (`UsageRecord`, `SqliteUsageStore`) records, per
 dispatch: `tenant_id`, `run_id`, `task_type`, `step_type`, `model_id`,

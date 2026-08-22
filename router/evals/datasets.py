@@ -199,7 +199,7 @@ def _build_agentic(rec: dict[str, Any], idx: int) -> EvalSample:
 
 
 def _build_wrapper_task(rec: dict[str, Any], idx: int) -> EvalSample:
-    """Item (Task 3): ordinary wrapper-request categories not covered by the
+    """Ordinary wrapper-request categories not covered by the
     public benchmarks above — summarization, extraction, translation, basic
     vs. complex-distributed-systems coding, math proofs, long-document,
     wrapper-level tool calling, and benign vs. high-stakes legal/medical

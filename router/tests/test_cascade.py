@@ -2,7 +2,7 @@
 File: router/tests/test_cascade.py
 
 Purpose:
-Tests for Task 8 — cascade / escalation. Uses a deterministic 4-tier
+Tests for cascade / escalation. Uses a deterministic 4-tier
 registry (free/cheap/mid/premium, one model each) so escalation order is
 predictable, and patches Flux._call_model to return canned per-tier text
 (mirrors the pattern in test_smart_retry.py) — no real HTTP calls.

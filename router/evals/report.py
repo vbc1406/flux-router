@@ -145,7 +145,7 @@ def _percentile(values: list[float], pct: float) -> float | None:
 
 
 def quality_metrics(out: RunOutput) -> dict[str, Any]:
-    """Task 3 deliverables not covered by the per-strategy StrategyReport:
+    """Deliverables not covered by the per-strategy StrategyReport:
     tool-call success rate, structured-output validity rate, fallback
     success rate, high-stakes routing recall, and p50/p95 latency — all
     computed for strategy="flux" (the system under test), plus a list of
@@ -403,7 +403,7 @@ def per_question_payload(out: RunOutput) -> dict[str, Any]:
         for step, by_strat in by_step_groups.items()
     }
 
-    # Task 3: results by provider and by model tier, flux strategy only —
+    # results by provider and by model tier, flux strategy only —
     # these two dimensions are per-decision (which model got picked), not
     # per-baseline, so mixing in premium/cheapest/default_* would just show
     # each baseline's fixed pin rather than anything about flux's routing.

@@ -2,7 +2,7 @@
 File: router/tests/test_run_budget.py
 
 Purpose:
-Tests for run-scoped budget enforcement (Task 3: router/run_budget.py) at
+Tests for run-scoped budget enforcement (router/run_budget.py) at
 two levels:
   - Unit tests against RunBudget/InMemoryRunStore directly — the
     degradation ladder, the raise-before-not-after invariant, per-step

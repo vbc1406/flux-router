@@ -2,7 +2,7 @@
 File: router/run_budget.py
 
 Purpose:
-Run-scoped budget enforcement (Task 3: the agent cost governance wedge).
+Run-scoped budget enforcement (the agent cost governance wedge).
 A "run" is a correlation ID (run_id) grouping N routing decisions — a
 multi-step agent trajectory, not a single request. Flux's existing per-user
 and per-day budget trackers (budget_tracker.py) cannot stop a runaway agent
@@ -100,7 +100,7 @@ class _RunState:
     pending_steps: int = 0
 
 
-class RunBudgetExceeded(Exception):  # noqa: N818 — name matches the Task 3 public API exactly
+class RunBudgetExceeded(Exception):  # noqa: N818 — name matches the public API exactly
     """
     Raised by check_before_dispatch() when a run has already met or exceeded
     any of its limits. Carries a structured summary so the caller can return

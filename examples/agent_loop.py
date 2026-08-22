@@ -1,6 +1,6 @@
 """
 agent_loop.py — a budgeted ReAct-style agent loop using Flux's run-scoped
-budget enforcement (Task 3) and step-type routing (Task 6 / Item 3).
+budget enforcement and step-type routing.
 
 The loop alternates "plan" and "final_answer" steps against a small set of
 subtasks, all under one run_id opened via flux.start_run(). Each call passes

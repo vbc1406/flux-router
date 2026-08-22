@@ -2,7 +2,7 @@
 File: router/tests/test_step_type.py
 
 Purpose:
-Tests for Task 6 — step-type classification for agent trajectories.
+Tests for step-type classification for agent trajectories.
 Covers step_type inference (classifier.py), the STEP_TYPE_FLOORS hard
 constraint (routing_engine.py::_passes_hard_constraints), and the
 tools/response_format capability filter.

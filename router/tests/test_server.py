@@ -2,7 +2,7 @@
 File: router/tests/test_server.py
 
 Purpose:
-Tests for router/server.py — the OpenAI-compatible HTTP proxy (Task 1).
+Tests for router/server.py — the OpenAI-compatible HTTP proxy.
 All tests mock Flux._call_model / provider_caller streaming; no real HTTP
 requests to model providers are made.
 

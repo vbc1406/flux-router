@@ -203,7 +203,7 @@ class Flux:
         max_duration_seconds: float | None = None,
     ) -> Iterator[str]:
         """
-        Task 3: open a budgeted run and yield its run_id. Pass that run_id to
+        open a budgeted run and yield its run_id. Pass that run_id to
         every complete() call in the trajectory (as run_id=...) to enable
         run-scoped enforcement: cost-optimized degradation as the budget gets
         close, then RunBudgetExceeded raised before the next step dispatches.
@@ -255,7 +255,7 @@ class Flux:
         ``request_kwargs`` are forwarded to RoutingRequest (e.g. user_id, plan,
         priority, conversation_id, routing_priority …).
 
-        Task 8: when routing_priority="cascade", this delegates to
+        when routing_priority="cascade", this delegates to
         _complete_cascade() instead — a different escalation strategy (verify
         locally, escalate tiers on failure) rather than the typed-error
         fallback chain below. ``cascade_verifier`` is only used in that path.
@@ -438,7 +438,7 @@ class Flux:
                         correlation_id=request.correlation_id,
                         task_type="unknown",
                     )
-                # Task 3: record this step against the run's cumulative budget so
+                # record this step against the run's cumulative budget so
                 # the NEXT call to complete(run_id=...) sees it in check_before_dispatch().
                 # billed_tokens is the provider's own reported total when
                 # known, else the ~4-chars/token estimate.
@@ -450,7 +450,7 @@ class Flux:
                         billed_tokens,
                         tenant_id=request.tenant_id,
                     )
-                # Task 7: cost attribution — costs/metadata only, never `text`.
+                # cost attribution — costs/metadata only, never `text`.
                 self._engine._attribution.record(
                     tenant_id=request.tenant_id,
                     run_id=request.run_id,
@@ -576,7 +576,7 @@ class Flux:
         **request_kwargs: Any,
     ) -> FluxResponse:
         """
-        Task 8: dispatch the cheapest capable tier, verify locally, escalate
+        dispatch the cheapest capable tier, verify locally, escalate
         to the next tier in decision.fallback_chain on verification failure,
         up to CASCADE_MAX_ESCALATIONS. Never raises on verification failure —
         if every tier tried fails verification, the LAST (most capable)
@@ -757,7 +757,7 @@ class Flux:
                 correlation_id=request.correlation_id,
                 task_type="unknown",
             )
-        # Task 3: run-budget still gets ONE step recorded per complete() call
+        # run-budget still gets ONE step recorded per complete() call
         # (matches the non-cascade path's convention, and the ONE reservation
         # check_before_dispatch() made for this call) but now carries the
         # TOTAL cost/tokens of every tier actually dispatched, not just the
@@ -771,7 +771,7 @@ class Flux:
                 tenant_id=request.tenant_id,
             )
 
-        # Task 7: attribution gets ONE record per tier actually dispatched —
+        # attribution gets ONE record per tier actually dispatched —
         # cascade's real economics require seeing every attempt.
         for i in range(len(step_breakdown)):
             pr = step_provider_results[i]

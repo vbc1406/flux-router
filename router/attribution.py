@@ -2,7 +2,7 @@
 File: router/attribution.py
 
 Purpose:
-Per-run and per-tenant cost attribution (Task 7). Answers "which
+Per-run and per-tenant cost attribution. Answers "which
 customer/workflow is eating my margin" — the number that actually gets
 forwarded to a founder or CFO, as opposed to routing accuracy.
 

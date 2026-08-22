@@ -2,7 +2,7 @@
 File: router/tests/test_attribution.py
 
 Purpose:
-Tests for Task 7 — per-run and per-tenant cost attribution
+Tests for per-run and per-tenant cost attribution
 (router/attribution.py) plus its wiring into Flux.complete() /
 RoutingEngine._proxy_execute() and the proxy's GET /v1/usage and GET
 /metrics endpoints.

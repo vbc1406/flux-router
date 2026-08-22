@@ -518,7 +518,7 @@ class TestEndToEnd:
         assert a.mean_quality == b.mean_quality and a.total_cost == b.total_cost
 
     def test_full_default_dataset_run_covers_new_categories(self):
-        """Task 3 wiring check: agentic budget steps and wrapper_tasks run
+        """Wiring check: agentic budget steps and wrapper_tasks run
         end-to-end through the real runner (not just the grader unit tests
         above), against every default strategy."""
         config = RunConfig(

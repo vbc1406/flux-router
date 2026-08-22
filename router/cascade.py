@@ -2,7 +2,7 @@
 File: router/cascade.py
 
 Purpose:
-Cascade / escalation (Task 8): dispatch the cheapest capable model first,
+Cascade / escalation: dispatch the cheapest capable model first,
 verify the response locally, and escalate to the next tier only on
 verification failure. "Route once, hope it's right" leaves savings on the
 table when the cheap tier is usually fine; cascading tries cheap first and

@@ -2,7 +2,7 @@
 File: router/tests/test_cache_aware_routing.py
 
 Purpose:
-Tests for Task 5 — cache-aware routing (router/prompt_cache.py +
+Tests for cache-aware routing (router/prompt_cache.py +
 routing_engine.py's cache-stickiness block in Step 9).
 
 Uses a deterministic two-model registry (one with cache pricing modeling a

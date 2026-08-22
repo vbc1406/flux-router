@@ -203,13 +203,13 @@ _PLAN_RE = re.compile(
     r"|^\s*plan[.!]?\s*$",
     re.IGNORECASE,
 )
-# Task 6: step_type inference — "reflect" language (self-critique / plan revision).
+# step_type inference — "reflect" language (self-critique / plan revision).
 _REFLECT_RE = re.compile(
     r"\b(reflect\s+on|self.critique|critique\s+(your|the)|review\s+your\s+(own\s+)?"
     r"(answer|work|response|plan)|did\s+I\s+miss|what\s+went\s+wrong|revise\s+the\s+plan)\b",
     re.IGNORECASE,
 )
-# Task 6 bugfix: explicit "final answer" language in the prompt — highest-
+# bugfix: explicit "final answer" language in the prompt — highest-
 # confidence signal, checked before anything else so it can't be shadowed by
 # a stale tool-result message sitting earlier in history.
 _FINAL_ANSWER_RE = re.compile(
@@ -520,7 +520,7 @@ class RequestClassifier:
             scope_key=_cache_scope_key(request, sensitivity),
         )
 
-        # 7. Task 6: step_type (orthogonal to task_type)
+        # 7. step_type (orthogonal to task_type)
         step_type = request.step_type or self._infer_step_type(request)
 
         return TaskAnalysis(
@@ -550,7 +550,7 @@ class RequestClassifier:
     @staticmethod
     def _infer_step_type(request: RoutingRequest) -> str:
         """
-        Task 6: infer step_type when the caller didn't set it explicitly.
+        infer step_type when the caller didn't set it explicitly.
 
         Signal priority (most specific / highest-stakes first):
           1. explicit "final answer" language in raw_prompt -> final_answer

@@ -122,7 +122,7 @@ class GradedResult:
     # step type" eval rollup — see report.py::_print_by_step_type().
     step_type: str = ""
 
-    # ── Task 3 (live quality evaluation) per-sample recording fields ────────
+    # ── Live quality evaluation: per-sample recording fields ───────────────
     provider: str = ""
     input_tokens: int = 0
     output_tokens: int = 0

@@ -1,5 +1,5 @@
 """
-server.py — OpenAI-compatible HTTP proxy for Flux (Task 1: Agent Cost Governance Pivot).
+server.py — OpenAI-compatible HTTP proxy for Flux (Agent Cost Governance Pivot).
 
 Lets any OpenAI SDK client point `base_url` at this server and get routed
 completions without touching a line of Python. `model` in the request body is
@@ -457,10 +457,10 @@ def _build_routing_request(
         "temperature": body.get("temperature"),
         "max_tokens_requested": body.get("max_tokens"),
         "run_id": run_id,
-        # Task 7: X-Flux-Tenant-Id, for router/attribution.py aggregation.
+        # X-Flux-Tenant-Id, for router/attribution.py aggregation.
         "tenant_id": tenant_id,
         "plan": plan or "pro_plan",
-        # Task 6 / Item 1: used for step_type inference + capability filtering
+        # used for step_type inference + capability filtering
         # AND forwarded to the provider (see provider_caller.py's per-provider
         # translation). tool_choice is only meaningful when tools is set.
         "tools": body.get("tools") or [],
@@ -607,7 +607,7 @@ async def get_usage(
     offset: int = 0,
 ) -> dict[str, Any]:
     """
-    Task 7: paginated cost/metadata usage records — never prompt or
+    paginated cost/metadata usage records — never prompt or
     completion content (see SECURITY_ARCHITECTURE.md). Filter with
     ?tenant_id=... and/or ?run_id=...; paginate with ?limit=&offset=.
 
@@ -915,7 +915,7 @@ async def stats_config(
 async def metrics(
     request: Request, authorization: str | None = Header(default=None)
 ) -> Response:
-    """Task 7: Prometheus text-exposition metrics — flux_cost_usd_total,
+    """Prometheus text-exposition metrics — flux_cost_usd_total,
     flux_run_steps, flux_budget_exceeded_total, labelled by tenant/model.
 
     In FLUX_SERVER_TOKENS multi-tenant mode, the bearer token's bound tenant
@@ -987,7 +987,7 @@ async def chat_completions(
                 },
             )
 
-    # Task 3: every request belongs to a run — X-Flux-Run-Id groups repeated
+    # every request belongs to a run — X-Flux-Run-Id groups repeated
     # calls into one budgeted trajectory. Bugfix: a request with no header
     # used to silently get its own single-step run, which makes run-scoped
     # budget enforcement a no-op for it (a run of one step never crosses any
