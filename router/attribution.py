@@ -193,10 +193,13 @@ class SqliteUsageStore:
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         with self._lock:
-            # WAL mode makes the writer thread's commits cheaper (no-op for
-            # ":memory:" databases, which don't support WAL — sqlite silently
-            # keeps them in "memory" journal mode instead).
-            self._conn.execute("PRAGMA journal_mode=WAL")
+            # Default (rollback-journal) mode, not WAL: this store has a
+            # single writer thread, so WAL's concurrent-writer throughput
+            # doesn't buy anything here, and its -wal/-shm sidecar files plus
+            # reliance on shared-memory mmap between connections have shown
+            # restart-persistence flakiness on some Docker volume/storage
+            # backends — every commit landing directly in the single .db file
+            # is worth more than the write-latency win.
             self._conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS usage (
