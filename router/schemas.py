@@ -48,6 +48,27 @@ from .config import (
 _SAFE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_\-:.]+$")
 _MAX_METADATA_BYTES = 10_000
 
+RUN_ID_MAX_LENGTH = 256
+
+
+def validate_run_id(value: str) -> str:
+    """Shared validation for a client-supplied run correlation ID
+    (X-Flux-Run-Id / RoutingRequest.run_id), used both by RoutingRequest's
+    own field validator below AND by server.py's early header check (which
+    runs before the request body is even read) — one rule, checked in two
+    places, so they can't drift apart. Raises ValueError on anything unsafe
+    to use as a run-budget storage key: blank/whitespace-only, over length,
+    or containing characters outside the safe-id charset (this also blocks
+    the tenant-scoping separator `\\x00` used internally by
+    RunBudget._key(), so a client can never forge a cross-tenant key)."""
+    if not value.strip():
+        raise ValueError("run_id must not be empty or whitespace-only")
+    if len(value) > RUN_ID_MAX_LENGTH:
+        raise ValueError(f"run_id exceeds {RUN_ID_MAX_LENGTH} characters")
+    if not _SAFE_ID_PATTERN.match(value):
+        raise ValueError("run_id contains characters outside [a-zA-Z0-9_-:.]")
+    return value
+
 
 def _max_depth(obj, current: int = 0, limit: int = MAX_METADATA_DEPTH) -> int:
     if current > limit:
@@ -219,7 +240,7 @@ class RoutingRequest(BaseModel):
     # multi-step agent trajectory). See router/run_budget.py. Auto-generated
     # by Flux.start_run() / the proxy's X-Flux-Run-Id header if not supplied;
     # requests with no run_id are not subject to run-budget enforcement at all.
-    run_id: str | None = Field(default=None, max_length=256)
+    run_id: str | None = Field(default=None, max_length=RUN_ID_MAX_LENGTH)
 
     # ── Per-tenant cost attribution ──────────────────────────────────
     # Which customer/workflow this request belongs to, for router/attribution.py

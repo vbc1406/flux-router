@@ -866,6 +866,191 @@ class TestRunBudget:
         assert resp.status_code == 200
         assert resp.headers["x-flux-run-id-missing"] == "true"
 
+    # ── Strix finding: run-scoped budget bypass via omitted header ──────────
+    # https://github.com/vbc1406/flux-router — Medium, CVSS 4.3. Reproduces
+    # the exact repro Strix used (max_steps=2, fixed id blocked from the 3rd
+    # call while headerless calls all succeed) and proves both halves of the
+    # fix: the bypass is a documented, opt-out default (FLUX_REQUIRE_RUN_ID
+    # unset) and is fully closed once an operator opts into fail-closed mode.
+
+    def test_strix_repro_fixed_id_blocked_headerless_all_succeed(self, client, monkeypatch):
+        from router.run_budget import RunLimits
+
+        rb = server._flux._engine._run_budget
+        fixed_run_id = "strix-repro-fixed"
+        rb.start(fixed_run_id, RunLimits(max_steps=2))
+
+        statuses = [
+            client.post(
+                "/v1/chat/completions", json=_body(), headers={"X-Flux-Run-Id": fixed_run_id}
+            ).status_code
+            for _ in range(3)
+        ]
+        assert statuses == [200, 200, 429]
+
+        # Same deployment, same limits ladder, but every call omits the
+        # header — under the DEFAULT config (FLUX_REQUIRE_RUN_ID unset) this
+        # remains intentionally permitted for wrapper compatibility: each
+        # call becomes its own single-step run, so max_steps=2 never
+        # actually applies to any of them individually. This is the
+        # documented, opt-out escape hatch (config.RUN_ID_REQUIRED), not an
+        # oversight — the paired test below shows an operator can close it.
+        headerless_statuses = [
+            client.post("/v1/chat/completions", json=_body()).status_code for _ in range(4)
+        ]
+        assert headerless_statuses == [200, 200, 200, 200]
+
+    def test_strix_repro_closed_when_run_id_required(self, client, monkeypatch, _mock_call_model):
+        monkeypatch.setattr(server, "RUN_ID_REQUIRED", True)
+        for _ in range(4):
+            resp = client.post("/v1/chat/completions", json=_body())
+            assert resp.status_code == 400
+            assert "X-Flux-Run-Id" in resp.json()["detail"]
+        _mock_call_model.assert_not_called()
+
+
+class TestRunIdRequiredMode:
+    """FLUX_REQUIRE_RUN_ID / config.RUN_ID_REQUIRED: opt-in fail-closed mode
+    for deployments that actually rely on cross-step run-budget enforcement.
+    Default is False (tested throughout TestRunBudget); this class covers
+    the True side."""
+
+    def test_missing_header_rejected_before_dispatch(self, client, monkeypatch, _mock_call_model):
+        monkeypatch.setattr(server, "RUN_ID_REQUIRED", True)
+        resp = client.post("/v1/chat/completions", json=_body())
+        assert resp.status_code == 400
+        _mock_call_model.assert_not_called()
+
+    def test_missing_header_rejected_for_streaming_too(self, client, monkeypatch, _mock_call_model):
+        monkeypatch.setattr(server, "RUN_ID_REQUIRED", True)
+        resp = client.post("/v1/chat/completions", json=_body(stream=True))
+        assert resp.status_code == 400
+        _mock_call_model.assert_not_called()
+
+    def test_valid_header_still_works(self, client, monkeypatch):
+        monkeypatch.setattr(server, "RUN_ID_REQUIRED", True)
+        resp = client.post(
+            "/v1/chat/completions", json=_body(), headers={"X-Flux-Run-Id": "required-mode-run"}
+        )
+        assert resp.status_code == 200
+        assert resp.headers["x-flux-run-id"] == "required-mode-run"
+
+    def test_repeated_omission_cannot_bypass_max_steps(self, client, monkeypatch):
+        """The actual bypass scenario: with the header required, there is no
+        way to mint a fresh unlinked run by omitting it — every attempt is
+        rejected outright, so cumulative enforcement can't be dodged."""
+        monkeypatch.setattr(server, "RUN_ID_REQUIRED", True)
+        for _ in range(10):
+            resp = client.post("/v1/chat/completions", json=_body())
+            assert resp.status_code == 400
+
+    def test_default_is_false_and_headerless_requests_still_work(self, client):
+        assert config.RUN_ID_REQUIRED is False
+        resp = client.post("/v1/chat/completions", json=_body())
+        assert resp.status_code == 200
+
+
+class TestRunIdValidation:
+    """Malformed X-Flux-Run-Id values — rejected regardless of
+    FLUX_REQUIRE_RUN_ID, since an accepted-but-unsafe id would otherwise let
+    an attacker grow the run-state store unboundedly or collide with the
+    tenant-scoping separator. Validated before the body is read."""
+
+    @pytest.mark.parametrize(
+        "bad_run_id",
+        [
+            "",
+            "   ",
+            "\t\n",
+            "x" * 257,
+            "run id with spaces",
+            "run/id",
+            "run;DROP TABLE",
+            "run\x00id",
+        ],
+    )
+    def test_malformed_run_id_rejected(self, client, bad_run_id, _mock_call_model):
+        resp = client.post(
+            "/v1/chat/completions", json=_body(), headers={"X-Flux-Run-Id": bad_run_id}
+        )
+        assert resp.status_code == 400
+        assert "X-Flux-Run-Id" in resp.json()["detail"]
+        _mock_call_model.assert_not_called()
+
+    def test_max_length_run_id_accepted(self, client):
+        run_id = "x" * 256
+        resp = client.post(
+            "/v1/chat/completions", json=_body(), headers={"X-Flux-Run-Id": run_id}
+        )
+        assert resp.status_code == 200
+        assert resp.headers["x-flux-run-id"] == run_id
+
+    def test_valid_run_id_charset_accepted(self, client):
+        run_id = "trace-2026.08.24_step:1-Az9"
+        resp = client.post(
+            "/v1/chat/completions", json=_body(), headers={"X-Flux-Run-Id": run_id}
+        )
+        assert resp.status_code == 200
+        assert resp.headers["x-flux-run-id"] == run_id
+
+    def test_rejection_happens_before_body_is_read(self, client, monkeypatch):
+        """A malformed run_id must be rejected without the handler ever
+        touching the request body — verified by sending an unparsable body
+        that would raise a *different* error (400 invalid JSON) if reached."""
+        resp = client.post(
+            "/v1/chat/completions",
+            content=b"{not valid json",
+            headers={
+                "X-Flux-Run-Id": "",
+                "content-type": "application/json",
+            },
+        )
+        assert resp.status_code == 400
+        assert "X-Flux-Run-Id" in resp.json()["detail"]
+
+
+class TestRunIdRequiredAcrossStoreBackends:
+    """The Strix-reported bypass and its fix live entirely in server.py's
+    header handling, ahead of RunBudget — so the fix must hold regardless of
+    which RunStore backend a deployment uses. Swaps in a fakeredis-backed
+    RunBudget to prove it. Skipped (not failed) if fakeredis isn't installed,
+    matching test_run_store_backends.py's convention."""
+
+    @pytest.fixture
+    def redis_run_budget(self, monkeypatch):
+        fakeredis = pytest.importorskip("fakeredis")
+
+        from router.run_budget import RedisRunStore, RunBudget
+
+        client = fakeredis.FakeRedis(decode_responses=True)
+        store = RedisRunStore(redis_client=client, max_entries=200, ttl_seconds=3600.0)
+        rb = RunBudget(store=store)
+        monkeypatch.setattr(server._flux._engine, "_run_budget", rb)
+        return rb
+
+    def test_fixed_id_still_enforces_across_workers_worth_of_state(
+        self, client, redis_run_budget
+    ):
+        from router.run_budget import RunLimits
+
+        run_id = "redis-backed-run"
+        redis_run_budget.start(run_id, RunLimits(max_steps=2))
+        statuses = [
+            client.post(
+                "/v1/chat/completions", json=_body(), headers={"X-Flux-Run-Id": run_id}
+            ).status_code
+            for _ in range(3)
+        ]
+        assert statuses == [200, 200, 429]
+
+    def test_required_mode_rejects_headerless_with_redis_backend(
+        self, client, monkeypatch, redis_run_budget, _mock_call_model
+    ):
+        monkeypatch.setattr(server, "RUN_ID_REQUIRED", True)
+        resp = client.post("/v1/chat/completions", json=_body())
+        assert resp.status_code == 400
+        _mock_call_model.assert_not_called()
+
 
 class TestAttribution:
     def test_chat_completion_records_usage_under_tenant_header(self, client):

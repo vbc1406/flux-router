@@ -230,6 +230,31 @@ Without a token you get the API alone.
 
 ---
 
+## Run-scoped budget enforcement is per-run-id, not automatic
+
+Run budgets (`max_steps`, `max_cost_usd`, `max_tokens` — see the README's
+"Run-scoped budgets" section) only accumulate within one `X-Flux-Run-Id`. A
+caller that generates a fresh ID (or sends no header at all) on every
+request never crosses any cumulative threshold, no matter how many requests
+it makes — each one becomes its own harmless single-step run. That's
+intentional for the default wrapper use case (a `base_url` swap with no
+headers set at all), but it means the permissive default is not itself an
+enforcement guarantee for an actual multi-step agent loop.
+
+If you're running Flux for agent workloads where run-scoped budgets need to
+actually hold, set:
+
+```bash
+export FLUX_REQUIRE_RUN_ID=true
+```
+
+With this set, every `/v1/chat/completions` call must carry a valid,
+non-blank `X-Flux-Run-Id` (rejected with `400` before the body is even read
+otherwise). Leave it unset for a deployment that's only ever a wrapper
+proxy for ad-hoc single calls.
+
+---
+
 ## Multiple workers
 
 `--workers N` forks N uvicorn processes. Two caveats the server warns about at

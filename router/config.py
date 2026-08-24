@@ -992,6 +992,24 @@ RUN_STORE_BACKEND: str = os.environ.get("FLUX_RUN_STORE", "memory").lower()
 # Connection URL for RedisRunStore, only read when RUN_STORE_BACKEND == "redis".
 REDIS_URL: str = os.environ.get("FLUX_REDIS_URL", "redis://localhost:6379/0")
 
+# Fail-closed mode for run-scoped budget enforcement. Without this, a caller
+# can bypass cumulative run limits (max_steps, max_cost_usd, max_tokens)
+# simply by never sending X-Flux-Run-Id: a missing header used to silently
+# mint a fresh, single-step run on every request, so no request ever
+# accumulated toward another one's budget (a 1-step run never crosses a
+# threshold meant for a 100-step trajectory). Default False preserves the
+# "swap base_url into an existing OpenAI client, zero code changes"
+# quickstart path — an ad-hoc single call has nothing to bypass, since it
+# was never part of a multi-step run in the first place. Set
+# FLUX_REQUIRE_RUN_ID=true for deployments that actually rely on run-scoped
+# budgets to cap a multi-step agent loop's spend (the audience run-scoped
+# budgets exist for) — every /v1/chat/completions call then must carry a
+# valid, non-blank X-Flux-Run-Id or is rejected with 400 before the body is
+# even read. See router/server.py's chat_completions() and
+# schemas.validate_run_id() for the shared ID-format validation (reused so
+# the early header check and RoutingRequest's own validator can't drift).
+RUN_ID_REQUIRED: bool = os.environ.get("FLUX_REQUIRE_RUN_ID", "false").lower() == "true"
+
 # Number of server worker processes, as configured by the deployer (e.g. via
 # `uvicorn --workers N` or a WSGI manager). Not auto-detected — the process
 # can't see its sibling workers — so this only reflects what's set here.

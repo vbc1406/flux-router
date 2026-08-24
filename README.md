@@ -189,6 +189,23 @@ up — and only raises `RunBudgetExceeded` once a limit is actually hit,
 proxy, tag repeated calls with the same `X-Flux-Run-Id` header to get the
 same enforcement without any Python. See `examples/agent_loop.py`.
 
+**Reuse one `X-Flux-Run-Id` for the whole trajectory — a new value per step
+gets a new, unlinked run every time.** Cumulative limits (`max_steps`,
+`max_cost_usd`, `max_tokens`) only ever apply *within* one run_id; an agent
+loop that generates a fresh ID (or omits the header) on every step never
+accumulates toward any of them, no matter how many steps it takes. This is
+also why the default single-call wrapper use (`base_url` swap, no headers
+set) is unaffected: a one-off request was never meant to be part of a
+multi-step budget in the first place.
+
+If your deployment relies on run-scoped budgets actually bounding an agent
+loop's spend — rather than as a best-effort default — set
+`FLUX_REQUIRE_RUN_ID=true`. Every `/v1/chat/completions` call then **must**
+carry a valid `X-Flux-Run-Id` or the proxy rejects it with `400` before doing
+any work; the permissive default (each headerless call becomes its own
+harmless single-step run) exists only to keep the zero-config wrapper path
+working, not as a way to opt out of enforcement for a real agent loop.
+
 Multi-worker deployments (`flux serve --workers N`) run budgets
 **under-enforce by default** — each worker only sees the steps it personally
 handled, since run state is process-local. Set `FLUX_RUN_STORE=redis` (plus

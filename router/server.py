@@ -58,6 +58,7 @@ from .config import (
     RATE_LIMIT_BURST,
     RATE_LIMIT_RPM,
     RUN_DEGRADE_THRESHOLD,
+    RUN_ID_REQUIRED,
     RUN_MAX_COST_USD,
     RUN_MAX_DURATION_SECONDS,
     RUN_MAX_STEPS,
@@ -85,7 +86,7 @@ from .provider_caller import (
 from .provider_caller import _safe_usage_int as _safe_stream_usage_int
 from .rate_limit import RateLimiter
 from .run_budget import RunBudgetExceeded
-from .schemas import RoutingDecision, RoutingRequest
+from .schemas import RoutingDecision, RoutingRequest, validate_run_id
 
 log = structlog.get_logger(__name__)
 
@@ -986,6 +987,65 @@ async def chat_completions(
     # would mean a flood still gets to push SERVER_MAX_BODY_BYTES at us per
     # request. After _check_auth so that bound_tenant is available as the key.
     _enforce_rate_limit(request, bound_tenant)
+
+    # In FLUX_SERVER_TOKENS multi-tenant mode, the bearer token's bound
+    # tenant always wins over the client-supplied X-Flux-Tenant-Id header —
+    # otherwise any caller could attribute spend/usage to an arbitrary
+    # tenant_id regardless of which token they authenticated with. Computed
+    # here (needs only headers, not the body) so the run_id checks below can
+    # use it before the body is read.
+    tenant_id = bound_tenant if bound_tenant is not None else x_flux_tenant_id
+
+    # every request belongs to a run — X-Flux-Run-Id groups repeated calls
+    # into one budgeted trajectory. Security fix: a request with no header
+    # used to silently get its own single-step run every time (a fresh
+    # uuid4()), which makes run-scoped budget enforcement a no-op for it (a
+    # run of one step never crosses a threshold meant for a multi-step
+    # trajectory) — and, worse, gave a caller who wanted to dodge cumulative
+    # limits (max_steps/max_cost_usd/max_tokens) a trivial bypass: just never
+    # send the header. Reported by Strix (white-box assessment), CVSS-Medium.
+    # Two independent fixes, both ahead of the body read/provider dispatch:
+    #  1. A header that IS sent is validated for real now — previously
+    #     `x_flux_run_id or uuid.uuid4()` used Python truthiness, so an empty
+    #     string ("") silently took the auto-generate path instead of being
+    #     rejected like any other malformed id. validate_run_id() (shared
+    #     with RoutingRequest's own field validator, so the two can't drift)
+    #     rejects blank/whitespace-only, oversized, and unsafe-charset values
+    #     with a 400 here instead.
+    #  2. FLUX_REQUIRE_RUN_ID (RUN_ID_REQUIRED) lets an operator who actually
+    #     relies on cross-step enforcement fail closed: no header at all is
+    #     then a 400, not a silently-unlinked run. Defaults to False so the
+    #     "swap base_url into an existing OpenAI client, zero code changes"
+    #     quickstart path keeps working — an ad-hoc single call was never
+    #     part of a multi-step run to begin with, so it has nothing to
+    #     bypass. See config.RUN_ID_REQUIRED's docstring.
+    if x_flux_run_id is not None:
+        try:
+            run_id = validate_run_id(x_flux_run_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid X-Flux-Run-Id: {exc}"
+            ) from exc
+        run_id_missing = False
+    elif RUN_ID_REQUIRED:
+        raise HTTPException(
+            status_code=400,
+            detail="X-Flux-Run-Id header is required (FLUX_REQUIRE_RUN_ID=true "
+            "on this deployment). Reuse one stable ID across every step of "
+            "the same agent trajectory so cumulative run-budget limits can "
+            "be enforced.",
+        )
+    else:
+        run_id_missing = True
+        run_id = str(uuid.uuid4())
+        log.warning(
+            "flux_run_id_auto_generated",
+            run_id=run_id,
+            tenant_id=tenant_id,
+            reason="no X-Flux-Run-Id header on request; run-scoped budget "
+            "enforcement will not span multiple steps for this call",
+        )
+
     raw_body = await _read_bounded_body(request)
     try:
         body = json.loads(raw_body.decode("utf-8"))
@@ -993,12 +1053,6 @@ async def chat_completions(
         raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Request body must be a JSON object")
-
-    # In FLUX_SERVER_TOKENS multi-tenant mode, the bearer token's bound
-    # tenant always wins over the client-supplied X-Flux-Tenant-Id header —
-    # otherwise any caller could attribute spend/usage to an arbitrary
-    # tenant_id regardless of which token they authenticated with.
-    tenant_id = bound_tenant if bound_tenant is not None else x_flux_tenant_id
 
     # Every other budget in this proxy is keyed by the client-supplied `user`
     # field (RoutingRequest.user_id), which an authenticated caller can
@@ -1021,24 +1075,6 @@ async def chat_completions(
                 },
             )
 
-    # every request belongs to a run — X-Flux-Run-Id groups repeated
-    # calls into one budgeted trajectory. Bugfix: a request with no header
-    # used to silently get its own single-step run, which makes run-scoped
-    # budget enforcement a no-op for it (a run of one step never crosses any
-    # threshold) — indistinguishable from a caller who forgot to propagate
-    # the header across their agent loop. Loud now: warn here, and surface
-    # it on the response (decision.run_id_missing / x-flux-run-id-missing)
-    # so callers can detect they aren't getting cross-step enforcement.
-    run_id_missing = x_flux_run_id is None
-    run_id = x_flux_run_id or str(uuid.uuid4())
-    if run_id_missing:
-        log.warning(
-            "flux_run_id_auto_generated",
-            run_id=run_id,
-            tenant_id=tenant_id,
-            reason="no X-Flux-Run-Id header on request; run-scoped budget "
-            "enforcement will not span multiple steps for this call",
-        )
     routing_request, _ = _build_routing_request(
         body, run_id, tenant_id, plan=bound_plan, step_type=x_flux_step_type
     )
