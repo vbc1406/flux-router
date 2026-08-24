@@ -819,9 +819,22 @@ async def stats_registry(
 
     Deliberately separate from GET /v1/models, which is OpenAI-shaped
     ({id, object, owned_by}) and must stay that way for client compatibility.
+
+    Every field here except current_load_rpm is static catalog data — the
+    same content as models.json — so it's intentionally NOT tenant-scoped
+    (see /v1/stats/config's docstring for the operator-field precedent this
+    follows). current_load_rpm is the one exception: it's a process-global
+    sliding-window counter (ModelRegistry.update_load() increments it for
+    EVERY tenant's routed requests — see its docstring), so exposing it
+    verbatim to a FLUX_SERVER_TOKENS-bound caller lets one tenant observe
+    load another tenant generated. Reported by Strix, CWE-863/CVSS 4.3.
+    Nulled (not omitted) for a tenant-bound token so the response shape
+    stays identical across auth modes; loopback/no-auth/shared-token reads
+    are unaffected, same as every other stats endpoint's scoping rule.
     """
     _refuse_remote_spend_data(request)
-    _check_auth(authorization)
+    binding = _check_auth(authorization)
+    scoped_tenant = _read_tenant_scope(binding)
     registry = _flux._engine._registry
     return {
         "data": [
@@ -839,7 +852,7 @@ async def stats_registry(
                 "supports_tools": m.supports_tools,
                 "avg_latency_ms": m.avg_latency_ms,
                 "rate_limit_rpm": m.rate_limit_rpm,
-                "current_load_rpm": m.current_load_rpm,
+                "current_load_rpm": None if scoped_tenant is not None else m.current_load_rpm,
                 "is_available": m.is_available,
             }
             for m in registry.all_available_models()

@@ -729,3 +729,69 @@ class TestConfigWithholdsOperatorFieldsFromTenantTokens:
         for field in self.OPERATOR_ONLY:
             assert field in body["server"], f"{field} missing for the shared-token operator"
         assert body["budgets"]["plans"] == server.BUDGET_LIMITS
+
+
+class TestRegistryWithholdsLiveLoadFromTenantTokens:
+    """Strix vuln-0001 (CWE-863, CVSS 4.3): current_load_rpm is a
+    process-global sliding-window counter -- ModelRegistry.update_load() is
+    called for EVERY tenant's routed request, so returning it verbatim let
+    one FLUX_SERVER_TOKENS-bound tenant observe load another tenant's
+    traffic generated. Every other field on this endpoint is static catalog
+    data (same content as models.json) and stays unscoped -- same
+    reasoning as TestConfigWithholdsOperatorFieldsFromTenantTokens above."""
+
+    @pytest.fixture
+    def bound(self, monkeypatch):
+        tokens = {
+            "tok-acme": ServerTokenBinding(tenant_id="acme", plan="free_plan"),
+            "tok-globex": ServerTokenBinding(tenant_id="globex", plan="pro_plan"),
+        }
+        monkeypatch.setattr(server, "SERVER_TOKENS", tokens)
+        monkeypatch.setattr(server, "SERVER_REQUIRE_AUTH", True)
+        return tokens
+
+    @staticmethod
+    def _bump_load_and_get_row(stats_client, headers) -> dict:
+        registry = server._flux._engine._registry
+        model_id = registry.all_available_models()[0].model_id
+        registry.update_load(model_id)
+        try:
+            body = stats_client.get("/v1/stats/registry", headers=headers).json()
+            return next(r for r in body["data"] if r["model_id"] == model_id)
+        finally:
+            registry.reset_load_tracking()
+
+    def test_tenant_bound_token_gets_null_load(self, stats_client, bound):
+        row = self._bump_load_and_get_row(
+            stats_client, {"Authorization": "Bearer tok-acme"}
+        )
+        assert row["current_load_rpm"] is None
+        # Static catalog fields are untouched -- this is a load-only redaction.
+        assert row["cost_per_1k_input"] is not None
+        assert row["rate_limit_rpm"] is not None
+        assert row["is_available"] is True
+
+    def test_cross_tenant_load_is_not_the_real_value(self, stats_client, bound):
+        """The exact Strix repro: tenant B's traffic (update_load) must not
+        surface as a real number to tenant A's token."""
+        row = self._bump_load_and_get_row(
+            stats_client, {"Authorization": "Bearer tok-acme"}
+        )
+        assert row["current_load_rpm"] != 1
+
+    def test_loopback_operator_still_sees_live_load(self, stats_client, monkeypatch):
+        monkeypatch.setattr(server, "SERVER_TOKENS", {})
+        monkeypatch.setattr(server, "SERVER_REQUIRE_AUTH", False)
+        row = self._bump_load_and_get_row(stats_client, {})
+        assert row["current_load_rpm"] == 1
+
+    def test_shared_token_still_sees_live_load(self, stats_client, monkeypatch):
+        """Deliberately not a read scope -- same reasoning as
+        TestSharedTokenReadsAreUnscoped / the config endpoint's precedent."""
+        monkeypatch.setattr(server, "SERVER_TOKENS", {})
+        monkeypatch.setattr(server, "SERVER_REQUIRE_AUTH", True)
+        monkeypatch.setattr(server, "_SERVER_TOKEN", "shared-secret")
+        row = self._bump_load_and_get_row(
+            stats_client, {"Authorization": "Bearer shared-secret"}
+        )
+        assert row["current_load_rpm"] == 1
