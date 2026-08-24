@@ -1,29 +1,36 @@
 # Self-hosting Flux
 
-Running `flux serve` gives you an OpenAI-compatible proxy, a SQLite database of
-what every request cost, and a dashboard over the top of it — all on your own
-machine. No traffic reaches us. There is no telemetry, no callback, and no
-account to create; your provider keys and your prompts stay on the box.
+Running `flux serve` gives you an OpenAI-compatible proxy that does two jobs at
+once: it routes each request to the cheapest model that meets your quality bar,
+and it caps what any single agent run is allowed to spend before it happens,
+not after. On top of that you get a SQLite database of what every request
+cost and a dashboard over it — all on your own machine. No traffic reaches us.
+There is no telemetry, no callback, and no account to create; your provider
+keys and your prompts stay on the box.
 
-This document covers the server. For the Python library, see the
-[README](./README.md); for the security model, see
+This document covers the server. For the Python library and a step-by-step
+install, see the [README](./README.md); for the security model, see
 [SECURITY_ARCHITECTURE.md](./SECURITY_ARCHITECTURE.md).
 
 ---
 
 ## Install and run
 
+Flux isn't on PyPI, so it installs straight from the repo. Python 3.10, 3.11,
+or 3.12.
+
 ```bash
-git clone https://github.com/vbc1406/flux.git
+git clone https://github.com/vbc1406/flux.git   # 1. get the code
 cd flux
-pip install -e '.[server]'
-export OPENAI_API_KEY=sk-...        # + whichever other providers you use
-flux serve
+pip install -e '.[server]'                      # 2. install
+export OPENAI_API_KEY=sk-...                     # 3. set a provider key (+ any others you use)
+flux serve                                       # 4. start the server
 ```
 
-Flux is not on PyPI; install it from the repository. Python 3.10, 3.11, or 3.12.
+For a slower, step-by-step walkthrough of the same four commands, see the
+[README Quickstart](./README.md#quickstart).
 
-That prints where everything lives and starts serving:
+`flux serve` prints where everything lives and starts serving:
 
 ```
 Flux 1.0.0

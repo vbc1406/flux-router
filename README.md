@@ -1,22 +1,33 @@
 # Flux
 
-**Fast, cost-aware heuristic LLM router. Cut spend without sacrificing quality.**
+**A self-hosted proxy that routes each request to the cheapest model that meets your quality bar — and stops an agent loop from spending past a budget you set.**
 
-Flux is a heuristic router that picks a low-cost model satisfying configured quality and capability constraints for each request. Routing is pure Python logic — no LLM calls in the decision path. Routing overhead is a few milliseconds or less, and the adaptive weights learn from every response.
+Flux is two things at once:
+
+1. **A router.** Every request is scored for task type, complexity, and required capabilities, then sent to the cheapest model that clears those bars. Routing is pure Python — no LLM call in the decision path — and takes a few milliseconds.
+2. **Spend control for agents.** A single expensive call is easy to notice; a 40-step agent loop that quietly triples its budget is not. `flux.start_run(max_cost_usd=..., max_steps=...)` caps a whole trajectory, not one call, and Flux downgrades to cheaper routing automatically as a run approaches its cap instead of just erroring out at the end.
+
+Both run through the same proxy, so you get cost savings and a spending ceiling from one deployment, not two separate tools.
 
 ---
 
 ## Why Flux
 
-Most teams default to a single premium model for every request. That's expensive and often unnecessary — a short summarization or classification call usually doesn't need a top-tier model.
+Most teams default to a single premium model for every request — expensive, and usually unnecessary for a short summarization or classification call.
 
-Flux routes each request to a low-cost model that satisfies the configured quality/capability constraints, based on:
+Flux fixes that from two directions:
 
+**Cheaper routing, automatically:**
 - **Task classification** — code, summarization, reasoning, creative, etc.
 - **Complexity scoring** — short greeting vs. multi-step proof
 - **Adaptive learning** — models that consistently perform well get prioritized
 - **Cost ceilings** — never burn budget on a single request
 - **Fallback chains** — automatic retry on rate limits, timeouts, or content filters
+
+**A hard ceiling on agent spend:**
+- **Run-scoped budgets** — cap cost and step count for an entire agent trajectory, enforced before each step dispatches, not after
+- **Per-tenant budget plans** — give each caller (or customer) its own daily cap, server-bound so it can't be spoofed by the caller
+- **Rate limiting** — bound request volume per tenant, not just per request
 
 The model registry includes current-generation models from OpenAI, Anthropic, Google, Mistral, and Groq; the router selects per-request based on the configured quality floor and constraints, not a fixed mapping.
 
@@ -24,38 +35,47 @@ The model registry includes current-generation models from OpenAI, Anthropic, Go
 
 ## Quickstart
 
-Requires Python 3.10, 3.11, or 3.12. Flux is not published on PyPI — install it
-from a checkout of this repository:
+The fastest path is running Flux as a local HTTP proxy — point your existing OpenAI SDK client at it and nothing else in your code changes.
+
+**Step 1 — Check your Python version.** Flux needs 3.10, 3.11, or 3.12.
+
+```bash
+python3 --version
+```
+
+**Step 2 — Clone and install.** Flux isn't on PyPI, so it installs straight from the repo.
 
 ```bash
 git clone https://github.com/vbc1406/flux.git
 cd flux
-```
-
-### Option 1: `base_url` swap (no code changes)
-
-Run Flux as a local HTTP proxy and point your existing OpenAI SDK client at it —
-no call-site rewrites required.
-
-```bash
 pip install -e ".[server]"
-export OPENAI_API_KEY=sk-...        # + whichever other provider keys you use
-flux serve                          # or: make serve / python -m router serve
 ```
 
-`flux serve` prints the API and dashboard URLs on startup and keeps its usage
-database in `$XDG_DATA_HOME/flux` (override with `--data-dir`), so spend history
-survives a restart. `flux serve --help` lists the flags; each one maps to a
-`FLUX_*` environment variable.
-
-Or with Docker, which mounts a volume for the usage database:
+**Step 3 — Set a provider API key.** Only export keys for providers you actually want Flux routing to.
 
 ```bash
-FLUX_SERVER_TOKEN=$(openssl rand -hex 32) docker compose up -d   # or: make docker-up
+export OPENAI_API_KEY=sk-...
 ```
 
-A token is required for the dashboard under Docker — see
-[SELF_HOSTING.md](./SELF_HOSTING.md#docker) for why.
+**Step 4 — Start the server.**
+
+```bash
+flux serve
+```
+
+You'll see something like this — the important lines are the API and dashboard URLs:
+
+```
+Flux 1.0.0
+  data dir:  /home/you/.local/share/flux
+  usage db:  /home/you/.local/share/flux/flux.db
+  API:       http://127.0.0.1:8000/v1
+  dashboard: http://127.0.0.1:8000/dashboard
+```
+
+Spend history is written to that usage database automatically, so it survives a restart. `flux serve --help` lists every flag; each one also has a `FLUX_*` environment variable if you'd rather configure it that way (see [SELF_HOSTING.md](./SELF_HOSTING.md)).
+
+**Step 5 — Point your existing OpenAI client at it.** No other code changes needed.
 
 ```python
 from openai import OpenAI
@@ -69,19 +89,19 @@ print(resp.choices[0].message.content)
 print("routed to:", resp.model)
 ```
 
-`model` is a routing directive, not a literal model name: `flux-auto` routes
-normally, `flux-cheap` forces cost-optimized routing, `flux-quality` forces
-quality-first routing. Passing a concrete model ID (e.g. `gpt-4o`) bypasses
-routing entirely and calls that model verbatim. Streaming (`stream: true`) is
-supported. Routing metadata (chosen model, task type, complexity, estimated
-cost, decision latency) comes back on `x-flux-*` response headers.
+`model` is a routing directive, not a literal model name: `flux-auto` routes normally, `flux-cheap` forces cost-optimized routing, `flux-quality` forces quality-first routing. Passing a concrete model ID (e.g. `gpt-4o`) bypasses routing entirely and calls that model verbatim. Streaming (`stream: true`) is supported. Routing metadata (chosen model, task type, complexity, estimated cost, decision latency) comes back on `x-flux-*` response headers.
 
-By default the server binds to `127.0.0.1` only and logs a warning. Set
-`FLUX_SERVER_TOKEN` to require `Authorization: Bearer <token>` on every
-request and allow non-loopback binding — see `router/config.py` for the rest
-of the `SERVER_*` settings.
+By default the server only listens on `127.0.0.1` (your machine, nobody else). If you want to reach it from another machine or a Docker container, set `FLUX_SERVER_TOKEN` first — that requires an `Authorization: Bearer <token>` header on every request and unlocks non-loopback binding. See `router/config.py` for the rest of the `SERVER_*` settings.
 
-### Option 2: Python import
+### Prefer Docker?
+
+```bash
+FLUX_SERVER_TOKEN=$(openssl rand -hex 32) docker compose up -d   # or: make docker-up
+```
+
+This mounts a volume so the usage database survives `docker compose down` and image rebuilds. A token is required for the dashboard under Docker — see [SELF_HOSTING.md](./SELF_HOSTING.md#docker) for why.
+
+### Prefer importing Flux directly into Python instead of running the proxy?
 
 ```bash
 pip install -e .
