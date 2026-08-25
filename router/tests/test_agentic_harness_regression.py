@@ -70,7 +70,13 @@ class TestRunIdAndHeadersAcrossTrajectory:
             "x-flux-decision-latency-ms",
             "x-flux-budget-state",
         ]
-        for step_type in ("plan", "tool_select", "tool_result_summarize", "reflect", "final_answer"):
+        for step_type in (
+            "plan",
+            "tool_select",
+            "tool_result_summarize",
+            "reflect",
+            "final_answer",
+        ):
             resp = client.post(
                 "/v1/chat/completions",
                 json={"model": "flux-auto", "messages": [{"role": "user", "content": "hi"}]},
@@ -149,7 +155,12 @@ class TestToolRoleLastMessageDefect:
                         }
                     ],
                 },
-                {"role": "tool", "tool_call_id": "call_1", "name": "get_weather", "content": "sunny"},
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "name": "get_weather",
+                    "content": "sunny",
+                },
             ],
         }
         resp = client.post("/v1/chat/completions", json=body)

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -43,18 +44,21 @@ MODEL_ID = "mistral-medium-3.5"  # real Mistral model, tier="mid" so it clears
 TOTAL_SPEND_CAP_USD = 1.00
 PER_CALL_PROJECTED_CAP_USD = 0.05  # abort a single call if its own estimate exceeds this
 
+
 # ── 1. Verify .env.agent-test is gitignored BEFORE loading anything ─────────
 def verify_gitignored() -> None:
     if not ENV_PATH.exists():
         sys.exit(f"FATAL: {ENV_PATH} does not exist.")
+    git_path = shutil.which("git")
+    if not git_path:
+        sys.exit("FATAL: git executable not found on PATH.")
     result = subprocess.run(
-        ["git", "check-ignore", "-q", str(ENV_PATH)],
+        [git_path, "check-ignore", "-q", str(ENV_PATH)],
         cwd=REPO_ROOT,
     )
     if result.returncode != 0:
         sys.exit(
-            "FATAL: .env.agent-test is NOT covered by .gitignore. "
-            "Refusing to load credentials."
+            "FATAL: .env.agent-test is NOT covered by .gitignore. Refusing to load credentials."
         )
 
 
@@ -147,16 +151,23 @@ def record_headers(step_name: str, run_id: str, resp: httpx.Response) -> dict:
         fatal(f"x-flux-run-id-missing present on step '{step_name}'")
     if h.get("x-flux-run-id") != run_id:
         findings["routing_validation"].append(
-            f"FAIL: step '{step_name}' echoed run-id {h.get('x-flux-run-id')!r}, expected {run_id!r}"
+            f"FAIL: step '{step_name}' echoed run-id {h.get('x-flux-run-id')!r}, "
+            f"expected {run_id!r}"
         )
     else:
-        findings["routing_validation"].append(f"OK: step '{step_name}' echoed matching x-flux-run-id")
+        findings["routing_validation"].append(
+            f"OK: step '{step_name}' echoed matching x-flux-run-id"
+        )
 
     missing = [hk for hk in REQUIRED_RESPONSE_HEADERS if hk not in h]
     if missing:
-        findings["routing_validation"].append(f"FAIL: step '{step_name}' missing headers: {missing}")
+        findings["routing_validation"].append(
+            f"FAIL: step '{step_name}' missing headers: {missing}"
+        )
     else:
-        findings["routing_validation"].append(f"OK: step '{step_name}' carries all required x-flux-* headers")
+        findings["routing_validation"].append(
+            f"OK: step '{step_name}' carries all required x-flux-* headers"
+        )
     return row
 
 
@@ -170,13 +181,19 @@ def check_and_apply_spend_cap(row: dict, run_id: str) -> None:
             f"ABORT: single-step projected cost ${est:.6f} exceeds per-call guard "
             f"${PER_CALL_PROJECTED_CAP_USD:.2f} — stopping run {run_id} before further spend."
         )
-        fatal(f"single-step projected cost ${est:.6f} exceeds per-call guard ${PER_CALL_PROJECTED_CAP_USD:.2f}")
+        fatal(
+            f"single-step projected cost ${est:.6f} exceeds per-call guard "
+            f"${PER_CALL_PROJECTED_CAP_USD:.2f}"
+        )
     if spend_tracker["total"] + est > TOTAL_SPEND_CAP_USD:
         findings["budget_validation"].append(
             f"ABORT: cumulative projected spend ${spend_tracker['total'] + est:.6f} would exceed "
             f"the ${TOTAL_SPEND_CAP_USD:.2f} hard cap — stopping before dispatch."
         )
-        fatal(f"cumulative projected spend ${spend_tracker['total'] + est:.6f} would exceed ${TOTAL_SPEND_CAP_USD:.2f}")
+        fatal(
+            f"cumulative projected spend ${spend_tracker['total'] + est:.6f} would exceed "
+            f"${TOTAL_SPEND_CAP_USD:.2f}"
+        )
     spend_tracker["total"] += est
 
 
@@ -210,11 +227,13 @@ def _delegate_tool(name: str, description: str) -> list[dict]:
 
 
 WEATHER_TOOL = _delegate_tool(
-    "get_current_weather", "Get current weather for a location by latitude/longitude, via Open-Meteo."
+    "get_current_weather",
+    "Get current weather for a location by latitude/longitude, via Open-Meteo.",
 )
 AIR_QUALITY_TOOL = _delegate_tool(
     "get_current_air_quality",
-    "Get current air quality (PM2.5/PM10/US AQI) for a location by latitude/longitude, via Open-Meteo.",
+    "Get current air quality (PM2.5/PM10/US AQI) for a location by latitude/longitude, "
+    "via Open-Meteo.",
 )
 DELEGATE_WEATHER_TOOL = _delegate_tool(
     "delegate_to_weather_subagent",
@@ -294,7 +313,9 @@ def select_tool_with_retry(
                 "max_tokens": token_budget,
             },
         )
-        row = record_headers(f"{step_label}" if attempt == 1 else f"{step_label}-retry{attempt - 1}", run_id, resp)
+        row = record_headers(
+            f"{step_label}" if attempt == 1 else f"{step_label}-retry{attempt - 1}", run_id, resp
+        )
         check_and_apply_spend_cap(row, run_id)
         resp.raise_for_status()
         tsel = resp.json()["choices"][0]["message"]
@@ -307,7 +328,8 @@ def select_tool_with_retry(
                     f"not a Flux defect)"
                 )
             findings["tool_round_trip"].append(
-                f"OK: [{scope}] tool-selection response contained a real structured tool_calls object"
+                f"OK: [{scope}] tool-selection response contained a real structured "
+                f"tool_calls object"
             )
             return row, tsel
         print(
@@ -320,7 +342,9 @@ def select_tool_with_retry(
         f"FAIL: [{scope}] tool-selection response did not contain a structured tool_calls object "
         f"after {max_attempts} attempts (prose-only recommendation is not accepted)."
     )
-    fatal(f"[{scope}] tool_select never returned structured tool_calls after {max_attempts} attempts")
+    fatal(
+        f"[{scope}] tool_select never returned structured tool_calls after {max_attempts} attempts"
+    )
 
 
 def run_agent_trajectory(
@@ -341,16 +365,24 @@ def run_agent_trajectory(
     returns the observation dict."""
     messages: list[dict] = [{"role": "user", "content": task_prompt}]
 
-    resp = post(client, run_id, "plan", {"model": MODEL_ID, "messages": messages, "max_tokens": 200})
+    resp = post(
+        client, run_id, "plan", {"model": MODEL_ID, "messages": messages, "max_tokens": 200}
+    )
     row = record_headers(f"{scope}-1-plan", run_id, resp)
     check_and_apply_spend_cap(row, run_id)
     resp.raise_for_status()
     plan_text = resp.json()["choices"][0]["message"]["content"]
     messages.append({"role": "assistant", "content": plan_text})
-    findings["trajectory_continuity"].append(f"OK: [{scope}] plan response appended to message history")
+    findings["trajectory_continuity"].append(
+        f"OK: [{scope}] plan response appended to message history"
+    )
 
-    messages.append({"role": "user", "content": "Now select and call the appropriate tool to get that data."})
-    _row, tsel = select_tool_with_retry(client, run_id, f"{scope}-2-tool_select", messages, tool_def, scope)
+    messages.append(
+        {"role": "user", "content": "Now select and call the appropriate tool to get that data."}
+    )
+    _row, tsel = select_tool_with_retry(
+        client, run_id, f"{scope}-2-tool_select", messages, tool_def, scope
+    )
     tool_calls = tsel["tool_calls"]
     tool_call = tool_calls[0]
     tool_call_id = tool_call["id"]
@@ -367,11 +399,15 @@ def run_agent_trajectory(
     # Mistral 400 "Not the same number of function calls and responses"
     # surfaced this during live testing) breaks the 1:1 call/response
     # invariant several providers enforce.
-    messages.append({"role": "assistant", "content": tsel.get("content") or "", "tool_calls": [tool_call]})
+    messages.append(
+        {"role": "assistant", "content": tsel.get("content") or "", "tool_calls": [tool_call]}
+    )
 
     # actual execution of a harmless external tool
     observation = executor(args.get("latitude", 37.7749), args.get("longitude", -122.4194))
-    findings["tool_round_trip"].append(f"OK: [{scope}] executed real external tool call, got {observation}")
+    findings["tool_round_trip"].append(
+        f"OK: [{scope}] executed real external tool call, got {observation}"
+    )
 
     # submission of tool result as role="tool" with matching tool_call_id
     messages.append(
@@ -384,7 +420,10 @@ def run_agent_trajectory(
     )
     messages.append({"role": "user", "content": tool_result_label})
     resp = post(
-        client, run_id, "tool_result_summarize", {"model": MODEL_ID, "messages": messages, "max_tokens": 200}
+        client,
+        run_id,
+        "tool_result_summarize",
+        {"model": MODEL_ID, "messages": messages, "max_tokens": 200},
     )
     row = record_headers(f"{scope}-4-tool_result_summarize", run_id, resp)
     check_and_apply_spend_cap(row, run_id)
@@ -397,9 +436,17 @@ def run_agent_trajectory(
     )
 
     messages.append(
-        {"role": "user", "content": "Reflect: did you get everything needed to answer the original question? One sentence."}
+        {
+            "role": "user",
+            "content": (
+                "Reflect: did you get everything needed to answer the original question? "
+                "One sentence."
+            ),
+        }
     )
-    resp = post(client, run_id, "reflect", {"model": MODEL_ID, "messages": messages, "max_tokens": 150})
+    resp = post(
+        client, run_id, "reflect", {"model": MODEL_ID, "messages": messages, "max_tokens": 150}
+    )
     row = record_headers(f"{scope}-5-reflect", run_id, resp)
     check_and_apply_spend_cap(row, run_id)
     resp.raise_for_status()
@@ -411,7 +458,9 @@ def run_agent_trajectory(
     )
 
     messages.append({"role": "user", "content": final_prompt})
-    resp = post(client, run_id, "final_answer", {"model": MODEL_ID, "messages": messages, "max_tokens": 200})
+    resp = post(
+        client, run_id, "final_answer", {"model": MODEL_ID, "messages": messages, "max_tokens": 200}
+    )
     row = record_headers(f"{scope}-6-final_answer", run_id, resp)
     check_and_apply_spend_cap(row, run_id)
     resp.raise_for_status()
@@ -420,7 +469,8 @@ def run_agent_trajectory(
     for k, v in observation.items():
         if isinstance(v, (int, float)) and _grounded(float(v), final_text):
             findings["trajectory_continuity"].append(
-                f"OK: [{scope}] grounding — observation field {k}={v} numerically present in final answer"
+                f"OK: [{scope}] grounding — observation field {k}={v} numerically "
+                f"present in final answer"
             )
             break
     else:
@@ -447,7 +497,10 @@ def run_main_trajectory() -> None:
             ),
             tool_def=WEATHER_TOOL,
             executor=call_open_meteo_weather,
-            final_prompt="Give the final answer to the user now: what is the current weather in San Francisco?",
+            final_prompt=(
+                "Give the final answer to the user now: what is the current "
+                "weather in San Francisco?"
+            ),
         )
     print(f"[main trajectory] complete. run_id={run_id}")
     global _final_answer_text, _tool_observation
@@ -476,7 +529,12 @@ def run_multi_agent_orchestration() -> dict:
     ]
 
     with httpx.Client() as client:
-        resp = post(client, parent_run_id, "plan", {"model": MODEL_ID, "messages": messages, "max_tokens": 200})
+        resp = post(
+            client,
+            parent_run_id,
+            "plan",
+            {"model": MODEL_ID, "messages": messages, "max_tokens": 200},
+        )
         row = record_headers("parent-1-plan", parent_run_id, resp)
         check_and_apply_spend_cap(row, parent_run_id)
         resp.raise_for_status()
@@ -486,10 +544,21 @@ def run_multi_agent_orchestration() -> dict:
         # ── delegate #1: weather sub-agent ──
         messages.append({"role": "user", "content": "Delegate the weather sub-task now."})
         _row, tsel = select_tool_with_retry(
-            client, parent_run_id, "parent-2-tool_select-weather", messages, DELEGATE_WEATHER_TOOL, "parent-delegate-weather"
+            client,
+            parent_run_id,
+            "parent-2-tool_select-weather",
+            messages,
+            DELEGATE_WEATHER_TOOL,
+            "parent-delegate-weather",
         )
         weather_call = tsel["tool_calls"][0]
-        messages.append({"role": "assistant", "content": tsel.get("content") or "", "tool_calls": [weather_call]})
+        messages.append(
+            {
+                "role": "assistant",
+                "content": tsel.get("content") or "",
+                "tool_calls": [weather_call],
+            }
+        )
         findings["multi_agent_orchestration"].append(
             "OK: parent produced a structured tool_calls object delegating to the weather sub-agent"
         )
@@ -533,9 +602,12 @@ def run_multi_agent_orchestration() -> dict:
             "parent-delegate-air_quality",
         )
         aq_call = tsel["tool_calls"][0]
-        messages.append({"role": "assistant", "content": tsel.get("content") or "", "tool_calls": [aq_call]})
+        messages.append(
+            {"role": "assistant", "content": tsel.get("content") or "", "tool_calls": [aq_call]}
+        )
         findings["multi_agent_orchestration"].append(
-            "OK: parent produced a structured tool_calls object delegating to the air-quality sub-agent"
+            "OK: parent produced a structured tool_calls object delegating to the "
+            "air-quality sub-agent"
         )
 
         sub_b_run_id = f"agentic-subagent-airquality-{uuid.uuid4().hex[:10]}"
@@ -566,9 +638,17 @@ def run_multi_agent_orchestration() -> dict:
             }
         )
         messages.append(
-            {"role": "user", "content": "Reflect: do you now have both sub-agent results? One sentence."}
+            {
+                "role": "user",
+                "content": "Reflect: do you now have both sub-agent results? One sentence.",
+            }
         )
-        resp = post(client, parent_run_id, "reflect", {"model": MODEL_ID, "messages": messages, "max_tokens": 150})
+        resp = post(
+            client,
+            parent_run_id,
+            "reflect",
+            {"model": MODEL_ID, "messages": messages, "max_tokens": 150},
+        )
         row = record_headers("parent-5-reflect", parent_run_id, resp)
         check_and_apply_spend_cap(row, parent_run_id)
         resp.raise_for_status()
@@ -578,10 +658,18 @@ def run_multi_agent_orchestration() -> dict:
         messages.append(
             {
                 "role": "user",
-                "content": "Give the final combined answer now: weather AND air quality for San Francisco.",
+                "content": (
+                    "Give the final combined answer now: weather AND air quality "
+                    "for San Francisco."
+                ),
             }
         )
-        resp = post(client, parent_run_id, "final_answer", {"model": MODEL_ID, "messages": messages, "max_tokens": 250})
+        resp = post(
+            client,
+            parent_run_id,
+            "final_answer",
+            {"model": MODEL_ID, "messages": messages, "max_tokens": 250},
+        )
         row = record_headers("parent-6-final_answer", parent_run_id, resp)
         check_and_apply_spend_cap(row, parent_run_id)
         resp.raise_for_status()
@@ -600,10 +688,13 @@ def run_multi_agent_orchestration() -> dict:
     else:
         findings["not_proven"].append(
             "[multi-agent] Could not automatically confirm the parent's combined final answer "
-            "numerically references both sub-agents' observations — inspect manually in this report."
+            "numerically references both sub-agents' observations — inspect manually in this "
+            "report."
         )
 
-    print(f"[multi-agent] complete. parent={parent_run_id} sub_a={sub_a_run_id} sub_b={sub_b_run_id}")
+    print(
+        f"[multi-agent] complete. parent={parent_run_id} sub_a={sub_a_run_id} sub_b={sub_b_run_id}"
+    )
     return {
         "parent_run_id": parent_run_id,
         "sub_a": sub_a,
@@ -617,7 +708,9 @@ def run_tiny_budget_trajectory() -> dict:
     in-process RunBudget (same server, same memory — this is not a second
     server), then send steps until the cumulative cap trips a 429."""
     run_id = f"agentic-tinybudget-{uuid.uuid4().hex[:12]}"
-    limits = RunLimits(max_cost_usd=0.0006, max_steps=2, max_tokens=500_000, max_duration_seconds=900.0)
+    limits = RunLimits(
+        max_cost_usd=0.0006, max_steps=2, max_tokens=500_000, max_duration_seconds=900.0
+    )
     rs._flux._engine._run_budget.start(run_id, limits=limits)
     print(f"[tiny-budget trajectory] run_id={run_id} limits={limits}")
 
@@ -631,12 +724,19 @@ def run_tiny_budget_trajectory() -> dict:
                 "plan",
                 {"model": MODEL_ID, "messages": messages, "max_tokens": 20},
             )
-            results.append({"attempt": i + 1, "status": resp.status_code, "run_id_echo": resp.headers.get("x-flux-run-id")})
+            results.append(
+                {
+                    "attempt": i + 1,
+                    "status": resp.status_code,
+                    "run_id_echo": resp.headers.get("x-flux-run-id"),
+                }
+            )
             if resp.status_code == 429:
                 body = resp.json()
                 findings["budget_validation"].append(
                     f"OK: tiny-budget run stopped with HTTP 429 on attempt {i + 1} "
-                    f"(type={body.get('error', {}).get('type')}) after cumulative run-budget enforcement"
+                    f"(type={body.get('error', {}).get('type')}) after cumulative "
+                    f"run-budget enforcement"
                 )
                 break
             else:
@@ -695,17 +795,26 @@ def write_report(tiny_result: dict, multi_agent_result: dict) -> None:
     lines.append("# Flux Live Agentic E2E Harness — Report\n")
     lines.append(f"Model used: `{MODEL_ID}` (Mistral, mid tier)\n")
     lines.append(f"Cumulative real-provider spend cap: ${TOTAL_SPEND_CAP_USD:.2f}\n")
-    lines.append(f"Measured/projected total spend across every trajectory: ${spend_tracker['total']:.6f}\n")
+    lines.append(
+        f"Measured/projected total spend across every trajectory: ${spend_tracker['total']:.6f}\n"
+    )
 
-    lines.append("\n## Per-step response headers (all trajectories: agent, parent, sub-agents, tiny-budget)\n")
-    lines.append("| step | http | model | task_type | complexity | est_cost_usd | latency_ms | budget_state | run_id_echo_ok |")
+    lines.append(
+        "\n## Per-step response headers (all trajectories: agent, parent, sub-agents, "
+        "tiny-budget)\n"
+    )
+    lines.append(
+        "| step | http | model | task_type | complexity | est_cost_usd | latency_ms "
+        "| budget_state | run_id_echo_ok |"
+    )
     lines.append("|---|---|---|---|---|---|---|---|---|")
     for row in step_log:
         lines.append(
-            f"| {row['step']} | {row['http_status']} | {row.get('x-flux-model','')} | "
-            f"{row.get('x-flux-task-type','')} | {row.get('x-flux-complexity-score','')} | "
-            f"{row.get('x-flux-estimated-cost-usd','')} | {row.get('x-flux-decision-latency-ms','')} | "
-            f"{row.get('x-flux-budget-state','')} | "
+            f"| {row['step']} | {row['http_status']} | {row.get('x-flux-model', '')} | "
+            f"{row.get('x-flux-task-type', '')} | {row.get('x-flux-complexity-score', '')} | "
+            f"{row.get('x-flux-estimated-cost-usd', '')} | "
+            f"{row.get('x-flux-decision-latency-ms', '')} | "
+            f"{row.get('x-flux-budget-state', '')} | "
             f"{'yes' if row.get('x-flux-run-id') not in ('<MISSING>', None) else 'no'} |"
         )
 
@@ -714,13 +823,15 @@ def write_report(tiny_result: dict, multi_agent_result: dict) -> None:
     lines.append(f"sub-agent (weather) run_id: `{multi_agent_result['sub_a']['run_id']}`\n")
     lines.append(f"sub-agent (air-quality) run_id: `{multi_agent_result['sub_b']['run_id']}`\n")
     lines.append(
-        f"Weather sub-agent observation: `{json.dumps(multi_agent_result['sub_a']['observation'])}`\n"
+        "Weather sub-agent observation: "
+        f"`{json.dumps(multi_agent_result['sub_a']['observation'])}`\n"
     )
     lines.append(
         f"Weather sub-agent final answer:\n\n> {multi_agent_result['sub_a']['final_text']}\n"
     )
     lines.append(
-        f"\nAir-quality sub-agent observation: `{json.dumps(multi_agent_result['sub_b']['observation'])}`\n"
+        "\nAir-quality sub-agent observation: "
+        f"`{json.dumps(multi_agent_result['sub_b']['observation'])}`\n"
     )
     lines.append(
         f"Air-quality sub-agent final answer:\n\n> {multi_agent_result['sub_b']['final_text']}\n"
@@ -730,7 +841,9 @@ def write_report(tiny_result: dict, multi_agent_result: dict) -> None:
     lines.append("\n## Tiny-budget trajectory (cumulative 429 proof)\n")
     lines.append(f"run_id: `{tiny_result['run_id']}`\n")
     for a in tiny_result["attempts"]:
-        lines.append(f"- attempt {a['attempt']}: HTTP {a['status']} (run-id echoed: {a['run_id_echo']})")
+        lines.append(
+            f"- attempt {a['attempt']}: HTTP {a['status']} (run-id echoed: {a['run_id_echo']})"
+        )
 
     def section(title, key):
         lines.append(f"\n## {title}\n")
@@ -747,19 +860,21 @@ def write_report(tiny_result: dict, multi_agent_result: dict) -> None:
     section("Budget validation", "budget_validation")
 
     lines.append("\n## Single-agent final answer (grounding check)\n")
-    lines.append(f"Tool observation (Open-Meteo `current_weather`): `{json.dumps(_tool_observation)}`\n")
+    lines.append(
+        f"Tool observation (Open-Meteo `current_weather`): `{json.dumps(_tool_observation)}`\n"
+    )
     lines.append(f"Final model answer:\n\n> {_final_answer_text}\n")
 
     lines.append("\n## Defects discovered during live testing (both now FIXED)\n")
     lines.append(
         "- **FIXED — server.py `_messages_to_request_fields()` mishandled a trailing "
-        "role=\"tool\" message.** It used to unconditionally treat the LAST message in the "
+        'role="tool" message.** It used to unconditionally treat the LAST message in the '
         "incoming `messages` array as the new `raw_prompt` string, discarding that message's "
         "`role`/`tool_call_id`/`name`. Sending step 4 of this trajectory (history ending in the "
-        "spec-required `role=\"tool\"` observation) originally triggered a real 400 from both "
-        "Anthropic and Mistral (`\"Not the same number of function calls and responses\"` from "
+        'spec-required `role="tool"` observation) originally triggered a real 400 from both '
+        'Anthropic and Mistral (`"Not the same number of function calls and responses"` from '
         "Mistral) because the tool observation silently became an unlabeled user turn with no "
-        "matching tool response. Fixed: a trailing `role=\"tool\"` message now stays in "
+        'matching tool response. Fixed: a trailing `role="tool"` message now stays in '
         "`message_history` instead of being popped into `raw_prompt`; "
         "`provider_caller._build_messages()` no longer appends a spurious empty trailing user "
         "turn after it. Regression test (real pass, no longer xfail): "
@@ -769,7 +884,7 @@ def write_report(tiny_result: dict, multi_agent_result: dict) -> None:
         "- **FIXED — `provider_caller.py`'s Anthropic caller (`_call_anthropic_sync`) didn't "
         "translate OpenAI-shaped tool-call history into Anthropic's block format.** It used to "
         "forward `_build_messages()`'s universal OpenAI-shaped messages (`tool_calls` on "
-        "assistant turns, `role=\"tool\"` + `tool_call_id` on tool turns) to `/v1/messages` "
+        'assistant turns, `role="tool"` + `tool_call_id` on tool turns) to `/v1/messages` '
         "verbatim, which Anthropic doesn't understand (it uses `tool_use`/`tool_result` content "
         "blocks) — any step after a real tool round trip routed to Anthropic got a genuine 400. "
         "Fixed by `_openai_messages_to_anthropic()`. Verified live in a standalone follow-up "
@@ -779,9 +894,9 @@ def write_report(tiny_result: dict, multi_agent_result: dict) -> None:
     )
     lines.append(
         "- **NOTE (not a defect, working as designed) — explicit literal-model overrides can be "
-        "silently ignored for cheap-tier models.** `STEP_TYPE_FLOORS` requires >= \"mid\" tier "
-        "for plan/tool_select/final_answer steps; a literal `\"model\": \"claude-haiku-4-5-...\"` "
-        "(tier=\"cheap\") on those step types never reaches the explicit-override check because "
+        'silently ignored for cheap-tier models.** `STEP_TYPE_FLOORS` requires >= "mid" tier '
+        'for plan/tool_select/final_answer steps; a literal `"model": "claude-haiku-4-5-..."` '
+        '(tier="cheap") on those step types never reaches the explicit-override check because '
         "the model is filtered out of `candidates` first — the router silently falls back to "
         "classification-based routing instead of erroring or reporting that the override was "
         "dropped. This is by design (`_relaxed_filter` deliberately does not relax this floor) "
@@ -795,9 +910,10 @@ def write_report(tiny_result: dict, multi_agent_result: dict) -> None:
     else:
         lines.append("- Grounding was confirmed automatically; no unverified claims remain.")
     lines.append(
-        "- This harness ran the server in-process (real HTTP over loopback TCP via uvicorn) rather than "
-        "as a separately-deployed production instance — routing/budget/tool-call logic exercised is "
-        "identical, but this is not a test of process-isolation or multi-worker behavior."
+        "- This harness ran the server in-process (real HTTP over loopback TCP via uvicorn) "
+        "rather than as a separately-deployed production instance — routing/budget/tool-call "
+        "logic exercised is identical, but this is not a test of process-isolation or "
+        "multi-worker behavior."
     )
 
     REPORT_PATH.write_text("\n".join(lines) + "\n")
