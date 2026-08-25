@@ -388,9 +388,25 @@ def _messages_to_request_fields(
             status_code=400, detail="messages must include at least one non-system message"
         )
     system_prompt = "\n".join(system_parts) if system_parts else None
-    raw_prompt = non_system[-1].get("content", "")
+    # Bugfix: a request whose last message is role="tool" (the shape an agent
+    # submits a tool observation in — see the agentic-harness report) used to
+    # be popped into raw_prompt like any other last message, which silently
+    # dropped its role/tool_call_id/name: _build_messages() re-appends
+    # raw_prompt as a brand-new, unlabeled role="user" turn, so the tool
+    # observation vanished and no tool response ever reached the provider for
+    # the tool_use it was answering — a real 400 from Anthropic/Mistral
+    # ("Not the same number of function calls and responses"). A role="tool"
+    # last message has nothing left to say as a new prompt, so it stays in
+    # history instead of being split out.
+    last_message = non_system[-1]
+    if last_message.get("role") == "tool":
+        raw_prompt = ""
+        history_source = non_system
+    else:
+        raw_prompt = last_message.get("content", "")
+        history_source = non_system[:-1]
     history = []
-    for m in non_system[:-1]:
+    for m in history_source:
         turn: dict[str, Any] = {"role": m.get("role", "user"), "content": m.get("content", "")}
         # Preserve tool-calling linkage (Item 1): an assistant turn that made
         # tool calls, and a tool-role turn answering one, both need these

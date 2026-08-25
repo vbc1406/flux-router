@@ -85,3 +85,7 @@ _internal_reviews/
 
 # Internal launch tracking (not shipped publicly)
 LAUNCH_CHECKLIST.md
+
+# Live-harness run output (regeneratable; contains real run_ids/timestamps
+# from local test runs, not source)
+router/scripts/agentic_e2e_report.md

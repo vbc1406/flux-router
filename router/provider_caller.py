@@ -177,7 +177,14 @@ def _build_messages(request: RoutingRequest) -> list[dict[str, Any]]:
         if turn.get("name"):
             msg["name"] = turn["name"]
         messages.append(msg)
-    messages.append({"role": "user", "content": request.raw_prompt})
+    # Bugfix: when the last turn in message_history is itself role="tool"
+    # (server.py's _messages_to_request_fields() now keeps it there instead
+    # of folding it into raw_prompt — see that function's docstring), there
+    # is no new prompt to add: raw_prompt is "" and appending it anyway would
+    # tack on a spurious, unlabeled empty user turn right after a tool
+    # observation the provider still needs a response to.
+    if not (messages and messages[-1]["role"] == "tool"):
+        messages.append({"role": "user", "content": request.raw_prompt})
     return messages
 
 
@@ -417,6 +424,69 @@ def _post_json(
 # ── Provider-specific callers (synchronous) ──────────────────────────────────
 
 
+def _openai_messages_to_anthropic(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Translate the universal OpenAI-shaped message list built by
+    _build_messages() (assistant `tool_calls`, role="tool" + `tool_call_id`)
+    into Anthropic's tool_use/tool_result content-block shape.
+
+    Bugfix: _call_anthropic_sync() used to forward the OpenAI-shaped list to
+    /v1/messages verbatim — Anthropic has no "tool" role and doesn't
+    understand a `tool_calls` key on an assistant message, so any step after
+    a real tool round trip got a genuine 400 from Anthropic. Confirmed live
+    by the agentic-harness (see router/scripts/agentic_e2e_report.md).
+
+    Anthropic represents a tool observation as a role="user" message
+    containing a tool_result block, and requires every tool_result answering
+    one assistant turn's tool_use block(s) to arrive together in a single
+    user turn — so consecutive tool-role turns are merged into one message
+    rather than sent as separate back-to-back user turns.
+    """
+    out: list[dict[str, Any]] = []
+    for m in messages:
+        role = m.get("role", "user")
+        if role == "tool":
+            block = {
+                "type": "tool_result",
+                "tool_use_id": m.get("tool_call_id", ""),
+                "content": m.get("content") or "",
+            }
+            prev = out[-1] if out else None
+            if (
+                prev is not None
+                and prev["role"] == "user"
+                and isinstance(prev["content"], list)
+                and prev["content"]
+                and prev["content"][0].get("type") == "tool_result"
+            ):
+                prev["content"].append(block)
+            else:
+                out.append({"role": "user", "content": [block]})
+            continue
+        if role == "assistant" and m.get("tool_calls"):
+            blocks: list[dict[str, Any]] = []
+            text = m.get("content")
+            if text:
+                blocks.append({"type": "text", "text": text})
+            for tc in m["tool_calls"]:
+                fn = tc.get("function", {})
+                try:
+                    tool_input = json.loads(fn.get("arguments") or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    tool_input = {}
+                blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": tc.get("id", ""),
+                        "name": fn.get("name", ""),
+                        "input": tool_input,
+                    }
+                )
+            out.append({"role": "assistant", "content": blocks})
+            continue
+        out.append({"role": role, "content": m.get("content", "")})
+    return out
+
+
 def _call_anthropic_sync(
     model: ModelOption,
     request: RoutingRequest,
@@ -433,7 +503,7 @@ def _call_anthropic_sync(
             http_status=400,
         )
 
-    messages = _build_messages(request)
+    messages = _openai_messages_to_anthropic(_build_messages(request))
     body: dict[str, Any] = {
         "model": model.provider_model_id,
         "max_tokens": min(request.max_tokens_requested or 1024, model.max_output_tokens),
