@@ -20,8 +20,8 @@ Flux isn't on PyPI, so it installs straight from the repo. Python 3.10, 3.11,
 or 3.12.
 
 ```bash
-git clone https://github.com/vbc1406/flux.git   # 1. get the code
-cd flux
+git clone https://github.com/vbc1406/flux-router.git   # 1. get the code
+cd flux-router
 pip install -e '.[server]'                      # 2. install
 export OPENAI_API_KEY=sk-...                     # 3. set a provider key (+ any others you use)
 flux serve                                       # 4. start the server

@@ -46,8 +46,8 @@ python3 --version
 **Step 2 — Clone and install.** Flux isn't on PyPI, so it installs straight from the repo.
 
 ```bash
-git clone https://github.com/vbc1406/flux.git
-cd flux
+git clone https://github.com/vbc1406/flux-router.git
+cd flux-router
 pip install -e ".[server]"
 ```
 

@@ -15,7 +15,7 @@ than sending code.
 ## Issues are welcome
 
 Bug reports, questions, and feature requests are genuinely useful — please file
-them as [GitHub Issues](https://github.com/vbc1406/flux/issues).
+them as [GitHub Issues](https://github.com/vbc1406/flux-router/issues).
 
 A good bug report includes:
 

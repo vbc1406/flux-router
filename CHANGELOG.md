@@ -74,7 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Scoring loop reduced from O(M²) to O(M) via precomputed normalization vectors
 - Adaptive `get_adjusted_score` read now stays inside the lock
 - `RoutingAnalytics(log_path=None)` is in-memory only, never writes
-- Repo URLs and packaging metadata point at `github.com/vbc1406/flux`
+- Repo URLs and packaging metadata point at `github.com/vbc1406/flux-router`
 - Contact addresses consolidated to `fluxllmdev@gmail.com`
 - README adds a comparison table, surfaces licensing, and corrects the P50 latency claim
 - Circuit breaker is probed at most once per `route()` invocation during Step 4 filtering
@@ -134,6 +134,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Path traversal protection on all file-path inputs (C4)
 - Resource exhaustion caps on adaptive state dicts (C5)
 
-[1.1.0b2]: https://github.com/vbc1406/flux/releases/tag/v1.1.0b2
-[1.1.0b1]: https://github.com/vbc1406/flux/releases/tag/v1.1.0b1
-[1.0.0]: https://github.com/vbc1406/flux/releases/tag/v1.0.0
+[1.1.0b2]: https://github.com/vbc1406/flux-router/releases/tag/v1.1.0b2
+[1.1.0b1]: https://github.com/vbc1406/flux-router/releases/tag/v1.1.0b1
+[1.0.0]: https://github.com/vbc1406/flux-router/releases/tag/v1.0.0

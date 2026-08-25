@@ -32,10 +32,10 @@ dependencies = [
 flux = "router.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/vbc1406/flux"
-Repository = "https://github.com/vbc1406/flux"
-Issues = "https://github.com/vbc1406/flux/issues"
-Changelog = "https://github.com/vbc1406/flux/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/vbc1406/flux-router"
+Repository = "https://github.com/vbc1406/flux-router"
+Issues = "https://github.com/vbc1406/flux-router/issues"
+Changelog = "https://github.com/vbc1406/flux-router/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
