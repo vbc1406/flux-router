@@ -80,7 +80,7 @@ class TestRegistryLoadsFromJson:
             "gpt-5.6-luna": "cheap",
             "gpt-5.6-terra": "mid",
             "gpt-5.6-sol": "premium",
-            "gemini-3.6-flash": "mid",
+            "gemini-3.8-flash": "mid",
             "mistral-small-4": "cheap",
             "mistral-large-3": "mid",
             "gpt-oss-120b": "mid",
@@ -120,8 +120,8 @@ class TestRegistryLoadsFromJson:
             "claude-haiku-4-5-20251001": (0.001, 0.005, 200_000, 65_536),
             "claude-sonnet-4-6": (0.003, 0.015, 1_000_000, 64_000),
             "claude-opus-4-7": (0.005, 0.025, 1_000_000, 128_000),
-            "claude-fable-5": (0.01, 0.05, 1_000_000, 128_000),
-            "claude-sonnet-5": (0.003, 0.015, 1_000_000, 128_000),
+            "claude-fable-5-1": (0.01, 0.05, 1_000_000, 128_000),
+            "claude-sonnet-5": (0.002, 0.01, 1_000_000, 128_000),
             "claude-opus-5": (0.005, 0.025, 1_000_000, 128_000),
             "gpt-oss-20b": (0.000075, 0.0003, 131_072, 65_536),
             "gpt-oss-120b": (0.00015, 0.0006, 131_072, 65_536),
@@ -160,7 +160,7 @@ class TestRegistryLoadsFromJson:
         # that SOME models exist.
         reg = ModelRegistry()
         expected_tiers = {
-            "claude-fable-5": "premium",
+            "claude-fable-5-1": "premium",
             "claude-sonnet-5": "mid",
             "claude-opus-5": "premium",
         }
